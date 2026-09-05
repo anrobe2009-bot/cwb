@@ -80,11 +80,25 @@ class Kachel(QPushButton):
             feld.setFocusPolicy(Qt.NoFocus)
             aufbau.addWidget(feld)
 
-    def beschriften(self, text: str, ansage: str = "") -> None:
-        """Aendert den kleinen Text und, wenn angegeben, den Vorlesetext."""
+    def beschriften(self, text: str, ansage: str = "", symbol: str = "") -> None:
+        """Aendert den kleinen Text und, wenn angegeben, Vorlesetext und
+        Symbol. Der Kurzhinweis geht mit, damit Auge und Ohr dasselbe sagen."""
         self.text_feld.setText(text)
+        if symbol:
+            self.symbol_feld.setText(symbol)
         if ansage:
             self.setAccessibleName(ansage)
+            taste = str(self.accessibleDescription()).replace("Tastenkürzel ", "")
+            self.setToolTip(f"{ansage}  ({taste})" if taste else ansage)
+
+    def einfaerben(self, farbe: str) -> None:
+        """Wechselt die Pastellfarbe. Welche Farbe wie aussieht, steht in
+        stil.qss; hier steht nur ihre Nummer beziehungsweise ihr Name."""
+        if str(self.property("farbe")) == str(farbe):
+            return
+        self.setProperty("farbe", str(farbe))
+        self.style().polish(self)
+        self.update()
 
 
 class Kachelreihe(QWidget):
@@ -133,11 +147,25 @@ class Kachelreihe(QWidget):
 
     # -- Laufzeit -----------------------------------------------------------
 
-    def kachel_beschriften(self, ansage: str, text: str, neue_ansage: str = "") -> None:
-        """Aendert Text und Vorlesetext einer Kachel, gesucht ueber ihre
-        urspruengliche Beschriftung."""
+    def _kachel_suchen(self, ansage: str) -> Kachel | None:
+        """Findet eine Kachel ueber ihre urspruengliche Beschriftung. Die
+        bleibt als Kennung erhalten, auch wenn die Aufschrift wechselt."""
         for kachel in self.kacheln:
             if str(kachel.property("ansage")) == ansage:
-                kachel.beschriften(text, neue_ansage)
-                return
+                return kachel
         log.warning("Kachel nicht gefunden: %s", ansage)
+        return None
+
+    def kachel_beschriften(self, ansage: str, text: str, neue_ansage: str = "",
+                           symbol: str = "") -> None:
+        """Aendert Text, Vorlesetext und Symbol einer Kachel."""
+        kachel = self._kachel_suchen(ansage)
+        if kachel is not None:
+            kachel.beschriften(text, neue_ansage, symbol)
+
+    def kachel_faerben(self, ansage: str, farbe: str) -> None:
+        """Wechselt die Farbe einer Kachel, etwa wenn sie einen anderen
+        Zustand anzeigt."""
+        kachel = self._kachel_suchen(ansage)
+        if kachel is not None:
+            kachel.einfaerben(farbe)

@@ -169,6 +169,31 @@ QToolTip {
 #taetigkeitsplakette[zustand="fehler"]      { background-color: #ff2d2d;
                                               color: #ffffff; }
 
+/* Zugriffsplakette: nennt dauerhaft das geltende Schreibrecht. Zwei klar
+   verschiedene Farben, damit der Zustand schon am Farbfleck erkennbar ist -
+   ruhiges Gruen fuer "Lesen und Schreiben", warnendes Bernstein mit
+   kraeftigem Rand fuer "Nur lesen". Dunkle Schrift auf beiden hellen
+   Flaechen. */
+#zugriffsplakette {
+    color: #101216;
+    background-color: #4dd964;
+    font-size: 13pt;
+    font-weight: bold;
+    padding: 0.25em 0.5em;
+    border: 2px solid #0b0d11;
+    border-radius: 6px;
+}
+
+#zugriffsplakette[modus="schreiben"] {
+    background-color: #4dd964;
+    border: 2px solid #0b0d11;
+}
+
+#zugriffsplakette[modus="nur_lesen"] {
+    background-color: #ffb020;
+    border: 3px solid #7a4600;
+}
+
 /* Feld neben der Plakette: allein der Name der Datei, an der gerade
    gearbeitet wird - ohne Pfad, ohne Verb. Ist keine Datei betroffen,
    bleibt es leer. Ruhige Farbe, damit die Plakette daneben fuehrt;
@@ -386,6 +411,33 @@ QPushButton#kopieren:focus {
 #kachel[farbe="6"] { background-color: #ffe4d6; }  /* Pfirsich */
 #kachel[farbe="7"] { background-color: #ffd6e0; }  /* Rosa     */
 #kachel[farbe="8"] { background-color: #eaffd6; }  /* Limette  */
+
+/* Nur-Lesen-Kachel: solange nur gelesen wird, faellt sie mit Bernstein und
+   kraeftigem Rand deutlich aus der Reihe. Steht sie auf "Lesen und
+   Schreiben", traegt sie die gewoehnliche Fliederfarbe (farbe="4"). */
+
+#kachel[farbe="nurlesen"] {
+    background-color: #ffb020;
+    border: 3px solid #7a4600;
+}
+
+#kachel[farbe="nurlesen"] QLabel {
+    color: #3b2200;
+}
+
+#kachel[farbe="nurlesen"]:hover {
+    background-color: #ffc451;
+    border: 3px solid #ffffff;
+}
+
+#kachel[farbe="nurlesen"]:pressed {
+    background-color: #e08c00;
+    border: 3px solid #ffffff;
+}
+
+#kachel[farbe="nurlesen"]:focus {
+    border: 4px solid #ffcc33;
+}
 
 /* Not-Aus: warnrot, kraeftiger Rand, nicht zu verwechseln */
 

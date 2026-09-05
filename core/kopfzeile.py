@@ -4,8 +4,9 @@ Kopfzeile des Ausgabefelds.
 
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
 Arbeit gehoert: das Wort "Ausgabe", die farbige Taetigkeitsplakette, den Namen
-der bearbeiteten Datei, die Modellwahl, die drei Tokenzaehler und die
-Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
+der bearbeiteten Datei, die Zugriffsplakette mit dem geltenden Schreibrecht
+("Nur lesen" oder "Lesen und Schreiben"), die Modellwahl, die drei
+Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
 der Reihenfolge "Auftrag", "Sitzung", "Heute" - gleiche Breite, gleiche
 Gestalt, ohne Zwischenraum. Ein eigenes Feld
 fuer die Statusmeldung gibt es nicht mehr; die Meldung wird gesprochen und
@@ -65,6 +66,12 @@ ZUSTAND_TAETIGKEIT = {
 # Beispielwoerter, aus denen die feste Breite der Plakette gemessen wird.
 # Sie muss das laengste Wort tragen, damit die Breite nie springt.
 TAETIGKEIT_BEISPIELE = ("führt aus", "abgebrochen", "verbindet")
+
+# Aufschrift der Zugriffsplakette. Sie nennt dauerhaft den geltenden Zustand,
+# nie eine Aufforderung - man soll ablesen koennen, was gerade gilt.
+ZUGRIFF_NUR_LESEN = "Nur lesen"
+ZUGRIFF_SCHREIBEN = "Lesen und Schreiben"
+ZUGRIFF_BEISPIELE = (ZUGRIFF_NUR_LESEN, ZUGRIFF_SCHREIBEN)
 
 # Beispielnamen fuer die feste Breite des Dateifeldes daneben. Das Feld zeigt
 # den Namen ungekuerzt, also muss es die langen Namen des Projekts tragen.
@@ -145,6 +152,17 @@ class Ausgabekopf(QWidget):
         self.dateianzeige.setAlignment(Qt.AlignCenter)
         self.dateianzeige.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         quer.addWidget(self.dateianzeige)
+
+        # Zugriffsplakette: nennt dauerhaft, was gerade gilt - "Nur lesen"
+        # oder "Lesen und Schreiben". Die Farbe kommt aus stil.qss und haengt
+        # am Attribut 'modus', damit der Zustand auch ohne Lesen auffaellt.
+        self.zugriffsplakette = QLabel(ZUGRIFF_SCHREIBEN)
+        self.zugriffsplakette.setObjectName("zugriffsplakette")
+        self.zugriffsplakette.setProperty("modus", "schreiben")
+        self.zugriffsplakette.setAccessibleName("Zugriffsrecht")
+        self.zugriffsplakette.setAlignment(Qt.AlignCenter)
+        self.zugriffsplakette.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        quer.addWidget(self.zugriffsplakette)
 
         # Der freie Platz liegt in der Mitte: dadurch stehen Datei links und
         # die drei Zahlenfelder rechts, ohne dass eines von ihnen waechst.
@@ -246,6 +264,7 @@ class Ausgabekopf(QWidget):
             felder = (
                 (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
                 (self.dateianzeige, DATEI_BEISPIELE),
+                (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
                 (self.tageszaehler, ZAEHLER_BEISPIELE),
@@ -311,8 +330,26 @@ class Ausgabekopf(QWidget):
         self.status_zeichnen()
 
     def nur_lesen_setzen(self, an: bool) -> None:
-        """Merkt den Nur-Lesen-Zustand und schreibt die Meldung neu."""
+        """Merkt den Nur-Lesen-Zustand, beschriftet und faerbt die
+        Zugriffsplakette und schreibt die Meldung neu."""
         self.nur_lesen = bool(an)
+        try:
+            text = ZUGRIFF_NUR_LESEN if self.nur_lesen else ZUGRIFF_SCHREIBEN
+            self.zugriffsplakette.setText(text)
+            self.zugriffsplakette.setProperty(
+                "modus", "nur_lesen" if self.nur_lesen else "schreiben"
+            )
+            hinweis = (
+                "Nur lesen: es wird nichts geschrieben und nichts gelöscht."
+                if self.nur_lesen
+                else "Lesen und Schreiben erlaubt."
+            )
+            self.zugriffsplakette.setAccessibleDescription(hinweis)
+            self.zugriffsplakette.setToolTip(f"{hinweis}  (F10)")
+            self.zugriffsplakette.style().polish(self.zugriffsplakette)
+            self.zugriffsplakette.update()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zugriffsplakette nicht gesetzt: %s", fehler)
         self.status_zeichnen()
 
     def status_zeichnen(self) -> None:

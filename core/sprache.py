@@ -569,6 +569,8 @@ FESTE_SAETZE = [
     "Abgebrochen.",
     "Fehler aufgetreten.",
     "Fortfahren?",
+    "Nur lesen.",
+    "Lesen und Schreiben erlaubt.",
 ]
 
 

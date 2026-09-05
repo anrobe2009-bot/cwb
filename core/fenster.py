@@ -79,7 +79,13 @@ try:
         unbehandelte_ausnahme,
         verlauf_stil_lesen,
     )
-    from .kopfzeile import Ausgabekopf, ZUSTAND_TAETIGKEIT, zahl_lang
+    from .kopfzeile import (
+        Ausgabekopf,
+        ZUGRIFF_NUR_LESEN,
+        ZUGRIFF_SCHREIBEN,
+        ZUSTAND_TAETIGKEIT,
+        zahl_lang,
+    )
     from .modelle import (
         MODELLE_RUECKFALL,
         eintrag_suchen,
@@ -113,7 +119,13 @@ except ImportError:
         unbehandelte_ausnahme,
         verlauf_stil_lesen,
     )
-    from kopfzeile import Ausgabekopf, ZUSTAND_TAETIGKEIT, zahl_lang
+    from kopfzeile import (
+        Ausgabekopf,
+        ZUGRIFF_NUR_LESEN,
+        ZUGRIFF_SCHREIBEN,
+        ZUSTAND_TAETIGKEIT,
+        zahl_lang,
+    )
     from modelle import (
         MODELLE_RUECKFALL,
         eintrag_suchen,
@@ -131,9 +143,21 @@ log = logging.getLogger("cwb.fenster")
 
 BILD_ENDUNGEN = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 
-# Aufschrift der Kachel fuer den Nur-Lesen-Modus. Dient zugleich als Kennung,
-# um sie in der Kachelreihe wiederzufinden.
-NUR_LESEN_ANSAGE = "Nur lesen"
+# Die Kachel fuer das Schreibrecht nennt immer den geltenden Zustand, nie
+# eine Aufforderung: "Lesen und Schreiben" oder "Nur lesen". Die Aufschrift
+# beim Aufbau dient zugleich als Kennung, um die Kachel spaeter
+# wiederzufinden - sie bleibt gleich, auch wenn die Aufschrift wechselt.
+ZUGRIFF_KENNUNG = ZUGRIFF_SCHREIBEN
+
+# Symbol und Farbe je Zustand. Die Farben selbst stehen in stil.qss.
+ZUGRIFF_SYMBOL_SCHREIBEN = "✎"
+ZUGRIFF_SYMBOL_NUR_LESEN = "⊘"
+ZUGRIFF_FARBE_SCHREIBEN = "4"
+ZUGRIFF_FARBE_NUR_LESEN = "nurlesen"
+
+# Was beim Umschalten gesprochen wird: nur der neue Zustand.
+ZUGRIFF_SATZ_NUR_LESEN = "Nur lesen."
+ZUGRIFF_SATZ_SCHREIBEN = "Lesen und Schreiben erlaubt."
 
 # Einzige Markierung am Anfang des Eingabefelds. Steht sie in der ersten
 # Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
@@ -315,6 +339,10 @@ class Werkbank(QMainWindow):
         if self.zeigeransage is None:
             log.error("Ansage bei Mauszeiger konnte nicht eingerichtet werden")
 
+        # Schreibrecht von Anfang an sichtbar: Kachel und Kopfzeile nennen den
+        # geltenden Zustand, nicht erst nach dem ersten Umschalten.
+        self._zugriff_zeigen()
+
         self.faden.start()
         self._wartende_absenden()
 
@@ -352,7 +380,7 @@ class Werkbank(QMainWindow):
             ("Strg+L", "Markiertes vorlesen", self._markiertes_vorlesen),
             ("Strg+K", "Ausgabe kopieren", self._verlauf_kopieren),
             ("Strg+0", "Schriftgröße zurücksetzen", self._schrift_zuruecksetzen),
-            ("F10", NUR_LESEN_ANSAGE, self._nur_lesen_umschalten),
+            ("F10", "Nur lesen ein- oder ausschalten", self._nur_lesen_umschalten),
             ("Strg+Z", "Letzten Auftrag zurücknehmen", self._zuruecknehmen),
             ("Strg+B", "Bild anhängen", self._bild_waehlen),
             ("F5", "Zum Eingabefeld", lambda: self._springe(self.eingabe, "Eingabefeld")),
@@ -374,7 +402,10 @@ class Werkbank(QMainWindow):
             ("⏹", "Not-Aus", "F8", "notaus", self._not_aus),
             ("✖", "Ansage abbrechen", "Escape", "2", self.sprecher.schweig),
             ("▶", "Letzte Antwort", "F3", "3", self._antwort_vorlesen),
-            ("⊘", NUR_LESEN_ANSAGE, "F10", "4", self._nur_lesen_umschalten),
+            # Diese Kachel zeigt den Zustand an, nicht den Befehl: sie heisst
+            # so, wie das Schreibrecht gerade steht.
+            (ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_KENNUNG, "F10",
+             ZUGRIFF_FARBE_SCHREIBEN, self._nur_lesen_umschalten),
             ("⟳", "Neu starten", "F4", "5", self._neustart),
             ("⇄", "Projekt wechseln", "F9", "6", self._projekt_wechseln),
             ("⚙", "Einstellungen", "F12", "7", self._einstellungen_zeigen),
@@ -544,6 +575,21 @@ class Werkbank(QMainWindow):
         """Setzt Plakette und Dateifeld in der Kopfzeile."""
         self.ausgabekopf.taetigkeit_zeigen(taetigkeit, pfad)
 
+    def _zugriff_zeigen(self) -> None:
+        """Bringt Kachel und Kopfzeile auf den geltenden Zustand. Die Kachel
+        nennt und faerbt ihn, die Kopfzeile zeigt ihn dauerhaft an."""
+        if self.nur_lesen:
+            text, symbol, farbe = (
+                ZUGRIFF_NUR_LESEN, ZUGRIFF_SYMBOL_NUR_LESEN, ZUGRIFF_FARBE_NUR_LESEN
+            )
+        else:
+            text, symbol, farbe = (
+                ZUGRIFF_SCHREIBEN, ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_FARBE_SCHREIBEN
+            )
+        self.kacheln.kachel_beschriften(ZUGRIFF_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(ZUGRIFF_KENNUNG, farbe)
+        self.ausgabekopf.nur_lesen_setzen(self.nur_lesen)
+
     def _nur_lesen_umschalten(self) -> None:
         """Schaltet den Nur-Lesen-Modus um: Schreiben und Loeschen wird
         abgelehnt, Lesen und Suchen bleiben erlaubt."""
@@ -552,15 +598,11 @@ class Werkbank(QMainWindow):
             self.faden.nur_lesen_setzen(self.nur_lesen)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Nur-Lesen-Modus nicht weitergereicht: %s", fehler)
-        zustand = "an" if self.nur_lesen else "aus"
-        self.kacheln.kachel_beschriften(
-            NUR_LESEN_ANSAGE, f"Nur lesen: {zustand}", f"Nur lesen ist {zustand}"
-        )
-        self.ausgabekopf.nur_lesen_setzen(self.nur_lesen)
+        self._zugriff_zeigen()
+        log.info("Schreibrecht: %s", ZUGRIFF_NUR_LESEN if self.nur_lesen
+                 else ZUGRIFF_SCHREIBEN)
         self.sprecher.sprich(
-            "Nur lesen ist an. Es wird nichts geschrieben und nichts gelöscht."
-            if self.nur_lesen
-            else "Nur lesen ist aus. Schreiben ist wieder erlaubt."
+            ZUGRIFF_SATZ_NUR_LESEN if self.nur_lesen else ZUGRIFF_SATZ_SCHREIBEN
         )
 
     def _zeit_aktualisieren(self) -> None:
