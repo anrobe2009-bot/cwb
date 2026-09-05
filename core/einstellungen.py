@@ -6,7 +6,8 @@ Fuenf Reiter, jeder passt ohne Rollen auf eine Seite:
 
 - Sprache   Ausgabeweg, Stimme, Tempo, Probehoeren
 - Toene     Hauptschalter und drei Gruppen, je mit Probehoeren
-- Verhalten Zwischenablage, Bericht, Mauszeiger-Ansage, Tokenverbrauch je Tag
+- Verhalten Zwischenablage, Bericht, Mauszeiger-Ansage fuer das ganze
+  Fenster (core/zeigeransage.py), Tokenverbrauch je Tag
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
 - Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
             bei der Ersteinrichtung, jederzeit aenderbar
@@ -650,7 +651,8 @@ class EinstellungenFenster(QDialog):
             gruppe,
             "mauszeiger_ansage",
             "Ansage bei Mauszeiger",
-            "Sagt eine Kachel an, sobald der Mauszeiger kurz darauf steht.",
+            "Sagt jedes Bedien- und Anzeigefeld an, sobald der Mauszeiger kurz "
+            "darauf ruht — im ganzen Fenster und auf dieser Seite.",
             bool(werte.get("mauszeiger_ansage", False)),
         )
 

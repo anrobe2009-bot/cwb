@@ -4,8 +4,9 @@ Baustein 3: Hauptfenster (Werkbank) und Programmstart.
 
 Die ständig gebrauchten Befehle liegen als flache Kachelreihe unter dem
 Fortschrittsbalken (core/tastenleiste.py), alles Übrige über Tastenkürzel;
-F1 liest sie vor. Ruht der Mauszeiger kurz auf einer Kachel, wird sie
-angesagt - nur dort, nicht im ganzen Fenster.
+F1 liest sie vor. Ruht der Mauszeiger kurz auf einem Bedienelement oder
+einem Anzeigefeld, wird dessen Inhalt angesagt - im ganzen Fenster und auf
+der Einstellungsseite (core/zeigeransage.py).
 
 Grundregel: gesprochen wird nur, was du wissen musst - fertig, Fehler,
 Rückfrage, Abbruch. Alles andere nur auf Tastendruck oder Klick.
@@ -90,6 +91,7 @@ try:
     from .sicherheit import Projekt
     from .sprache import FESTE_SAETZE, Sprecher
     from .tastenleiste import Kachelreihe
+    from .zeigeransage import zeigeransage_einrichten
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from einstellungen import EinstellungenFenster
@@ -123,6 +125,7 @@ except ImportError:
     from sicherheit import Projekt
     from sprache import FESTE_SAETZE, Sprecher
     from tastenleiste import Kachelreihe
+    from zeigeransage import zeigeransage_einrichten
 
 log = logging.getLogger("cwb.fenster")
 
@@ -305,6 +308,13 @@ class Werkbank(QMainWindow):
         self._aufbauen()
         self._tasten()
 
+        # Ansage bei Mauszeiger fuer das ganze Fenster. Sie haengt an der
+        # Anwendung und gilt darum auch fuer die Einstellungsseite. Ob
+        # gesprochen wird, entscheidet der Schalter in den Einstellungen.
+        self.zeigeransage = zeigeransage_einrichten(self.sprecher, einstellungen_lesen)
+        if self.zeigeransage is None:
+            log.error("Ansage bei Mauszeiger konnte nicht eingerichtet werden")
+
         self.faden.start()
         self._wartende_absenden()
 
@@ -396,9 +406,7 @@ class Werkbank(QMainWindow):
 
         # Kachelreihe direkt unter dem Balken. Sie teilt die Fensterbreite
         # gleichmaessig unter den Kacheln auf und waechst mit dem Fenster.
-        self.kacheln = Kachelreihe(
-            self.sprecher, self._kachel_eintraege(), einstellungen_lesen
-        )
+        self.kacheln = Kachelreihe(self._kachel_eintraege())
         aufbau.addWidget(self.kacheln)
 
         self._auftrags_beginn: datetime | None = None

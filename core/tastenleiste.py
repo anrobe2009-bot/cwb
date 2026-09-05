@@ -18,7 +18,7 @@ import logging
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -40,9 +40,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("cwb.tastenleiste")
 
-# Verzoegerung, bevor eine Kachel unter dem Mauszeiger angesagt wird.
-# Verhindert eine Kaskade beim Drueberfahren.
-ANSAGE_VERZOEGERUNG_MS = 350
+# Die Ansage bei Mauszeiger liegt nicht mehr hier: sie gilt fuer das ganze
+# Fenster und steht in core/zeigeransage.py. Jede Kachel traegt dafuer nur
+# ihren Vorlesetext im barrierefreien Namen.
 
 
 class Kachel(QPushButton):
@@ -95,21 +95,13 @@ class Kachelreihe(QWidget):
     passt sich die Reihe jeder Fenstergroesse an.
     """
 
-    def __init__(self, sprecher, eintraege, einstellungen_lesen):
+    def __init__(self, eintraege):
         super().__init__()
-        self.sprecher = sprecher
-        self._einstellungen_lesen = einstellungen_lesen
         self.setObjectName("kachelreihe")
         self.setAccessibleName("Befehlskacheln")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         aufbau = QHBoxLayout(self)
-
-        self._uhr = QTimer(self)
-        self._uhr.setSingleShot(True)
-        self._uhr.setInterval(ANSAGE_VERZOEGERUNG_MS)
-        self._uhr.timeout.connect(self._ansagen)
-        self._wartend: Kachel | None = None
 
         self.kacheln: list[Kachel] = []
         for symbol, beschriftung, taste, farbe, ziel in eintraege:
@@ -123,7 +115,6 @@ class Kachelreihe(QWidget):
             # Ziels verschlucken.
             kachel.clicked.connect(partial(self._kachel_merken, beschriftung, ziel))
             kachel.clicked.connect(ziel)
-            kachel.installEventFilter(self)
             aufbau.addWidget(kachel, 1)
             self.kacheln.append(kachel)
             log.info(
@@ -150,27 +141,3 @@ class Kachelreihe(QWidget):
                 kachel.beschriften(text, neue_ansage)
                 return
         log.warning("Kachel nicht gefunden: %s", ansage)
-
-    # -- Ansage bei Mauszeiger ---------------------------------------------
-
-    def _ansage_erwuenscht(self) -> bool:
-        try:
-            werte = self._einstellungen_lesen()
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Einstellungen nicht lesbar: %s", fehler)
-            return False
-        return bool(isinstance(werte, dict) and werte.get("mauszeiger_ansage", False))
-
-    def _ansagen(self) -> None:
-        if self._wartend is not None:
-            self.sprecher.sprich(str(self._wartend.accessibleName()))
-
-    def eventFilter(self, gegenstand, ereignis) -> bool:
-        if ereignis.type() == QEvent.Enter and isinstance(gegenstand, Kachel):
-            if self._ansage_erwuenscht():
-                self._wartend = gegenstand
-                self._uhr.start()
-        elif ereignis.type() == QEvent.Leave:
-            self._uhr.stop()
-            self._wartend = None
-        return super().eventFilter(gegenstand, ereignis)
