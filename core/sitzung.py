@@ -391,25 +391,19 @@ class Sitzung:
             urteil = self.wache.darf_werkzeug(name)
             if urteil.verboten:
                 ziel = self._pfad_aus_eingabe(eingabe) or name
-                self._melde(Zustand.FEHLER, f"Abgelehnt: {urteil.begruendung}", ziel)
-                self._protokoll_ablehnung_erfassen(ziel, urteil.begruendung)
-                return PermissionResultDeny(message=urteil.begruendung)
+                return self._ablehnen(urteil, ziel)
 
             pfad = self._pfad_aus_eingabe(eingabe)
             if pfad:
                 urteil = self.wache.darf_pfad(pfad)
                 if urteil.verboten:
-                    self._melde(Zustand.FEHLER, f"Abgelehnt: {urteil.begruendung}", pfad)
-                    self._protokoll_ablehnung_erfassen(pfad, urteil.begruendung)
-                    return PermissionResultDeny(message=urteil.begruendung)
+                    return self._ablehnen(urteil, urteil.ziel() or pfad)
 
             if name == "Bash":
                 befehl = str(eingabe.get("command", ""))
                 urteil = self.wache.darf_befehl(befehl)
                 if urteil.verboten:
-                    self._melde(Zustand.FEHLER, f"Abgelehnt: {urteil.begruendung}", befehl)
-                    self._protokoll_ablehnung_erfassen(befehl, urteil.begruendung)
-                    return PermissionResultDeny(message=urteil.begruendung)
+                    return self._ablehnen(urteil, befehl)
                 if urteil.stufe is Stufe.RUECKFRAGE:
                     return await self._frage(urteil.begruendung, befehl)
 
@@ -420,31 +414,55 @@ class Sitzung:
             return PermissionResultAllow()
 
         except Exception as fehler:  # noqa: BLE001
-            log.exception("Berechtigungspruefung gescheitert: %s", fehler)
-            return PermissionResultDeny(message="Pruefung gescheitert, sicherheitshalber abgelehnt")
+            ziel = self._pfad_aus_eingabe(eingabe) or str(eingabe.get("command", "")) or name
+            log.exception("Berechtigungspruefung gescheitert fuer %s: %s", ziel, fehler)
+            return PermissionResultDeny(
+                message=f"Pruefung gescheitert, sicherheitshalber abgelehnt: {ziel}"
+            )
+
+    def _ablehnen(self, urteil: Urteil, ziel: str) -> PermissionResultDeny:
+        """Harte Ablehnung. Nennt das Ziel vollstaendig in Meldung, Ansage,
+        Protokoll und Log."""
+        ziel = (ziel or "").strip()
+        if ziel and ziel not in urteil.begruendung:
+            satz = f"{urteil.begruendung}: {ziel}"
+        else:
+            satz = urteil.begruendung
+        log.warning("Abgelehnt: %s | Ziel: %s", urteil.begruendung, ziel or "(ohne Ziel)")
+        self._melde(Zustand.FEHLER, f"Abgelehnt: {satz}", ziel)
+        self._protokoll_ablehnung_erfassen(ziel, urteil.begruendung)
+        return PermissionResultDeny(message=satz)
 
     async def _frage(self, grund: str, detail: str) -> PermissionResultAllow | PermissionResultDeny:
         """Gesprochene Ein-Satz-Rueckfrage mit dem betroffenen Pfad oder Befehl.
         Ohne Rueckruf wird abgelehnt."""
-        if self.bei_rueckfrage is None:
-            log.warning("Keine Rueckfragestelle gesetzt, abgelehnt: %s", grund)
-            return PermissionResultDeny(message="Keine Bestaetigung moeglich")
+        ziel = (detail or "").strip()
+        mit_ziel = f"{grund}: {ziel}" if ziel else grund
 
-        satz = f"{grund}: {detail}. Fortfahren?" if detail.strip() else f"{grund}. Fortfahren?"
-        self._melde(Zustand.WARTET, f"Rueckfrage: {grund}", detail)
+        if self.bei_rueckfrage is None:
+            log.warning("Keine Rueckfragestelle gesetzt, abgelehnt: %s", mit_ziel)
+            return PermissionResultDeny(
+                message=f"Keine Bestaetigung moeglich: {mit_ziel}"
+            )
+
+        satz = f"{mit_ziel}. Fortfahren?"
+        log.info("Rueckfrage: %s | Ziel: %s", grund, ziel or "(ohne Ziel)")
+        self._melde(Zustand.WARTET, f"Rueckfrage: {mit_ziel}", ziel)
         try:
             erlaubt = await self.bei_rueckfrage(satz)
         except Exception as fehler:  # noqa: BLE001
-            log.exception("Rueckfrage gescheitert: %s", fehler)
-            return PermissionResultDeny(message="Rueckfrage gescheitert")
+            log.exception("Rueckfrage gescheitert (%s): %s", mit_ziel, fehler)
+            return PermissionResultDeny(message=f"Rueckfrage gescheitert: {mit_ziel}")
 
         if erlaubt:
-            self._melde(Zustand.FUEHRT_AUS, "Freigegeben", detail)
-            self._protokoll_rueckfrage_erfassen(grund, detail, True)
+            log.info("Freigegeben: %s", mit_ziel)
+            self._melde(Zustand.FUEHRT_AUS, f"Freigegeben: {mit_ziel}", ziel)
+            self._protokoll_rueckfrage_erfassen(grund, ziel, True)
             return PermissionResultAllow()
-        self._melde(Zustand.ABGEBROCHEN, "Abgelehnt", detail)
-        self._protokoll_rueckfrage_erfassen(grund, detail, False)
-        return PermissionResultDeny(message="Vom Nutzer abgelehnt")
+        log.warning("Vom Nutzer abgelehnt: %s", mit_ziel)
+        self._melde(Zustand.ABGEBROCHEN, f"Abgelehnt: {mit_ziel}", ziel)
+        self._protokoll_rueckfrage_erfassen(grund, ziel, False)
+        return PermissionResultDeny(message=f"Vom Nutzer abgelehnt: {mit_ziel}")
 
     # -- Auftragsprotokoll ----------------------------------------------------
 

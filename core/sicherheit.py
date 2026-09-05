@@ -92,12 +92,19 @@ class Urteil:
     def verboten(self) -> bool:
         return self.stufe is Stufe.VERBOTEN
 
+    def ziel(self) -> str:
+        """Der betroffene Pfad oder Befehl, immer vollstaendig."""
+        return self.detail.strip()
+
     def ansage(self) -> str:
+        """Vorlesbarer Satz. Nennt bei Rueckfrage und Ablehnung immer das Ziel."""
         if self.stufe is Stufe.FREI:
             return self.begruendung
-        if self.stufe is Stufe.RUECKFRAGE:
-            return f"Rueckfrage: {self.begruendung}"
-        return f"Abgelehnt: {self.begruendung}"
+        kopf = "Rueckfrage" if self.stufe is Stufe.RUECKFRAGE else "Abgelehnt"
+        ziel = self.ziel()
+        if ziel and ziel not in self.begruendung:
+            return f"{kopf}: {self.begruendung}: {ziel}"
+        return f"{kopf}: {self.begruendung}"
 
 
 # Befehlsklassen. Reihenfolge zaehlt: verboten schlaegt Rueckfrage schlaegt frei.
@@ -178,24 +185,31 @@ class Ordnergrenze:
             # resolve() loest auch .. und Verknuepfungen auf
             kandidat = kandidat.resolve()
         except (OSError, ValueError) as fehler:
-            log.error("Pfad nicht auswertbar: %s (%s)", pfad, fehler)
-            return Urteil(Stufe.VERBOTEN, "Pfad ist nicht auswertbar", str(pfad))
+            log.error("Pfad nicht auswertbar, abgelehnt: %s (%s)", pfad, fehler)
+            return Urteil(
+                Stufe.VERBOTEN,
+                f"Pfad ist nicht auswertbar: {pfad}",
+                str(pfad),
+            )
 
         if self._ist_geheimnis(kandidat):
             log.warning("Zugriff auf Geheimnisdatei abgelehnt: %s", kandidat)
             return Urteil(
                 Stufe.VERBOTEN,
-                "Datei steht auf der Sperrliste fuer Zugangsdaten",
+                f"Datei steht auf der Sperrliste fuer Zugangsdaten: {kandidat}",
                 str(kandidat),
             )
 
         try:
             kandidat.relative_to(self.projekt)
         except ValueError:
-            log.warning("Zugriff ausserhalb der Ordnergrenze abgelehnt: %s", kandidat)
+            log.warning(
+                "Zugriff ausserhalb der Ordnergrenze abgelehnt: %s (Projektordner: %s)",
+                kandidat, self.projekt,
+            )
             return Urteil(
                 Stufe.VERBOTEN,
-                "Pfad liegt ausserhalb des Projektordners",
+                f"Pfad liegt ausserhalb des Projektordners {self.projekt}: {kandidat}",
                 str(kandidat),
             )
 
