@@ -77,6 +77,17 @@ except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
     log.error("Temp-Ordner nicht auswertbar: %s", _fehler)
     ARBEITSORDNER_CLAUDE = None
 
+# Skill-Ordner im Benutzerverzeichnis (.claude/skills). Dort duerfen Skills
+# ohne Rueckfrage gelesen und geschrieben werden - es ist die einzige weitere
+# Ausnahme ausserhalb des Projektordners. Weder .claude selbst noch ein
+# anderer Ordner darunter ist damit frei; die Sperrliste fuer Zugangsdaten
+# gilt auch hier.
+try:
+    SKILL_ORDNER = (Path.home() / ".claude" / "skills").resolve()
+except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
+    log.error("Benutzerverzeichnis nicht auswertbar: %s", _fehler)
+    SKILL_ORDNER = None
+
 # Erzeugte Daten: taucht nie in Bilanz oder Bericht auf.
 ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
 
@@ -197,6 +208,16 @@ class Ordnergrenze:
             return False
         return True
 
+    def _ist_skillordner(self, pfad: Path) -> bool:
+        """Wahr, wenn der Pfad im Skill-Ordner des Benutzers liegt."""
+        if SKILL_ORDNER is None:
+            return False
+        try:
+            pfad.relative_to(SKILL_ORDNER)
+        except ValueError:
+            return False
+        return True
+
     def pruefe(self, pfad: str | Path) -> Urteil:
         """Prueft einen Datei- oder Ordnerpfad gegen Grenze und Sperrliste."""
         try:
@@ -225,6 +246,13 @@ class Ordnergrenze:
             return Urteil(
                 Stufe.FREI,
                 "Pfad liegt im Arbeitsordner von Claude Code",
+                str(kandidat),
+            )
+
+        if self._ist_skillordner(kandidat):
+            return Urteil(
+                Stufe.FREI,
+                "Pfad liegt im Skill-Ordner des Benutzers",
                 str(kandidat),
             )
 
@@ -637,7 +665,11 @@ def _selbsttest() -> None:
             print(f"  {befehl:32} -> {urteil.ansage()}")
 
         print("\nPfadpruefung:")
-        for pfad in ["unterordner/datei.py", r"..\anderes_projekt\x.py", ".env"]:
+        pfade = ["unterordner/datei.py", r"..\anderes_projekt\x.py", ".env"]
+        if SKILL_ORDNER is not None:
+            pfade.append(str(SKILL_ORDNER / "oberflaeche" / "SKILL.md"))
+            pfade.append(str(SKILL_ORDNER.parent / "einstellungen.json"))
+        for pfad in pfade:
             urteil = grenze_test.pruefe(pfad)
             print(f"  {pfad:32} -> {urteil.ansage()}")
 
