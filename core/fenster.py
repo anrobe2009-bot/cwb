@@ -21,6 +21,7 @@ Aussehen kommt vollständig aus stil.qss. Im Python steht keine Gestaltung.
 import functools
 import html
 import logging
+import re
 import subprocess
 import sys
 import threading
@@ -156,6 +157,31 @@ def markierung_erkennen(text: str) -> tuple[str, str]:
     return "", text.strip(RANDZEICHEN)
 
 
+# Hoechstzahl Saetze, die von einer Rueckfrage oder Fehlermeldung gesprochen
+# wird. Notbremse in Zeichen fuer Meldungen ganz ohne Satzzeichen, etwa
+# Stapelverfolgungen oder JSON-Brocken.
+ANSAGE_SAETZE = 2
+ANSAGE_ZEICHEN = 240
+
+SATZ_MUSTER = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
+
+
+def kurzfassen(text: str, saetze: int = ANSAGE_SAETZE) -> str:
+    """Kuerzt eine Meldung auf hoechstens zwei Saetze fuer die Sprachausgabe.
+
+    Rueckfragen und Fehlermeldungen muessen gesprochen werden, aber niemand
+    will eine Stapelverfolgung vorgelesen bekommen. Der volle Wortlaut bleibt
+    im Ausgabefeld, in der Statuszeile und im Log stehen; gekuerzt wird nur,
+    was durch die Stimme geht."""
+    sauber = " ".join(str(text).split())
+    if not sauber:
+        return ""
+    kurz = "".join(SATZ_MUSTER.findall(sauber)[:saetze]).strip() or sauber
+    if len(kurz) > ANSAGE_ZEICHEN:
+        kurz = kurz[:ANSAGE_ZEICHEN].rstrip() + " …"
+    return kurz
+
+
 # Textarten im Ausgabefeld. Der Schluessel ist zugleich die Klasse in
 # verlauf.css, der Wert das Vorsatzzeichen samt Klartextwort - damit die
 # Bedeutung nicht nur in der Farbe steckt, sondern auch vorgelesen wird.
@@ -233,6 +259,10 @@ class Werkbank(QMainWindow):
         self.letzter_auftrag = ""
         self.letzter_verbrauch: dict = {}
         self.frage_offen = False
+        # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
+        # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
+        # einlaufenden Absatz der Antwort mit vor.
+        self._verlauf_waechst = False
         self.wechselt = False
         self.start_fenster = None
         self.nur_lesen = False
@@ -602,7 +632,12 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich("Ausgabe kopiert.")
 
     def _absatz_ansagen(self) -> None:
-        if not self.verlauf.hasFocus():
+        """Liest den Absatz vor, auf den der Nutzer im Ausgabefeld springt.
+
+        Nur bei eigener Bewegung: waehrend einlaufender Text angehaengt wird,
+        wandert der Zeiger von allein - dann bleibt es still, sonst wuerde die
+        Antwort doch wieder automatisch vorgelesen."""
+        if self._verlauf_waechst or not self.verlauf.hasFocus():
             return
         zeile = self.verlauf.textCursor().block().text().strip()
         if zeile:
@@ -628,7 +663,9 @@ class Werkbank(QMainWindow):
         self._verlauf_anhaengen(
             f"{satz}\nEingabe = ja, Escape = nein", "frage"
         )
-        self.sprecher.melde("wartet", satz, sprechen=True)
+        # Gesprochen wird nur der Kern der Rueckfrage. Der volle Wortlaut
+        # steht in der Statuszeile und im Ausgabefeld.
+        self.sprecher.melde("wartet", kurzfassen(satz), sprechen=True)
 
     def _frage_beantworten(self, ja: bool) -> None:
         self.frage_offen = False
@@ -694,7 +731,10 @@ class Werkbank(QMainWindow):
         if zustand == "fehler":
             self._status_zeigen(ansage)
             self._verlauf_anhaengen(ansage, "fehler")
-        self.sprecher.melde(zustand, ansage, sprechen=(zustand == "fehler"))
+        # Waehrend der Arbeit wird nichts gesprochen, nur der Ton wechselt.
+        # Fehler werden gesprochen, aber auf zwei Saetze gekuerzt.
+        gesprochen = kurzfassen(ansage) if zustand == "fehler" else ""
+        self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen))
 
     def _verlauf_anhaengen(self, text: str, art: str = "antwort") -> None:
         """Haengt einen Absatz an das Ausgabefeld. Die Art bestimmt die Klasse
@@ -705,6 +745,7 @@ class Werkbank(QMainWindow):
         inhalt = f"{VERLAUF_ARTEN[art]}{text}".strip()
         if not inhalt:
             return
+        self._verlauf_waechst = True
         try:
             self.verlauf.append(
                 f'<div class="{art}">'
@@ -714,6 +755,8 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Verlauf nicht ergänzt: %s", fehler)
             return
+        finally:
+            self._verlauf_waechst = False
         leiste = self.verlauf.verticalScrollBar()
         leiste.setValue(leiste.maximum())
 
@@ -737,16 +780,19 @@ class Werkbank(QMainWindow):
         self._auftrags_uhr.stop()
         self.balken.animation_stoppen()
 
-        # `satz` steht in der Statuszeile und muss in eine Zeile passen. Der
-        # Tastenhinweis wird nur gesprochen, sonst laeuft die Zeile ueber.
+        # `satz` steht in der Statuszeile und muss in eine Zeile passen.
+        # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
+        # `ansage` ist das Einzige, was durch die Stimme geht.
         hinweis = ""
         if bilanz.get("fehler"):
             self._zustand_zeigen("fehler")
             satz = "Fehler."
             hinweis = f" {bilanz['fehler']}"
+            ansage = kurzfassen(f"Fehler. {bilanz['fehler']}")
         elif bilanz.get("abgebrochen"):
             self._zustand_zeigen("abgebrochen")
             satz = "Abgebrochen."
+            ansage = satz
         else:
             self._zustand_zeigen("fertig")
             geaendert = bilanz.get("geaendert", [])
@@ -758,11 +804,14 @@ class Werkbank(QMainWindow):
             else:
                 satz = f"Fertig, {anzahl} Dateien geändert."
             hinweis = " Antwort vorlesen mit F3, zurücknehmen mit Strg Z."
+            ansage = satz
 
         self._status_zeigen(satz)
-        self._verlauf_anhaengen(satz + hinweis if bilanz.get("fehler") else satz,
+        self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
-        self.sprecher.sprich(satz + hinweis + self._bericht_kopieren(bilanz))
+        # Gesprochen wird ausschliesslich der kurze Ergebnissatz. Die Antwort
+        # selbst bleibt stumm, egal wie kurz sie ist - dafuer gibt es F3.
+        self.sprecher.sprich((ansage + self._bericht_kopieren(bilanz)).strip())
 
     def _bericht_bauen(self, bilanz: dict) -> str:
         """Baut den Bericht für die Zwischenablage: Auftrag, Antwort, geänderte
@@ -799,7 +848,12 @@ class Werkbank(QMainWindow):
 
     def _bericht_kopieren(self, bilanz: dict) -> str:
         """Legt den Bericht nach jedem Auftrag in die Zwischenablage, sofern in
-        den Einstellungen nicht abgeschaltet. Rückgabe: Zusatz für die Ansage."""
+        den Einstellungen nicht abgeschaltet.
+
+        Rückgabe: leer, wenn es geklappt hat - der gelungene Fall wird nicht
+        angesagt, damit nach einem Auftrag nur der Ergebnissatz kommt. Nur das
+        Scheitern wird gemeldet, sonst wartet man auf einen Bericht, der nicht
+        in der Zwischenablage liegt."""
         if not einstellungen_lesen().get("bericht_kopieren", True):
             return ""
         try:
@@ -807,7 +861,7 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
             return " Bericht konnte nicht kopiert werden."
-        return " Bericht in der Zwischenablage."
+        return ""
 
     # -- Bedienung ----------------------------------------------------------
 
