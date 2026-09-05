@@ -1,0 +1,785 @@
+/* FILE: CWB/stil.qss
+   Dunkles, kontraststarkes Aussehen fuer CWB.
+   Grundschrift 17pt, flache Kachelreihe unter dem Balken, deutliche
+   Fokusrahmen. Jeder Zustand des Balkens hat eine eigene Farbe.
+   Alle Masse werden in fenster.py mit der Fenstergroesse mitskaliert. */
+
+/* --------------------------------------------------------------------
+   Grundlage: alles dunkel, alles gross
+   -------------------------------------------------------------------- */
+
+QWidget {
+    background-color: #101216;
+    color: #f2f4f8;
+    font-family: "Segoe UI", "Arial", sans-serif;
+    font-size: 17pt;
+    selection-background-color: #ffcc33;
+    selection-color: #101216;
+}
+
+QMainWindow {
+    background-color: #0b0d10;
+}
+
+QToolTip {
+    background-color: #1c2029;
+    color: #ffffff;
+    border: 2px solid #ffcc33;
+    padding: 8px;
+    font-size: 16pt;
+}
+
+/* --------------------------------------------------------------------
+   Arbeitsflaeche: nimmt jetzt das ganze Fenster ein
+   -------------------------------------------------------------------- */
+
+#arbeitsflaeche {
+    background-color: #101216;
+}
+
+/* --------------------------------------------------------------------
+   Aktivitaetsanzeige: Balken oben.
+   Die Farbe zeigt den Zustand, zusaetzlich zur Ansage.
+   -------------------------------------------------------------------- */
+
+#balken {
+    min-height: 26px;
+    max-height: 26px;
+    border: 2px solid #0b0d10;
+    border-radius: 6px;
+    background-color: #4a5160;
+}
+
+#balken[zustand="bereit"]      { background-color: #3fa9f5; }  /* helles Blau */
+#balken[zustand="schaerft"]    { background-color: #9b6bff; }  /* Violett     */
+#balken[zustand="denkt"]       { background-color: #00c2b2; }  /* Tuerkis     */
+#balken[zustand="liest"]       { background-color: #4dd964; }  /* Gruen       */
+#balken[zustand="sucht"]       { background-color: #b5e61d; }  /* Gelbgruen   */
+#balken[zustand="schreibt"]    { background-color: #ffcc33; }  /* Gold        */
+#balken[zustand="fuehrt_aus"]  { background-color: #ff8a1f; }  /* Orange      */
+#balken[zustand="netz"]        { background-color: #00d0ff; }  /* Cyan        */
+#balken[zustand="wartet"]      { background-color: #ff4fd8; }  /* Magenta     */
+#balken[zustand="fertig"]      { background-color: #ffffff; }  /* Weiss       */
+#balken[zustand="abgebrochen"] { background-color: #8892a4; }  /* Grau        */
+#balken[zustand="fehler"]      { background-color: #ff2d2d; }  /* Rot         */
+
+/* Lichtstreifen: wandert waehrend eines laufenden Auftrags ruhig ueber
+   den Balken. Weich an den Raendern, kein hartes Blinken. */
+#balkenglanz {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(255, 255, 255, 0),
+        stop:0.5 rgba(255, 255, 255, 130),
+        stop:1 rgba(255, 255, 255, 0)
+    );
+    border: none;
+}
+
+/* Verstrichene Zeit neben dem Balken */
+#zeitanzeige {
+    color: #b5bcc9;
+    font-size: 13pt;
+    padding-left: 10px;
+    min-width: 55px;
+}
+
+/* --------------------------------------------------------------------
+   Kopfzeile des Ausgabefeldes: "Ausgabe", Taetigkeitsplakette, Dateifeld,
+   dann der freie Platz, danach die Modellwahl, die drei Zaehler (Auftrag,
+   Sitzung, Heute) und der Kopieren-Knopf. Ein Feld fuer die Statusmeldung gibt es
+   nicht mehr. Genau eine Zeile hoch, alle Breiten legt das Python fest.
+   Eigene, hellere Flaeche als der Grund, dadurch bilden Kopf und
+   Ausgabefeld sichtbar einen Bereich. Kein Akzentton, damit das Gelb dem
+   Fokus bleibt.
+   -------------------------------------------------------------------- */
+
+/* Token dieses Auftrags, der ganzen Sitzung und des heutigen Tages: gleiche
+   Gestalt und gleiche Breite, unmittelbar nebeneinander in der Reihenfolge
+   Auftrag, Sitzung, Heute. Sie sitzen in #zaehlerreihe ohne Zwischenraum;
+   die Rundung liegt nur aussen, die Innenkanten teilen sich eine Linie,
+   dadurch lesen sie sich als ein Block. */
+#zaehlerreihe {
+    background-color: transparent;
+}
+
+#tokenzaehler,
+#sitzungszaehler,
+#tageszaehler {
+    background-color: #171b22;
+    color: #a9c4a0;
+    font-size: 12pt;
+    padding: 0.3em 0.7em;
+    border: 2px solid #333a47;
+    border-radius: 0;
+}
+
+#tokenzaehler {
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+}
+
+#sitzungszaehler,
+#tageszaehler {
+    border-left: none;
+}
+
+#tageszaehler {
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+#ausgabekopf {
+    background-color: #1b222d;
+    border: 2px solid #3c4657;
+    border-radius: 6px;
+}
+
+#ausgabetitel {
+    background-color: transparent;
+    color: #e6ecf5;
+    font-size: 15pt;
+    font-weight: bold;
+    padding: 0.4em 0.8em;
+}
+
+/* Taetigkeitsplakette neben "Ausgabe". Dieselben Farben wie der Balken
+   oben, damit Farbe und Wort dasselbe sagen. Dunkle Schrift, weil alle
+   Zustandsfarben hell sind. */
+#taetigkeitsplakette {
+    color: #101216;
+    background-color: #3fa9f5;
+    font-size: 13pt;
+    font-weight: bold;
+    padding: 0.25em 0.9em;
+    border: 2px solid #0b0d11;
+    border-radius: 6px;
+}
+
+#taetigkeitsplakette[zustand="bereit"]      { background-color: #3fa9f5; }
+#taetigkeitsplakette[zustand="schaerft"]    { background-color: #9b6bff; }
+#taetigkeitsplakette[zustand="denkt"]       { background-color: #00c2b2; }
+#taetigkeitsplakette[zustand="liest"]       { background-color: #4dd964; }
+#taetigkeitsplakette[zustand="sucht"]       { background-color: #b5e61d; }
+#taetigkeitsplakette[zustand="schreibt"]    { background-color: #ffcc33; }
+#taetigkeitsplakette[zustand="fuehrt_aus"]  { background-color: #ff8a1f; }
+#taetigkeitsplakette[zustand="netz"]        { background-color: #00d0ff; }
+#taetigkeitsplakette[zustand="wartet"]      { background-color: #ff4fd8; }
+#taetigkeitsplakette[zustand="fertig"]      { background-color: #ffffff; }
+#taetigkeitsplakette[zustand="abgebrochen"] { background-color: #8892a4; }
+#taetigkeitsplakette[zustand="fehler"]      { background-color: #ff2d2d;
+                                              color: #ffffff; }
+
+/* Feld neben der Plakette: allein der Name der Datei, an der gerade
+   gearbeitet wird - ohne Pfad, ohne Verb. Ist keine Datei betroffen,
+   bleibt es leer. Ruhige Farbe, damit die Plakette daneben fuehrt;
+   Breite und Hoehe legt das Python fest, sie aendern sich nie. */
+#dateianzeige {
+    background-color: #171b22;
+    color: #d8e2f0;
+    font-size: 13pt;
+    padding: 0.25em 0.9em;
+    border: 2px solid #333a47;
+    border-radius: 6px;
+}
+
+/* Modellwahl in der Kopfzeile: kein festes Schild, sondern ein Auswahlfeld.
+   Es sieht aus wie die Felder daneben, gibt sich aber durch Rahmen und Pfeil
+   als bedienbar zu erkennen. Breite und Hoehe legt das Python fest. */
+QComboBox#ausgabemodell {
+    background-color: #171b22;
+    color: #d8e2f0;
+    font-size: 13pt;
+    padding: 0.25em 0.8em;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QComboBox#ausgabemodell:hover {
+    background-color: #33506e;
+    color: #ffffff;
+}
+
+QComboBox#ausgabemodell:focus {
+    border: 4px solid #ffcc33;
+    color: #ffffff;
+}
+
+QComboBox#ausgabemodell::drop-down {
+    border: none;
+    width: 1.6em;
+}
+
+QPushButton#kopieren {
+    background-color: #262c36;
+    color: #e6ecf5;
+    font-size: 14pt;
+    padding: 0.4em 1em;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QPushButton#kopieren:hover {
+    background-color: #33506e;
+    color: #ffffff;
+    border: 2px solid #7fa8cf;
+}
+
+QPushButton#kopieren:pressed {
+    background-color: #ffcc33;
+    color: #101216;
+    border: 2px solid #ffffff;
+}
+
+QPushButton#kopieren:focus {
+    background-color: #33506e;
+    border: 4px solid #ffcc33;
+}
+
+/* --------------------------------------------------------------------
+   Verlauf und Eingabefeld.
+   Das Ausgabefeld bekommt den ganzen uebrigen Platz (Streckung in
+   fenster.py), das Eingabefeld bleibt bei rund drei Zeilen.
+   -------------------------------------------------------------------- */
+
+#verlauf, #eingabe {
+    background-color: #0b0d10;
+    color: #f2f4f8;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 17pt;
+    padding: 10px;
+    border: 3px solid #333a47;
+    border-radius: 6px;
+}
+
+/* Ausgabefeld: ruhige dunkle Flaeche, deutlich abgesetzter Rahmen in der
+   Farbe der Kopfzeile. Die Farben der einzelnen Textarten - Auftrag,
+   Antwort, Rueckfrage - stehen in verlauf.css. */
+#verlauf {
+    background-color: #080a0d;
+    border: 3px solid #3c4657;
+    padding: 14px;
+}
+
+#eingabezeile {
+    background-color: #101216;
+}
+
+#eingabe {
+    background-color: #151922;
+    color: #ffffff;
+    min-height: 4.4em;
+    max-height: 4.4em;
+}
+
+#verlauf:focus, #eingabe:focus {
+    border: 4px solid #ffcc33;
+    background-color: #1a1f29;
+}
+
+/* --------------------------------------------------------------------
+   Liste: Projektwahl
+   -------------------------------------------------------------------- */
+
+#projektliste {
+    background-color: #0b0d10;
+    color: #f2f4f8;
+    font-size: 17pt;
+    border: 3px solid #333a47;
+    border-radius: 6px;
+    outline: none;
+}
+
+#projektliste:focus {
+    border: 4px solid #ffcc33;
+}
+
+#projektliste::item {
+    padding: 18px 14px;
+    font-size: 19pt;
+    border-bottom: 1px solid #262c36;
+}
+
+#projektliste::item:selected {
+    background-color: #ffcc33;
+    color: #101216;
+    font-weight: bold;
+}
+
+#projektliste::item:hover {
+    background-color: #253040;
+    color: #ffffff;
+}
+
+/* --------------------------------------------------------------------
+   Kachelreihe unter dem Balken.
+   Flach und kompakt: Symbol oben, kleiner Text darunter. Jede Kachel
+   behaelt dauerhaft ihre eigene Pastellfarbe, damit sie auch ohne Lesen
+   wiedererkennbar bleibt. Die Breite verteilt das Layout, darum steht
+   hier keine feste Breite.
+   -------------------------------------------------------------------- */
+
+#kachelreihe {
+    background-color: #171b22;
+    border: 2px solid #333a47;
+    border-radius: 8px;
+    padding: 4px;
+}
+
+#kachel {
+    background-color: #262c36;
+    color: #101216;
+    min-width: 0;
+    min-height: 3.4em;
+    padding: 6px 4px;
+    margin: 2px;
+    border: 2px solid #4a5160;
+    border-radius: 8px;
+}
+
+/* Die beiden Beschriftungen in der Kachel duerfen keinen eigenen
+   Hintergrund malen, sonst verdecken sie die Pastellfarbe. */
+#kachel QLabel {
+    background: transparent;
+    color: #101216;
+}
+
+#kachelsymbol {
+    font-size: 20pt;
+    font-weight: bold;
+    padding: 0;
+}
+
+#kacheltext {
+    font-size: 11pt;
+    font-weight: bold;
+    padding: 0;
+}
+
+#kachel:hover {
+    border: 2px solid #ffffff;
+}
+
+#kachel:pressed {
+    border: 2px solid #101216;
+}
+
+#kachel:focus {
+    border: 4px solid #ffcc33;
+}
+
+#kachel:disabled {
+    background-color: #1a1d23;
+    border: 2px solid #333a47;
+}
+
+#kachel:disabled QLabel {
+    color: #6c7484;
+}
+
+/* Acht deutlich unterschiedliche Pastelltoene, einer je Kachel. */
+
+#kachel[farbe="1"] { background-color: #d6e8ff; }  /* Blau     */
+#kachel[farbe="2"] { background-color: #fff3d6; }  /* Sandgelb */
+#kachel[farbe="3"] { background-color: #d6ffe0; }  /* Gruen    */
+#kachel[farbe="4"] { background-color: #e6d6ff; }  /* Flieder  */
+#kachel[farbe="5"] { background-color: #d6fff9; }  /* Tuerkis  */
+#kachel[farbe="6"] { background-color: #ffe4d6; }  /* Pfirsich */
+#kachel[farbe="7"] { background-color: #ffd6e0; }  /* Rosa     */
+#kachel[farbe="8"] { background-color: #eaffd6; }  /* Limette  */
+
+/* Not-Aus: warnrot, kraeftiger Rand, nicht zu verwechseln */
+
+#kachel[farbe="notaus"] {
+    background-color: #ffb3b3;
+    border: 3px solid #c31414;
+}
+
+#kachel[farbe="notaus"] QLabel {
+    color: #6b0000;
+}
+
+#kachel[farbe="notaus"]:hover {
+    background-color: #ff8080;
+    border: 3px solid #ffffff;
+}
+
+#kachel[farbe="notaus"]:pressed {
+    background-color: #ff2d2d;
+    border: 3px solid #ffffff;
+}
+
+#kachel[farbe="notaus"]:focus {
+    border: 4px solid #ffcc33;
+}
+
+/* --------------------------------------------------------------------
+   Einstellungsseite (F12): vier Reiter Sprache, Toene, Verhalten, Skills.
+   Je Reiter eine flache Karte, nichts wird gerollt. Schriftstufen:
+   Seitentitel 24pt, Reiter 17pt, Gruppentitel 19pt, Fliesstext 17pt,
+   Nebentext 14pt. Alle Abstaende sind Vielfache von 8px, alle Ecken haben
+   denselben Radius.
+   -------------------------------------------------------------------- */
+
+#einstellungen {
+    background-color: #101216;
+}
+
+#einstellungstitel {
+    color: #ffffff;
+    font-size: 24pt;
+    font-weight: bold;
+    padding: 8px 0;
+}
+
+#einstellungshinweis {
+    color: #b8c0cf;
+    font-size: 14pt;
+    padding-bottom: 8px;
+}
+
+/* Reiterleiste: breite Schaltflaechen, der aktive Reiter deutlich abgesetzt */
+
+#einstellungsreiter::pane {
+    background-color: #101216;
+    border: 2px solid #333a47;
+    border-radius: 10px;
+    top: -2px;
+}
+
+#einstellungsreiter QTabBar::tab {
+    background-color: #1a1d23;
+    color: #d6dcea;
+    font-size: 17pt;
+    padding: 12px 24px;
+    margin-right: 8px;
+    min-width: 6em;
+    border: 2px solid #333a47;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+#einstellungsreiter QTabBar::tab:hover {
+    background-color: #33506e;
+    color: #ffffff;
+}
+
+#einstellungsreiter QTabBar::tab:selected {
+    background-color: #262c36;
+    color: #ffcc33;
+    font-weight: bold;
+    border: 2px solid #4a5160;
+    border-bottom: none;
+}
+
+#einstellungsreiter QTabBar::tab:focus {
+    border: 4px solid #ffcc33;
+    border-bottom: none;
+}
+
+#reiterseite {
+    background-color: #101216;
+}
+
+/* Eine Karte je Bereich: Flaechenfarbe trennt, keine dicken Rahmen */
+
+#gruppe {
+    background-color: #1a1d23;
+    border: none;
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 16px;
+}
+
+#gruppe QWidget {
+    background-color: transparent;
+}
+
+#gruppentitel {
+    color: #ffcc33;
+    font-size: 19pt;
+    font-weight: bold;
+    padding-bottom: 8px;
+}
+
+#gruppenhinweis {
+    color: #b8c0cf;
+    font-size: 14pt;
+    padding-bottom: 8px;
+}
+
+#gruppenzeile {
+    background-color: transparent;
+}
+
+#feldname {
+    color: #f2f4f8;
+    font-size: 17pt;
+    padding-right: 16px;
+}
+
+/* Probehoeren und Ordner oeffnen: ruhige Nebenschaltflaechen */
+
+QPushButton#probe {
+    background-color: #262c36;
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 10px 18px;
+    min-height: 44px;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QPushButton#probe:hover {
+    background-color: #33506e;
+    border: 2px solid #3fa9f5;
+}
+
+QPushButton#probe:pressed {
+    background-color: #ffcc33;
+    color: #101216;
+}
+
+QPushButton#probe:focus {
+    border: 4px solid #ffcc33;
+}
+
+QPushButton#schliessen {
+    background-color: #262c36;
+    color: #ffffff;
+    font-size: 17pt;
+    padding: 12px 24px;
+    min-height: 48px;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QPushButton#schliessen:hover {
+    background-color: #33506e;
+    border: 2px solid #3fa9f5;
+}
+
+QPushButton#schliessen:focus {
+    border: 4px solid #ffcc33;
+}
+
+/* Liste der geladenen Skills und Tokenverbrauch je Tag, nur zur Ansicht */
+
+#skillliste,
+#verbrauchsliste {
+    background-color: #0b0d10;
+    color: #f2f4f8;
+    font-size: 16pt;
+    border: 2px solid #333a47;
+    border-radius: 8px;
+    padding: 8px;
+    min-height: 8em;
+}
+
+#skillliste::item,
+#verbrauchsliste::item {
+    padding: 12px;
+    border-radius: 6px;
+}
+
+#skillliste::item:selected,
+#verbrauchsliste::item:selected {
+    background-color: #33506e;
+    color: #ffffff;
+}
+
+#skillliste:focus,
+#verbrauchsliste:focus {
+    border: 4px solid #ffcc33;
+}
+
+/* Auswahllisten und Zahlenfeld der Sprachgruppe */
+
+QComboBox#wegwahl, QComboBox#stimmenwahl, QSpinBox#tempowahl {
+    background-color: #0b0d10;
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 10px;
+    min-height: 44px;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QComboBox#wegwahl:focus, QComboBox#stimmenwahl:focus, QSpinBox#tempowahl:focus {
+    border: 4px solid #ffcc33;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1a1d23;
+    color: #f2f4f8;
+    font-size: 16pt;
+    selection-background-color: #33506e;
+    selection-color: #ffffff;
+    border: 2px solid #4a5160;
+    padding: 8px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 32px;
+    background-color: #262c36;
+    border: none;
+}
+
+QCheckBox {
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 12px 6px;
+    spacing: 14px;
+}
+
+QCheckBox::indicator {
+    width: 30px;
+    height: 30px;
+    border: 3px solid #8892a4;
+    border-radius: 5px;
+    background-color: #0b0d10;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #ffcc33;
+    border: 3px solid #ffffff;
+}
+
+QCheckBox:focus {
+    border: 3px solid #ffcc33;
+    border-radius: 5px;
+}
+
+/* --------------------------------------------------------------------
+   Beschriftungen ohne eigenen Namen
+   -------------------------------------------------------------------- */
+
+QLabel {
+    color: #f2f4f8;
+    font-size: 17pt;
+}
+
+/* --------------------------------------------------------------------
+   Rollbalken: breit genug zum Treffen
+   -------------------------------------------------------------------- */
+
+QScrollBar:vertical {
+    background-color: #0b0d10;
+    width: 24px;
+    margin: 0;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #5a6376;
+    min-height: 50px;
+    border-radius: 8px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #ffcc33;
+}
+
+QScrollBar:horizontal {
+    background-color: #0b0d10;
+    height: 24px;
+    margin: 0;
+    border: none;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #5a6376;
+    min-width: 50px;
+    border-radius: 8px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #ffcc33;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+    height: 0;
+    width: 0;
+    border: none;
+    background: none;
+}
+
+QScrollBar::add-page, QScrollBar::sub-page {
+    background: none;
+}
+
+/* --------------------------------------------------------------------
+   Dateiauswahl beim Bildanhaengen
+   -------------------------------------------------------------------- */
+
+QFileDialog, QDialog {
+    background-color: #101216;
+    color: #f2f4f8;
+    font-size: 16pt;
+}
+
+QDialog QPushButton {
+    background-color: #262c36;
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 10px 18px;
+    min-height: 42px;
+    border: 2px solid #4a5160;
+    border-radius: 6px;
+}
+
+QDialog QPushButton:focus {
+    border: 4px solid #ffcc33;
+}
+
+QLineEdit, QComboBox {
+    background-color: #0b0d10;
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 8px;
+    border: 2px solid #4a5160;
+    border-radius: 5px;
+}
+
+QLineEdit:focus, QComboBox:focus {
+    border: 4px solid #ffcc33;
+}
+
+/* Sendeknopf neben dem Eingabefeld.
+   Der Pfeil zeigt nach oben, wie in ueblichen Chatoberflaechen. Die Hoehe
+   steht hier bewusst nicht: sie kommt aus der Zeile und damit aus dem
+   Eingabefeld daneben (senkrechte Streckung in fenster.py). Aendert sich
+   dessen Hoehe, waechst der Knopf mit. */
+
+QPushButton#senden {
+    background-color: #262c36;
+    color: #ffffff;
+    font-size: 28pt;
+    font-weight: bold;
+    min-width: 2.4em;
+    border: 3px solid #4a5160;
+    border-radius: 10px;
+}
+
+QPushButton#senden:hover {
+    background-color: #33506e;
+    color: #ffffff;
+    border: 3px solid #3fa9f5;
+}
+
+QPushButton#senden:pressed {
+    background-color: #ffcc33;
+    color: #101216;
+    border: 3px solid #ffffff;
+}
+
+QPushButton#senden:focus {
+    background-color: #33506e;
+    border: 5px solid #ffcc33;
+}
+
+QPushButton#senden:disabled {
+    background-color: #1a1d23;
+    color: #6c7484;
+    border: 3px solid #333a47;
+}

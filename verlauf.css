@@ -1,0 +1,35 @@
+/* FILE: CWB/verlauf.css
+   Farben der Textarten im Ausgabefeld.
+
+   Qt stylt einzelne Textabschnitte nicht ueber stil.qss, sondern ueber das
+   Stilblatt des Textdokuments. Damit auch hier keine Gestaltung im Python
+   steht, liegen die Farben in dieser Datei; fenster.py laedt sie nur.
+
+   Drei Bedeutungen, drei Farben:
+     auftrag  - was Robert selbst geschrieben hat          (ruhiges Blau)
+     antwort  - die normale Antwort                        (helles Grau)
+     frage    - Rueckfrage an Robert, und Fehlermeldungen  (kraeftiges Rot)
+
+   Die Unterscheidung liegt nie allein in der Farbe: jede Art traegt ein
+   Vorsatzzeichen und ein Wort im Klartext, das der Screenreader mitliest. */
+
+.auftrag {
+    color: #8fc4ff;
+    font-weight: bold;
+}
+
+.antwort {
+    color: #e9edf3;
+}
+
+.frage, .fehler {
+    color: #ff8a6b;
+    background-color: #2a1512;
+    font-weight: bold;
+}
+
+/* Beilaeufiges: Abschlussmeldung, Freigabe, Ablehnung. Bewusst leise, damit
+   es die drei Hauptfarben nicht verwaessert. */
+.hinweis {
+    color: #98a3b4;
+}

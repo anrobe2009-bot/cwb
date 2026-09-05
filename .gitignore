@@ -1,0 +1,51 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.log
+
+# Erzeugte Daten - nie Teil der Bilanz oder des Berichts
+.stimmen/
+.toene/
+.ablage/
+.cwb/
+
+# Persoenliche Einstellungen: enthaelt die Pfade dieses Rechners,
+# das zuletzt geoeffnete Projekt und den Tokenverbrauch.
+# Wird beim ersten Start neu angelegt (core/ersteinrichtung.py).
+einstellungen.json
+
+# Projektgedaechtnis: Tagebuch, offene Punkte und Archiv beschreiben
+# die eigene Arbeit und gehoeren niemandem sonst.
+wissen/tagebuch.md
+wissen/offen.md
+wissen/archiv/
+
+# Auftragsprotokolle: enthalten den Wortlaut jedes Auftrags.
+.cwb/protokoll/
+
+# Sicherungskopien und Testaufnahmen
+*.bak
+*.orig
+*.rej
+.probe_*.png
+
+# Gesicherte alte Historie - gehoert nicht ins neue Repository.
+.git_alt/
+
+# Betriebssystem und Editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
