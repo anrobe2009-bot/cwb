@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -65,6 +66,16 @@ GEHEIMNIS_MUSTER = [
     r"\.(pem|key|pfx|p12|keystore|jks)$",
 ]
 _GEHEIMNIS_REGEX = [re.compile(m, re.IGNORECASE) for m in GEHEIMNIS_MUSTER]
+
+# Eigener Arbeitsordner von Claude Code unterhalb des Temp-Ordners des
+# Benutzers. Dort liegen Zwischenergebnisse; nur dieser eine Unterordner ist
+# erlaubt, der uebrige Temp-Ordner bleibt gesperrt. Die Sperrliste fuer
+# Zugangsdaten gilt auch hier.
+try:
+    ARBEITSORDNER_CLAUDE = (Path(tempfile.gettempdir()) / "claude").resolve()
+except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
+    log.error("Temp-Ordner nicht auswertbar: %s", _fehler)
+    ARBEITSORDNER_CLAUDE = None
 
 # Erzeugte Daten: taucht nie in Bilanz oder Bericht auf.
 ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
@@ -176,6 +187,16 @@ class Ordnergrenze:
         text = str(pfad)
         return any(r.search(text) for r in _GEHEIMNIS_REGEX)
 
+    def _ist_arbeitsordner(self, pfad: Path) -> bool:
+        """Wahr, wenn der Pfad im Arbeitsordner von Claude Code liegt."""
+        if ARBEITSORDNER_CLAUDE is None:
+            return False
+        try:
+            pfad.relative_to(ARBEITSORDNER_CLAUDE)
+        except ValueError:
+            return False
+        return True
+
     def pruefe(self, pfad: str | Path) -> Urteil:
         """Prueft einen Datei- oder Ordnerpfad gegen Grenze und Sperrliste."""
         try:
@@ -197,6 +218,13 @@ class Ordnergrenze:
             return Urteil(
                 Stufe.VERBOTEN,
                 f"Datei steht auf der Sperrliste fuer Zugangsdaten: {kandidat}",
+                str(kandidat),
+            )
+
+        if self._ist_arbeitsordner(kandidat):
+            return Urteil(
+                Stufe.FREI,
+                "Pfad liegt im Arbeitsordner von Claude Code",
                 str(kandidat),
             )
 
