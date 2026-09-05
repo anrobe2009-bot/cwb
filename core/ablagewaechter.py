@@ -9,7 +9,9 @@ uebernommen und abgeschickt.
 Alles ohne Markierung wird sofort fallengelassen: es wird weder ausgegeben,
 noch protokolliert, noch gemerkt. Vom Text bleibt in keinem Fall ein Rest
 im Speicher des Waechters - gemerkt wird nur ein Pruefwert des zuletzt
-ausgefuehrten Auftrags, damit derselbe Text nicht zweimal laeuft.
+ausgefuehrten Auftrags. Er verhindert allein die unmittelbare Wiederholung:
+lag ein anderer Auftrag dazwischen oder ist mehr als eine Minute vergangen,
+darf derselbe Text wieder laufen.
 
 Dieses Modul kennt fenster.py nicht. Was "Markierung" heisst, ob der
 Waechter eingeschaltet ist und was mit einem Auftrag geschieht, kommt
@@ -18,6 +20,7 @@ ausschliesslich ueber die drei Funktionen im Aufruf.
 
 import hashlib
 import logging
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
@@ -38,6 +41,10 @@ log = logging.getLogger("cwb.ablagewaechter")
 # Abstand zwischen zwei Blicken in die Zwischenablage.
 PRUEF_ABSTAND_MS = 2000
 
+# So lange sperrt der Pruefwert denselben Text. Danach ist eine gewollte
+# Wiederholung wieder moeglich.
+SPERRE_SEKUNDEN = 60.0
+
 
 class Zwischenablagewaechter(QObject):
     """Prueft die Zwischenablage im Hintergrund auf markierte Auftraege.
@@ -57,8 +64,10 @@ class Zwischenablagewaechter(QObject):
         # Pruefwert des zuletzt ausgefuehrten Auftrags, nicht sein Text. Er
         # kommt aus dem Speicher des Aufrufers, damit ein vor dem Neustart
         # ausgefuehrter Text nicht gleich wieder laeuft - die Zwischenablage
-        # steht nach dem Neustart ja unveraendert da.
+        # steht nach dem Neustart ja unveraendert da. Die Sperre gilt nur
+        # SPERRE_SEKUNDEN lang, gerechnet ab jetzt.
         self._zuletzt = ""
+        self._zuletzt_zeit = time.monotonic()
         if pruefwert_lesen is not None:
             try:
                 self._zuletzt = str(pruefwert_lesen() or "")
@@ -81,6 +90,13 @@ class Zwischenablagewaechter(QObject):
     def anhalten(self) -> None:
         self._uhr.stop()
         log.info("Zwischenablage-Wächter angehalten")
+
+    def auftrag_dazwischen(self) -> None:
+        """Ein Auftrag von anderer Seite ist gelaufen. Damit ist die Sperre
+        aufgehoben: derselbe Text aus der Zwischenablage darf wieder los."""
+        if self._zuletzt:
+            log.info("Anderer Auftrag dazwischen, Sperre des Wächters aufgehoben")
+        self._zuletzt = ""
 
     def _eingeschaltet(self) -> bool:
         try:
@@ -113,9 +129,15 @@ class Zwischenablagewaechter(QObject):
             # Text: nichts wird behalten und nichts ins Log geschrieben.
             return
         pruefwert = hashlib.sha256(inhalt.encode("utf-8")).hexdigest()
+        # Der Pruefwert sperrt nur die unmittelbare Wiederholung. Nach einer
+        # Minute oder nach einem anderen Auftrag darf derselbe Text erneut
+        # laufen - gewollte Wiederholungen sollen nicht haengenbleiben.
         if pruefwert == self._zuletzt:
-            return
+            if time.monotonic() - self._zuletzt_zeit <= SPERRE_SEKUNDEN:
+                return
+            log.info("Sperre abgelaufen, Text darf erneut laufen: %s", pruefwert[:12])
         self._zuletzt = pruefwert
+        self._zuletzt_zeit = time.monotonic()
         if self._pruefwert_merken is not None:
             try:
                 self._pruefwert_merken(pruefwert)

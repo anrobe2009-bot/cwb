@@ -300,6 +300,9 @@ class Werkbank(QMainWindow):
         # Auftraege, die abgeschickt wurden, bevor der Arbeitsfaden stand.
         # Sie gehen nicht verloren, sondern laufen los, sobald er da ist.
         self._wartende_auftraege: list[tuple[str, list[Path]]] = []
+        # Wahr, solange gerade ein Auftrag des Zwischenablage-Waechters laeuft.
+        # Nur daran erkennt _absenden, ob ein Auftrag von anderer Seite kam.
+        self._aus_ablage = False
         # Ausgangsschrift der Textfelder, gemerkt beim Aufbau. Strg+0 stellt sie
         # wieder her, falls doch einmal etwas an der Groesse gedreht hat.
         self._schrift_ausgang: list[tuple[QWidget, QFont]] = []
@@ -956,7 +959,11 @@ class Werkbank(QMainWindow):
         kurze Ansage, abschicken."""
         self.eingabe.setPlainText(inhalt)
         self.sprecher.sprich("Code-Auftrag aus der Zwischenablage.")
-        self._absenden()
+        self._aus_ablage = True
+        try:
+            self._absenden()
+        finally:
+            self._aus_ablage = False
 
     @slot_geschuetzt
     def _absenden(self) -> None:
@@ -967,6 +974,12 @@ class Werkbank(QMainWindow):
                 "Nach der Markierung steht nichts." if art else "Nichts eingegeben."
             )
             return
+        if not self._aus_ablage:
+            # Ein Auftrag von anderer Seite hebt die Sperre des Waechters auf:
+            # danach darf derselbe Text aus der Zwischenablage wieder laufen.
+            waechter = getattr(self, "ablage_waechter", None)
+            if waechter is not None:
+                waechter.auftrag_dazwischen()
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
         self.letzter_verbrauch = {}
