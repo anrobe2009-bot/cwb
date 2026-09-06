@@ -6,23 +6,18 @@ Sieht alle zwei Sekunden nach, ob in der Zwischenablage ein Text steht,
 dessen erste Zeile die Code-Markierung ist. Nur dann wird der Text
 uebernommen und abgeschickt.
 
-Alles ohne Markierung wird sofort fallengelassen: es wird weder ausgegeben,
-noch protokolliert, noch gemerkt. Vom Text bleibt in keinem Fall ein Rest
-im Speicher des Waechters - gemerkt werden nur zwei Pruefwerte: der des
-zuletzt ausgefuehrten Auftrags und der des zuletzt gesehenen Ablageinhalts.
-Zeit spielt keine Rolle. Derselbe Text laeuft erst wieder, wenn die
-Zwischenablage zwischendurch etwas anderes enthielt oder ein Auftrag von
-anderer Seite dazwischenkam.
+Sobald ein markierter Auftrag uebernommen ist, leert der Waechter die
+Zwischenablage. Damit kann derselbe Text nie zweimal auslösen - es gibt
+keine Pruefwerte und keine Zeitgrenzen, die Zwischenablage selbst ist die
+einzige Sperre. Alles ohne Markierung bleibt unberuehrt: es wird weder
+gelesen noch geloescht noch protokolliert.
 
 Dieses Modul kennt fenster.py nicht. Was "Markierung" heisst, ob der
 Waechter eingeschaltet ist und was mit einem Auftrag geschieht, kommt
 ausschliesslich ueber die drei Funktionen im Aufruf.
 """
 
-import hashlib
 import logging
-import time
-from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
@@ -32,19 +27,11 @@ try:
 except ImportError:
     from pfade import log_einrichten
 
-CWB_WURZEL = Path(__file__).resolve().parent.parent
-LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
-
 log_einrichten()
 log = logging.getLogger("cwb.ablagewaechter")
 
 # Abstand zwischen zwei Blicken in die Zwischenablage.
 PRUEF_ABSTAND_MS = 2000
-
-
-def _pruefwert(text: str) -> str:
-    """Pruefwert eines Textes. Der Text selbst wird nirgends behalten."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class Zwischenablagewaechter(QObject):
@@ -55,46 +42,14 @@ class Zwischenablagewaechter(QObject):
     `ausfuehren` bekommt den Inhalt eines erkannten Code-Auftrags.
     """
 
-    def __init__(self, markierung_erkennen, aktiv, ausfuehren, eltern=None,
-                 pruefwert_lesen=None, pruefwert_merken=None):
+    def __init__(self, markierung_erkennen, aktiv, ausfuehren, eltern=None):
         super().__init__(eltern)
         self._markierung_erkennen = markierung_erkennen
         self._aktiv = aktiv
         self._ausfuehren = ausfuehren
-        self._pruefwert_merken = pruefwert_merken
-        # Pruefwert des zuletzt ausgefuehrten Auftrags, nicht sein Text. Er
-        # kommt aus dem Speicher des Aufrufers, damit ein vor dem Neustart
-        # ausgefuehrter Text nicht gleich wieder laeuft - die Zwischenablage
-        # steht nach dem Neustart ja unveraendert da. Die Sperre laeuft nicht
-        # ab; sie faellt erst, wenn ein anderer Ablageinhalt dazwischenliegt.
-        self._zuletzt = ""
-        # Pruefwert des zuletzt gesehenen Ablageinhalts. None heisst: noch
-        # kein Blick getan.
-        self._letzter_inhalt = None
-        if pruefwert_lesen is not None:
-            try:
-                self._zuletzt = str(pruefwert_lesen() or "")
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Gemerkter Prüfwert nicht lesbar: %s", fehler)
-            if self._zuletzt:
-                log.info("Wächter kennt den letzten Auftrag: %s", self._zuletzt[:12])
-        # Beleg, welche Fassung dieser Datei wirklich laeuft. Ohne ihn laesst
-        # sich nicht unterscheiden, ob die Regel greift oder nur ein alter
-        # Prozess mit alter Fassung noch offen ist.
-        quelle = Path(__file__).resolve()
-        log.info(
-            "Wächter aus %s (geändert %s), Sperre ohne Zeitgrenze",
-            quelle,
-            time.strftime("%d.%m.%Y %H:%M:%S",
-                          time.localtime(quelle.stat().st_mtime)),
-        )
         # Fehler beim Lesen der Ablage nur einmal ins Log, nicht alle zwei
         # Sekunden erneut.
         self._lesefehler_gemeldet = False
-        # Zuletzt ins Log geschriebene Entscheidung, als (Pruefwert, gesperrt).
-        # Solange sie sich nicht aendert, schweigt der Pruefdurchlauf - sonst
-        # waechst das Log alle zwei Sekunden um eine Zeile ohne Neuigkeit.
-        self._letzte_entscheidung = None
         self._uhr = QTimer(self)
         self._uhr.setInterval(PRUEF_ABSTAND_MS)
         self._uhr.timeout.connect(self._nachsehen)
@@ -108,13 +63,6 @@ class Zwischenablagewaechter(QObject):
         self._uhr.stop()
         log.info("Zwischenablage-Wächter angehalten")
 
-    def auftrag_dazwischen(self) -> None:
-        """Ein Auftrag von anderer Seite ist gelaufen. Damit ist die Sperre
-        aufgehoben: derselbe Text aus der Zwischenablage darf wieder los."""
-        if self._zuletzt:
-            log.info("Anderer Auftrag dazwischen, Sperre des Wächters aufgehoben")
-        self._zuletzt = ""
-
     def _eingeschaltet(self) -> bool:
         try:
             return bool(self._aktiv())
@@ -127,27 +75,14 @@ class Zwischenablagewaechter(QObject):
         if not self._eingeschaltet():
             return
         try:
-            text = QGuiApplication.clipboard().text()
+            zwischenablage = QGuiApplication.clipboard()
+            text = zwischenablage.text()
         except Exception as fehler:  # noqa: BLE001
             if not self._lesefehler_gemeldet:
                 log.exception("Zwischenablage nicht lesbar: %s", fehler)
                 self._lesefehler_gemeldet = True
             return
         self._lesefehler_gemeldet = False
-        # Aenderung des Ablageinhalts erkennen - auch bei unmarkiertem Text,
-        # denn auch er ist "etwas anderes dazwischen". Vom Text bleibt dabei
-        # nur sein Pruefwert.
-        inhaltswert = _pruefwert(text)
-        if self._letzter_inhalt is None:
-            # Erster Blick nach dem Start. Er hebt die gemerkte Sperre nicht
-            # auf, sonst liefe ein vor dem Neustart erledigter Auftrag sofort
-            # noch einmal.
-            self._letzter_inhalt = inhaltswert
-        elif inhaltswert != self._letzter_inhalt:
-            self._letzter_inhalt = inhaltswert
-            if self._zuletzt:
-                log.info("Anderer Ablageinhalt gesehen, Sperre aufgehoben")
-            self._zuletzt = ""
         if not text:
             return
         try:
@@ -159,35 +94,14 @@ class Zwischenablagewaechter(QObject):
             # Kein markierter Auftrag. Hier endet jede Beruehrung mit dem
             # Text: nichts wird behalten und nichts ins Log geschrieben.
             return
-        pruefwert = _pruefwert(inhalt)
-        # Zeit spielt keine Rolle: derselbe Auftrag bleibt gesperrt, solange
-        # die Zwischenablage unveraendert daliegt.
-        gesperrt = pruefwert == self._zuletzt
-        # Nur eine Zeile, wenn sich die Entscheidung gegenueber dem letzten
-        # Durchlauf aendert - bei gleichem Auftrag und gleichem Ausgang
-        # bleibt das Log still. Der Text selbst steht nie im Log, nur seine
-        # Pruefwerte.
-        entscheidung = (pruefwert, gesperrt)
-        if entscheidung != self._letzte_entscheidung:
-            self._letzte_entscheidung = entscheidung
-            log.info(
-                "Prüflauf: gefunden %s, gemerkt %s, Entscheidung %s",
-                pruefwert[:12],
-                self._zuletzt[:12] or "keiner",
-                "abgelehnt (unveränderte Zwischenablage)" if gesperrt else "angenommen",
-            )
-        if gesperrt:
-            return
-        self._zuletzt = pruefwert
-        if self._pruefwert_merken is not None:
-            try:
-                self._pruefwert_merken(pruefwert)
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Prüfwert nicht sicherbar: %s", fehler)
-        log.info(
-            "Wächter: markierter Auftrag erkannt, %d Zeichen, Prüfwert %s",
-            len(inhalt), pruefwert[:12],
-        )
+        log.info("Wächter: markierter Auftrag erkannt, %d Zeichen", len(inhalt))
+        # Erst die Zwischenablage leeren, dann ausfuehren: so kann derselbe
+        # Text nicht ein zweites Mal auslösen, auch wenn der Auftrag laenger
+        # braucht als der naechste Blick des Timers.
+        try:
+            zwischenablage.clear()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage nicht leerbar: %s", fehler)
         try:
             self._ausfuehren(inhalt)
         except Exception as fehler:  # noqa: BLE001

@@ -66,8 +66,6 @@ try:
     from .grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
-        ablage_pruefwert_lesen,
-        ablage_pruefwert_merken,
         einstellungen_lesen,
         einstellungen_schreiben,
         slot_geschuetzt,
@@ -116,8 +114,6 @@ except ImportError:
     from grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
-        ablage_pruefwert_lesen,
-        ablage_pruefwert_merken,
         einstellungen_lesen,
         einstellungen_schreiben,
         slot_geschuetzt,
@@ -419,8 +415,6 @@ class Werkbank(QMainWindow):
             lambda: einstellungen_lesen().get("ablage_waechter", True),
             self._ablage_auftrag,
             self,
-            ablage_pruefwert_lesen,
-            ablage_pruefwert_merken,
         )
         self.ablage_waechter.starten()
 
@@ -1102,9 +1096,10 @@ class Werkbank(QMainWindow):
     @slot_geschuetzt
     def _ablage_auftrag(self, inhalt: str) -> None:
         """Der Wächter hat einen markierten Auftrag gefunden: ins Eingabefeld,
-        kurze Ansage, abschicken."""
+        kurze Ansage, abschicken. Die Zwischenablage ist zu diesem Zeitpunkt
+        schon geleert (siehe ablagewaechter.py)."""
         self.eingabe.setPlainText(inhalt)
-        self.sprecher.sprich("Code-Auftrag aus der Zwischenablage.", art="meldung")
+        self.sprecher.sprich("Auftrag übernommen, Zwischenablage geleert.", art="meldung")
         self._aus_ablage = True
         try:
             self._absenden()
@@ -1153,12 +1148,6 @@ class Werkbank(QMainWindow):
             if not hinweis_auf_projekt(text, self.projekt):
                 self.sprecher.sprich(f"Läuft in {self.projekt.name}.",
                                      art="meldung")
-        if not self._aus_ablage:
-            # Ein Auftrag von anderer Seite hebt die Sperre des Waechters auf:
-            # danach darf derselbe Text aus der Zwischenablage wieder laufen.
-            waechter = getattr(self, "ablage_waechter", None)
-            if waechter is not None:
-                waechter.auftrag_dazwischen()
         bilder = list(self.bilder)
         self.bilder.clear()
         self.eingabe.clear()

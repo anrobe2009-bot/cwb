@@ -149,28 +149,6 @@ def verlauf_stil_lesen() -> str:
 # `from grundlagen import einstellungen_lesen` schreiben können.
 
 
-# Pruefwert des zuletzt aus der Zwischenablage ausgefuehrten Auftrags. Er
-# liegt in einstellungen.json, weil er sonst bei jedem Neustart verloren waere
-# und derselbe markierte Text gleich nach dem Start ein zweites Mal liefe.
-# Die Sperre kennt keine Zeitgrenze: sie faellt erst, wenn die Zwischenablage
-# zwischendurch etwas anderes enthaelt (siehe ablagewaechter.py). Gespeichert
-# wird nur der Pruefwert, nie der Text selbst.
-ABLAGE_MERKER = "ablage_zuletzt"
-
-
-def ablage_pruefwert_lesen() -> str:
-    wert = einstellungen_lesen().get(ABLAGE_MERKER, "")
-    return wert if isinstance(wert, str) else ""
-
-
-def ablage_pruefwert_merken(pruefwert: str) -> None:
-    werte = einstellungen_lesen()
-    if werte.get(ABLAGE_MERKER) == pruefwert:
-        return
-    werte[ABLAGE_MERKER] = pruefwert
-    einstellungen_schreiben(werte)
-
-
 # ---------------------------------------------------------------------------
 # Tokenverbrauch je Kalendertag. Er liegt in einstellungen.json unter
 # "tokenverbrauch", mit dem Datum als Schlüssel: {"2026-09-05": 12345}.
