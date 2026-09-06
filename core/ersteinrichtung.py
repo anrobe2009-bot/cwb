@@ -116,7 +116,8 @@ class Pfadzeile(QWidget):
     def _sagen(self, satz: str) -> None:
         if self.sprecher is not None:
             try:
-                self.sprecher.sprich(satz)
+                # Die Ersteinrichtung führt durch und spricht in jeder Stufe.
+                self.sprecher.sprich(satz, art="immer")
             except Exception as fehler:  # noqa: BLE001
                 log.exception("Ansage nicht möglich: %s", fehler)
 
@@ -231,7 +232,8 @@ class Ersteinrichtung(QDialog):
 
     def _sagen(self, satz: str) -> None:
         try:
-            self.sprecher.sprich(satz)
+            # Die Ersteinrichtung führt durch und spricht in jeder Stufe.
+            self.sprecher.sprich(satz, art="immer")
         except Exception as fehler:  # noqa: BLE001
             log.exception("Ansage nicht möglich: %s", fehler)
 

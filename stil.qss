@@ -702,6 +702,34 @@ QCheckBox:focus {
     border-radius: 5px;
 }
 
+/* Stufen der Sprachausgabe: dieselbe Groesse und derselbe Fokusrahmen wie
+   die Schalter, nur rund - so ist auch mit den Augen zu sehen, dass hier
+   genau eine Zeile gilt. */
+QRadioButton {
+    color: #ffffff;
+    font-size: 16pt;
+    padding: 12px 6px;
+    spacing: 14px;
+}
+
+QRadioButton::indicator {
+    width: 30px;
+    height: 30px;
+    border: 3px solid #8892a4;
+    border-radius: 18px;
+    background-color: #0b0d10;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #ffcc33;
+    border: 3px solid #ffffff;
+}
+
+QRadioButton:focus {
+    border: 3px solid #ffcc33;
+    border-radius: 5px;
+}
+
 /* --------------------------------------------------------------------
    Beschriftungen ohne eigenen Namen
    -------------------------------------------------------------------- */

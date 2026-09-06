@@ -10,6 +10,10 @@ Ausgabewege:
 
 Wiederkehrende Sätze werden zwischengespeichert und beim zweiten Mal
 ohne Verzögerung abgespielt. Fällt das Internet aus, springt SAPI ein.
+
+Wie viel gesprochen wird, regelt die Stufe (Einstellungen, Reiter "Sprache"):
+1 nur Meldungen, 2 zusätzlich Berührtes, 3 zusätzlich die volle Antwort.
+Jeder Aufruf von `sprich` nennt dazu die Art seines Satzes.
 """
 
 import asyncio
@@ -53,6 +57,49 @@ STIMMEN_NOTNAGEL = [
 ]
 
 STANDARD_STIMME = "de-DE-KatjaNeural"
+
+# ---------------------------------------------------------------------------
+# Stufen der Sprachausgabe (Einstellungen, Reiter "Sprache")
+# ---------------------------------------------------------------------------
+# Jede Stufe enthaelt alles, was die kleinere schon spricht. Stufe eins ist
+# die Voreinstellung: laeuft ein Screenreader, liest der ohnehin vor, worauf
+# der Fokus steht - CWB wuerde das nur doppeln.
+STUFE_MELDUNGEN = 1
+STUFE_BERUEHRT = 2
+STUFE_ALLES = 3
+STUFE_STANDARD = STUFE_MELDUNGEN
+
+STUFEN = [
+    (STUFE_MELDUNGEN, "Nur Meldungen",
+     "Auftrag aus der Zwischenablage, Ergebnissatz nach dem Auftrag, "
+     "Rückfragen und Fehler"),
+    (STUFE_BERUEHRT, "Meldungen und Berührtes",
+     "zusätzlich, worauf der Mauszeiger ruht und wohin der Tastaturfokus springt"),
+    (STUFE_ALLES, "Alles",
+     "zusätzlich die vollständige Antwort nach jedem Auftrag"),
+]
+
+# Art eines Satzes -> ab welcher Stufe er zu hoeren ist.
+# "immer" gilt fuer Saetze, die der Nutzer ausdruecklich abruft (Vorlesetasten,
+# Probehoeren, Ersteinrichtung); sie stumm zu schalten hiesse, die Taste
+# abzuschalten. Nicht eingeordnete Saetze gelten als "beruehrt" und schweigen
+# damit in Stufe eins.
+SATZARTEN = {
+    "immer": 0,
+    "meldung": STUFE_MELDUNGEN,
+    "beruehrt": STUFE_BERUEHRT,
+    "antwort": STUFE_ALLES,
+}
+SATZART_STANDARD = "beruehrt"
+
+
+def stufe_pruefen(wert) -> int:
+    """Macht aus einem gespeicherten Wert eine gueltige Stufe."""
+    try:
+        zahl = int(wert)
+    except (TypeError, ValueError):
+        return STUFE_STANDARD
+    return zahl if STUFE_MELDUNGEN <= zahl <= STUFE_ALLES else STUFE_STANDARD
 
 
 @dataclass(frozen=True)
@@ -220,11 +267,15 @@ class Sprecher:
         tempo: int | None = None,
         sprechen_an: bool = True,
         toene_an: bool = True,
+        stufe: int | None = None,
     ):
         gespeichert = self._einstellungen_lesen()
         self.weg = weg or gespeichert.get("weg", "edge")
         self.stimme = stimme or gespeichert.get("stimme", STANDARD_STIMME)
         self.tempo = tempo if tempo is not None else int(gespeichert.get("tempo", 0))
+        self.stufe = stufe_pruefen(
+            stufe if stufe is not None else gespeichert.get("stufe", STUFE_STANDARD)
+        )
         self.sprechen_an = sprechen_an
         self.toene_an = toene_an
 
@@ -261,8 +312,8 @@ class Sprecher:
         self._ton_faden = threading.Thread(target=self._ton_schleife, daemon=True)
         self._ton_faden.start()
 
-        log.info("Sprachausgabe über %s, Stimme %s, Tempo %+d%%",
-                 self.weg, self.stimme, self.tempo)
+        log.info("Sprachausgabe über %s, Stimme %s, Tempo %+d%%, Stufe %d",
+                 self.weg, self.stimme, self.tempo, self.stufe)
 
     # -- Einstellungen ------------------------------------------------------
 
@@ -304,7 +355,12 @@ class Sprecher:
                 daten = json.loads(EINSTELLUNGEN.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             daten = {}
-        daten["sprache"] = {"weg": self.weg, "stimme": self.stimme, "tempo": self.tempo}
+        daten["sprache"] = {
+            "weg": self.weg,
+            "stimme": self.stimme,
+            "tempo": self.tempo,
+            "stufe": self.stufe,
+        }
         try:
             EINSTELLUNGEN.write_text(
                 json.dumps(daten, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -454,9 +510,26 @@ class Sprecher:
         if self._sapi:
             self._sapi.Speak(text, 0)
 
-    def sprich(self, text: str, unterbrechen: bool = True) -> None:
-        """Reiht Text zum Sprechen ein. Kehrt sofort zurück."""
+    def stufe_setzen(self, stufe: int, sichern: bool = True) -> None:
+        """Wechselt die Redseligkeit im laufenden Betrieb."""
+        self.stufe = stufe_pruefen(stufe)
+        if sichern:
+            self.einstellungen_sichern()
+        log.info("Sprachstufe jetzt %d", self.stufe)
+
+    def art_erlaubt(self, art: str) -> bool:
+        """Passt ein Satz dieser Art zur eingestellten Stufe?"""
+        return SATZARTEN.get(art, SATZARTEN[SATZART_STANDARD]) <= self.stufe
+
+    def sprich(self, text: str, unterbrechen: bool = True,
+               art: str = SATZART_STANDARD) -> None:
+        """Reiht Text zum Sprechen ein. Kehrt sofort zurück.
+
+        `art` ordnet den Satz einer Stufe zu (siehe SATZARTEN). Was ueber der
+        eingestellten Stufe liegt, wird gar nicht erst eingereiht."""
         if not self.sprechen_an or not text:
+            return
+        if not self.art_erlaubt(art):
             return
         text = " ".join(text.split())
         if unterbrechen:
@@ -537,11 +610,13 @@ class Sprecher:
 
     # -- Verbund ------------------------------------------------------------
 
-    def melde(self, zustand: str, ansage: str = "", sprechen: bool = False) -> None:
-        """Ton immer, Sprache nur wenn ausdrücklich gewünscht."""
+    def melde(self, zustand: str, ansage: str = "", sprechen: bool = False,
+              art: str = SATZART_STANDARD) -> None:
+        """Ton immer, Sprache nur wenn ausdrücklich gewünscht und die Stufe
+        sie zulässt. Der Ton bleibt von der Stufe unberührt."""
         self.ton(zustand)
         if sprechen and ansage:
-            self.sprich(ansage)
+            self.sprich(ansage, art=art)
 
     def vorwaermen(self, saetze: list[str]) -> int:
         """Erzeugt feste Sätze im Voraus, damit sie später sofort da sind."""
@@ -602,7 +677,7 @@ def _selbsttest() -> None:
         "Fertig, drei Dateien geändert."
     )
     print("\nProbesatz wird gesprochen …")
-    sprecher.sprich(probe)
+    sprecher.sprich(probe, art="immer")
     time.sleep(10)
 
     print("\nTöne der Reihe nach:")

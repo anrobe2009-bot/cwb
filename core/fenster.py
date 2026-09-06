@@ -623,7 +623,9 @@ class Werkbank(QMainWindow):
                "Alle Befehle mit Tastenkürzel: " + " ".join(
             f"{taste}: {beschriftung}." for taste, beschriftung, _ in self._leisten_eintraege()
         )
-        self.sprecher.sprich(satz)
+        # Auf Zuruf: eine Vorlesetaste schweigt in keiner Stufe, sonst waere
+        # die Taste abgeschaltet statt die Stimme gedaempft.
+        self.sprecher.sprich(satz, art="immer")
 
     def _einstellungen_zeigen(self) -> None:
         """F12: die Einstellungsseite mit Sprache, Tönen, Verhalten und Skills
@@ -638,27 +640,29 @@ class Werkbank(QMainWindow):
             )
         except Exception as fehler:  # noqa: BLE001
             log.exception("Einstellungen nicht geöffnet: %s", fehler)
-            self.sprecher.sprich("Einstellungen konnten nicht geöffnet werden.")
+            self.sprecher.sprich("Einstellungen konnten nicht geöffnet werden.",
+                                 art="meldung")
             return
         self.sprecher.sprich("Einstellungen.")
         fenster.exec()
 
     def _wo_stehen_wir(self) -> None:
         if self.faden.sitzung:
-            self.sprecher.sprich(self.faden.sitzung.stand())
+            self.sprecher.sprich(self.faden.sitzung.stand(), art="immer")
         else:
-            self.sprecher.sprich("Noch nicht verbunden.")
+            self.sprecher.sprich("Noch nicht verbunden.", art="immer")
 
     def _antwort_vorlesen(self) -> None:
-        self.sprecher.sprich(self.letzte_antwort or "Keine Antwort vorhanden.")
+        self.sprecher.sprich(self.letzte_antwort or "Keine Antwort vorhanden.",
+                             art="immer")
 
     def _markiertes_vorlesen(self) -> None:
         for feld in (self.verlauf, self.eingabe):
             markiert = feld.textCursor().selectedText().replace("\u2029", " ")
             if markiert.strip():
-                self.sprecher.sprich(markiert)
+                self.sprecher.sprich(markiert, art="immer")
                 return
-        self.sprecher.sprich("Nichts markiert.")
+        self.sprecher.sprich("Nichts markiert.", art="immer")
 
     def _schrift_zuruecksetzen(self) -> None:
         """Strg+0: Setzt die Schrift aller Textfelder auf den Ausgangswert aus
@@ -672,7 +676,8 @@ class Werkbank(QMainWindow):
             stil_erneuern(self.width(), self.height())
         except Exception as fehler:  # noqa: BLE001
             log.exception("Schriftgröße nicht zurückgesetzt: %s", fehler)
-            self.sprecher.sprich("Schriftgröße konnte nicht zurückgesetzt werden.")
+            self.sprecher.sprich("Schriftgröße konnte nicht zurückgesetzt werden.",
+                                 art="meldung")
             return
         self.sprecher.sprich("Schriftgröße zurückgesetzt.")
 
@@ -718,7 +723,7 @@ class Werkbank(QMainWindow):
         )
         # Gesprochen wird nur der Kern der Rueckfrage. Der volle Wortlaut
         # steht in der Statuszeile und im Ausgabefeld.
-        self.sprecher.melde("wartet", kurzfassen(satz), sprechen=True)
+        self.sprecher.melde("wartet", kurzfassen(satz), sprechen=True, art="meldung")
 
     def _frage_beantworten(self, ja: bool) -> None:
         self.frage_offen = False
@@ -787,7 +792,8 @@ class Werkbank(QMainWindow):
         # Waehrend der Arbeit wird nichts gesprochen, nur der Ton wechselt.
         # Fehler werden gesprochen, aber auf zwei Saetze gekuerzt.
         gesprochen = kurzfassen(ansage) if zustand == "fehler" else ""
-        self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen))
+        self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen),
+                            art="meldung")
 
     def _verlauf_anhaengen(self, text: str, art: str = "antwort") -> None:
         """Haengt einen Absatz an das Ausgabefeld. Die Art bestimmt die Klasse
@@ -862,9 +868,15 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
-        # Gesprochen wird ausschliesslich der kurze Ergebnissatz. Die Antwort
-        # selbst bleibt stumm, egal wie kurz sie ist - dafuer gibt es F3.
-        self.sprecher.sprich((ansage + self._bericht_kopieren(bilanz)).strip())
+        # Gesprochen wird der kurze Ergebnissatz. Die Antwort selbst bleibt
+        # stumm - dafuer gibt es F3. Nur in der Stufe "Alles" folgt sie dem
+        # Ergebnissatz von allein; `unterbrechen=False`, damit sie ihn nicht
+        # abschneidet.
+        self.sprecher.sprich((ansage + self._bericht_kopieren(bilanz)).strip(),
+                             art="meldung")
+        if self.letzte_antwort.strip():
+            self.sprecher.sprich(self.letzte_antwort, unterbrechen=False,
+                                 art="antwort")
 
     def _bericht_bauen(self, bilanz: dict) -> str:
         """Baut den Bericht für die Zwischenablage: Auftrag, Antwort, geänderte
@@ -930,11 +942,12 @@ class Werkbank(QMainWindow):
             text = QGuiApplication.clipboard().text()
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zwischenablage nicht lesbar: %s", fehler)
-            self.sprecher.sprich("Zwischenablage konnte nicht gelesen werden.")
+            self.sprecher.sprich("Zwischenablage konnte nicht gelesen werden.",
+                                 art="meldung")
             return
         if not text.strip(RANDZEICHEN):
             log.info("Zwischenablage leer")
-            self.sprecher.sprich("Zwischenablage ist leer.")
+            self.sprecher.sprich("Zwischenablage ist leer.", art="meldung")
             return
         art, inhalt = markierung_erkennen(text)
         log.info(
@@ -950,7 +963,7 @@ class Werkbank(QMainWindow):
         ansage = (
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
-        self.sprecher.sprich(f"Aus Zwischenablage. {ansage}")
+        self.sprecher.sprich(f"Aus Zwischenablage. {ansage}", art="meldung")
         self._absenden()
 
     @slot_geschuetzt
@@ -958,7 +971,7 @@ class Werkbank(QMainWindow):
         """Der Wächter hat einen markierten Auftrag gefunden: ins Eingabefeld,
         kurze Ansage, abschicken."""
         self.eingabe.setPlainText(inhalt)
-        self.sprecher.sprich("Code-Auftrag aus der Zwischenablage.")
+        self.sprecher.sprich("Code-Auftrag aus der Zwischenablage.", art="meldung")
         self._aus_ablage = True
         try:
             self._absenden()
@@ -971,7 +984,8 @@ class Werkbank(QMainWindow):
         art, text = markierung_erkennen(roh)
         if not text:
             self.sprecher.sprich(
-                "Nach der Markierung steht nichts." if art else "Nichts eingegeben."
+                "Nach der Markierung steht nichts." if art else "Nichts eingegeben.",
+                art="meldung",
             )
             return
         if not self._aus_ablage:
@@ -999,12 +1013,14 @@ class Werkbank(QMainWindow):
             self._wartende_auftraege.append((text, list(self.bilder)))
             self._taetigkeit_zeigen("wartet")
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
-            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.")
+            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
+                                 art="meldung")
             return
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
             faden.auftrag_geben(text, list(self.bilder))
-            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.")
+            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
+                                 art="meldung")
             return
         faden.auftrag_geben(text, list(self.bilder))
 
@@ -1018,7 +1034,7 @@ class Werkbank(QMainWindow):
             self.faden.auftrag_geben(text, bilder)
 
     def _not_aus(self) -> None:
-        self.sprecher.sprich("Not-Aus.")
+        self.sprecher.sprich("Not-Aus.", art="meldung")
         self.faden.not_aus()
 
     def _zuruecknehmen(self) -> None:
@@ -1076,7 +1092,7 @@ class Werkbank(QMainWindow):
             subprocess.Popen([sys.executable] + sys.argv, cwd=str(CWB_WURZEL))
         except OSError as fehler:
             log.error("Neustart gescheitert: %s", fehler)
-            self.sprecher.sprich("Neustart gescheitert.")
+            self.sprecher.sprich("Neustart gescheitert.", art="meldung")
             return
         self.close()
         QApplication.instance().quit()

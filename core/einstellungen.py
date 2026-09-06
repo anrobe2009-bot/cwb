@@ -4,7 +4,8 @@ Einstellungsseite (F12, Kachel "Einstellungen").
 
 Fuenf Reiter, jeder passt ohne Rollen auf eine Seite:
 
-- Sprache   Ausgabeweg, Stimme, Tempo, Probehoeren
+- Sprache   Sprachausgabe in drei Stufen, Ausgabeweg, Stimme, Tempo,
+            Probehoeren
 - Toene     Hauptschalter und drei Gruppen, je mit Probehoeren
 - Verhalten Zwischenablage, Bericht, Mauszeiger-Ansage fuer das ganze
   Fenster (core/zeigeransage.py), Tokenverbrauch je Tag
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSpinBox,
     QTabBar,
@@ -70,6 +72,7 @@ try:
         skill_ordner_merken,
     )
     from .sprache import (
+        STUFEN,
         TON_GRUPPEN_PROBE,
         TON_GRUPPEN_STANDARD,
         TON_GRUPPEN_TITEL,
@@ -89,6 +92,7 @@ except ImportError:
         skill_ordner_merken,
     )
     from sprache import (
+        STUFEN,
         TON_GRUPPEN_PROBE,
         TON_GRUPPEN_STANDARD,
         TON_GRUPPEN_TITEL,
@@ -359,7 +363,9 @@ class EinstellungenFenster(QDialog):
         # es wird nirgends mehr gerollt.
         self.reiter.setUsesScrollButtons(False)
         self.reiter.tabBar().setAccessibleName("Reiter")
-        self.reiter.addTab(self._reiterseite(self._gruppe_sprache()), "Sprache")
+        self.reiter.addTab(
+            self._reiterseite(self._gruppe_stufe(), self._gruppe_sprache()), "Sprache"
+        )
         self.reiter.addTab(self._reiterseite(self._gruppe_toene()), "Töne")
         self.reiter.addTab(self._reiterseite(self._gruppe_verhalten()), "Verhalten")
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
@@ -379,13 +385,15 @@ class EinstellungenFenster(QDialog):
     # -- Reiter -------------------------------------------------------------
 
     @staticmethod
-    def _reiterseite(gruppe: "Gruppe") -> QWidget:
-        """Haengt eine Karte oben in eine Reiterseite. Die Streckung darunter
-        haelt den Inhalt oben, statt ihn ueber die Hoehe zu zerren."""
+    def _reiterseite(*gruppen: "Gruppe") -> QWidget:
+        """Haengt eine oder mehrere Karten oben in eine Reiterseite. Die
+        Streckung darunter haelt den Inhalt oben, statt ihn ueber die Hoehe
+        zu zerren."""
         seite = QWidget()
         seite.setObjectName("reiterseite")
         seitenaufbau = QVBoxLayout(seite)
-        seitenaufbau.addWidget(gruppe)
+        for gruppe in gruppen:
+            seitenaufbau.addWidget(gruppe)
         seitenaufbau.addStretch(1)
         return seite
 
@@ -424,6 +432,44 @@ class EinstellungenFenster(QDialog):
         log.info("Reiter gewechselt: %s", titel)
         self.reiter.tabBar().setFocus()
         self.sprecher.sprich(f"{titel}. Reiter {stelle + 1} von {self.reiter.count()}.")
+
+    # -- Bereich Sprachausgabe ----------------------------------------------
+
+    def _gruppe_stufe(self) -> Gruppe:
+        """Wie viel gesprochen wird. Drei Stufen, jede enthaelt die kleinere.
+        Die Wahl wirkt sofort und steht in einstellungen.json unter
+        'sprache' -> 'stufe'."""
+        gruppe = Gruppe(
+            "Sprachausgabe",
+            "Ab Werk spricht CWB nur Meldungen. Läuft ein Screenreader, liest "
+            "der ohnehin vor, worauf der Fokus steht.",
+        )
+
+        self.stufen_schalter: dict[int, QRadioButton] = {}
+        for stufe, titel, erklaerung in STUFEN:
+            schalter = QRadioButton(f"{titel} — {erklaerung}")
+            schalter.setObjectName("stufenwahl")
+            schalter.setAccessibleName(titel)
+            schalter.setAccessibleDescription(erklaerung)
+            schalter.setToolTip(erklaerung)
+            schalter.setChecked(stufe == self.sprecher.stufe)
+            schalter.toggled.connect(partial(self._stufe_gewaehlt, stufe, titel))
+            gruppe.feld(schalter)
+            self.stufen_schalter[stufe] = schalter
+        return gruppe
+
+    def _stufe_gewaehlt(self, stufe: int, titel: str, an: bool) -> None:
+        """Die Ansage geht mit `art="immer"` durch: sonst bliebe gerade die
+        Wahl der kleinsten Stufe unbestaetigt."""
+        if not an:
+            return
+        try:
+            self.sprecher.stufe_setzen(stufe)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Sprachstufe nicht setzbar: %s", fehler)
+            return
+        log.info("Sprachstufe gewaehlt: %d (%s)", stufe, titel)
+        self.sprecher.sprich(f"Sprachausgabe: {titel}.", art="immer")
 
     # -- Bereich Sprache ----------------------------------------------------
 
@@ -527,7 +573,8 @@ class EinstellungenFenster(QDialog):
         self.sprecher.sprich(f"Tempo {tempo:+d} Prozent.")
 
     def _stimme_proben(self) -> None:
-        self.sprecher.sprich(PROBESATZ)
+        # Probehoeren gilt in jeder Stufe: sonst bliebe die Schaltflaeche stumm.
+        self.sprecher.sprich(PROBESATZ, art="immer")
 
     def _stimmen_eintragen(self, stimmen: list) -> None:
         """Traegt die im Hintergrund geholten Stimmen ein. Laeuft im
@@ -916,7 +963,9 @@ class EinstellungenFenster(QDialog):
         """Setzt zusammen, was unter dem Fokus liegt: Name, Zustand,
         Erklaerung. Ohne Zustand wuesste niemand, ob ein Schalter an ist."""
         teile = [str(widget.accessibleName()) or widget.__class__.__name__]
-        if isinstance(widget, QCheckBox):
+        if isinstance(widget, QRadioButton):
+            teile.append("gewählt" if widget.isChecked() else "nicht gewählt")
+        elif isinstance(widget, QCheckBox):
             teile.append("an" if widget.isChecked() else "aus")
         elif isinstance(widget, QComboBox):
             teile.append(widget.currentText())

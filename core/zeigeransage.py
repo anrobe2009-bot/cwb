@@ -213,7 +213,8 @@ class ZeigerAnsage(QObject):
         if not satz:
             return
         try:
-            self.sprecher.sprich(satz)
+            # Berührtes: erst ab Stufe zwei zu hören (core/sprache.py).
+            self.sprecher.sprich(satz, art="beruehrt")
             self._spricht = True
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zeigeransage gescheitert: %s", fehler)
