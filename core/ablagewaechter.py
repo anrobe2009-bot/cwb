@@ -75,6 +75,17 @@ class Zwischenablagewaechter(QObject):
                 log.exception("Gemerkter Prüfwert nicht lesbar: %s", fehler)
             if self._zuletzt:
                 log.info("Wächter kennt den letzten Auftrag: %s", self._zuletzt[:12])
+        # Beleg, welche Fassung dieser Datei wirklich laeuft. Ohne ihn laesst
+        # sich nicht unterscheiden, ob die Sperrzeit fehlt oder nur ein alter
+        # Prozess mit alter Fassung noch offen ist.
+        quelle = Path(__file__).resolve()
+        log.info(
+            "Wächter aus %s (geändert %s), Sperre %.0f s",
+            quelle,
+            time.strftime("%d.%m.%Y %H:%M:%S",
+                          time.localtime(quelle.stat().st_mtime)),
+            SPERRE_SEKUNDEN,
+        )
         # Fehler beim Lesen der Ablage nur einmal ins Log, nicht alle zwei
         # Sekunden erneut.
         self._lesefehler_gemeldet = False
@@ -132,10 +143,24 @@ class Zwischenablagewaechter(QObject):
         # Der Pruefwert sperrt nur die unmittelbare Wiederholung. Nach einer
         # Minute oder nach einem anderen Auftrag darf derselbe Text erneut
         # laufen - gewollte Wiederholungen sollen nicht haengenbleiben.
-        if pruefwert == self._zuletzt:
-            if time.monotonic() - self._zuletzt_zeit <= SPERRE_SEKUNDEN:
-                return
-            log.info("Sperre abgelaufen, Text darf erneut laufen: %s", pruefwert[:12])
+        gesperrt = (
+            pruefwert == self._zuletzt
+            and time.monotonic() - self._zuletzt_zeit <= SPERRE_SEKUNDEN
+        )
+        # Jeder Pruefdurchlauf hinterlaesst eine Zeile: gefundener Pruefwert,
+        # gemerkter Pruefwert, vergangene Zeit seit dem Merken und die
+        # Entscheidung. Der Text selbst steht nie im Log, nur seine Pruefwerte.
+        log.info(
+            "Prüflauf: gefunden %s, gemerkt %s, vergangen %.1f s von %.0f s, "
+            "Entscheidung %s",
+            pruefwert[:12],
+            self._zuletzt[:12] or "keiner",
+            time.monotonic() - self._zuletzt_zeit,
+            SPERRE_SEKUNDEN,
+            "abgelehnt (Sperre laeuft)" if gesperrt else "angenommen",
+        )
+        if gesperrt:
+            return
         self._zuletzt = pruefwert
         self._zuletzt_zeit = time.monotonic()
         if self._pruefwert_merken is not None:
