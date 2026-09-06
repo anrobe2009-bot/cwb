@@ -98,6 +98,12 @@ try:
     from .sprache import FESTE_SAETZE, Sprecher
     from .tastenleiste import Kachelreihe
     from .zeigeransage import zeigeransage_einrichten
+    from .zuordnung import (
+        auftrag_vormerken,
+        fremdes_projekt_erkennen,
+        vormerkung_abholen,
+        vormerkung_verwerfen,
+    )
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from einstellungen import EinstellungenFenster
@@ -138,6 +144,12 @@ except ImportError:
     from sprache import FESTE_SAETZE, Sprecher
     from tastenleiste import Kachelreihe
     from zeigeransage import zeigeransage_einrichten
+    from zuordnung import (
+        auftrag_vormerken,
+        fremdes_projekt_erkennen,
+        vormerkung_abholen,
+        vormerkung_verwerfen,
+    )
 
 log = logging.getLogger("cwb.fenster")
 
@@ -303,6 +315,9 @@ class Werkbank(QMainWindow):
         # Wahr, solange gerade ein Auftrag des Zwischenablage-Waechters laeuft.
         # Nur daran erkennt _absenden, ob ein Auftrag von anderer Seite kam.
         self._aus_ablage = False
+        # Wahr, solange ein vorgemerkter Auftrag aus einem anderen Projekt
+        # nachgeholt wird. Nur so wird er nicht erneut als fremd erkannt.
+        self._holt_vorgemerkten = False
         # Ausgangsschrift der Textfelder, gemerkt beim Aufbau. Strg+0 stellt sie
         # wieder her, falls doch einmal etwas an der Groesse gedreht hat.
         self._schrift_ausgang: list[tuple[QWidget, QFont]] = []
@@ -360,6 +375,10 @@ class Werkbank(QMainWindow):
             ablage_pruefwert_merken,
         )
         self.ablage_waechter.starten()
+
+        # Wartet ein Auftrag auf genau dieses Projekt, laeuft er jetzt los.
+        # Gehoert die Vormerkung zu einem anderen, verfaellt sie hier.
+        QTimer.singleShot(0, self._vorgemerkten_holen)
 
         # Das Fenster ist sofort bedienbar, die Verbindung laeuft nebenher.
         self._status_zeigen("Verbinde mit Claude Code, Eingabe ist schon moeglich")
@@ -991,6 +1010,22 @@ class Werkbank(QMainWindow):
                 art="meldung",
             )
             return
+        if not self._holt_vorgemerkten:
+            # Nennt der Auftrag Dateien, die es hier nicht gibt, wohl aber in
+            # einem anderen Projekt, laeuft er nicht: er wird vorgemerkt und
+            # dort ausgefuehrt, sobald das Projekt geoeffnet wird.
+            fremd = fremdes_projekt_erkennen(text, self.projekt)
+            if fremd:
+                satz = (f"Dieser Auftrag gehört vermutlich zu Projekt {fremd}, "
+                        f"geöffnet ist {self.projekt.name}. Mit F9 wechseln.")
+                auftrag_vormerken(fremd, roh)
+                self.eingabe.clear()
+                self._verlauf_anhaengen(satz, "hinweis")
+                self._status_zeigen(satz)
+                self.sprecher.sprich(satz, art="meldung")
+                return
+            # Ein neuer Auftrag hier hebt eine aeltere Vormerkung auf.
+            vormerkung_verwerfen()
         if not self._aus_ablage:
             # Ein Auftrag von anderer Seite hebt die Sperre des Waechters auf:
             # danach darf derselbe Text aus der Zwischenablage wieder laufen.
@@ -1026,6 +1061,25 @@ class Werkbank(QMainWindow):
                                  art="meldung")
             return
         faden.auftrag_geben(text, list(self.bilder))
+
+    @slot_geschuetzt
+    def _vorgemerkten_holen(self) -> None:
+        """Ein Auftrag, der in einem anderen Projekt abgeschickt wurde, aber
+        hierher gehoert, laeuft beim Oeffnen dieses Projekts von allein."""
+        roh = vormerkung_abholen(self.projekt.name)
+        if not roh:
+            return
+        satz = "Vorgemerkter Auftrag wird jetzt ausgeführt."
+        log.info("%s %s", satz, roh[:120])
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")
+        self.eingabe.setPlainText(roh)
+        self._holt_vorgemerkten = True
+        try:
+            self._absenden()
+        finally:
+            self._holt_vorgemerkten = False
 
     def _wartende_absenden(self) -> None:
         """Reicht Auftraege nach, die vor dem Arbeitsfaden abgeschickt wurden."""
