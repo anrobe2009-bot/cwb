@@ -101,6 +101,8 @@ try:
     from .zuordnung import (
         auftrag_vormerken,
         fremdes_projekt_erkennen,
+        genanntes_projekt,
+        hinweis_auf_projekt,
         vormerkung_abholen,
         vormerkung_verwerfen,
     )
@@ -147,6 +149,8 @@ except ImportError:
     from zuordnung import (
         auftrag_vormerken,
         fremdes_projekt_erkennen,
+        genanntes_projekt,
+        hinweis_auf_projekt,
         vormerkung_abholen,
         vormerkung_verwerfen,
     )
@@ -1011,10 +1015,13 @@ class Werkbank(QMainWindow):
             )
             return
         if not self._holt_vorgemerkten:
-            # Nennt der Auftrag Dateien, die es hier nicht gibt, wohl aber in
-            # einem anderen Projekt, laeuft er nicht: er wird vorgemerkt und
-            # dort ausgefuehrt, sobald das Projekt geoeffnet wird.
-            fremd = fremdes_projekt_erkennen(text, self.projekt)
+            # Zwei Regeln halten einen Auftrag hier auf: er nennt Dateien, die
+            # es hier nicht gibt, wohl aber in einem anderen Projekt - oder er
+            # nennt den Namen eines anderen Projekts aus der Projektliste. In
+            # beiden Faellen wird er vorgemerkt und dort ausgefuehrt, sobald
+            # das Projekt geoeffnet wird.
+            fremd = (fremdes_projekt_erkennen(text, self.projekt)
+                     or genanntes_projekt(text, self.projekt))
             if fremd:
                 satz = (f"Dieser Auftrag gehört vermutlich zu Projekt {fremd}, "
                         f"geöffnet ist {self.projekt.name}. Mit F9 wechseln.")
@@ -1026,6 +1033,12 @@ class Werkbank(QMainWindow):
                 return
             # Ein neuer Auftrag hier hebt eine aeltere Vormerkung auf.
             vormerkung_verwerfen()
+            # Laesst der Auftrag gar nicht erkennen, welches Projekt gemeint
+            # ist, wird das geoeffnete kurz angesagt - sonst faellt eine
+            # Verwechslung erst am Ergebnis auf.
+            if not hinweis_auf_projekt(text, self.projekt):
+                self.sprecher.sprich(f"Läuft in {self.projekt.name}.",
+                                     art="meldung")
         if not self._aus_ablage:
             # Ein Auftrag von anderer Seite hebt die Sperre des Waechters auf:
             # danach darf derselbe Text aus der Zwischenablage wieder laufen.

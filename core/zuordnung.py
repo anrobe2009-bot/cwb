@@ -2,15 +2,27 @@
 CWB - Code Workbench
 Projektzuordnung: erkennt Auftraege, die zu einem anderen Projekt gehoeren.
 
-Nennt ein Auftrag Dateinamen oder Pfade, die es im geoeffneten Projekt nicht
-gibt, wohl aber in einem anderen, dann gehoert er vermutlich dorthin. Er wird
-dann nicht ausgefuehrt, sondern vorgemerkt: wird spaeter genau dieses Projekt
-geoeffnet, laeuft er dort von allein los. Wird ein anderes Projekt geoeffnet
-oder ein neuer Auftrag abgeschickt, ist die Vormerkung hinfaellig.
+Zwei Regeln zeigen an, dass ein Auftrag woanders hingehoert:
+
+1. Er nennt Dateinamen oder Pfade, die es im geoeffneten Projekt nicht gibt,
+   wohl aber in genau einem anderen (`fremdes_projekt_erkennen`).
+2. Er nennt den Namen eines Projekts aus der Projektliste, und das ist nicht
+   das geoeffnete (`genanntes_projekt`). Diese Regel greift auch dann, wenn
+   gar keine Dateinamen fallen oder die genannten Dateien in mehreren
+   Projekten gleich heissen - gerade dann ist die Verwechslung wahrscheinlich.
+
+In beiden Faellen laeuft der Auftrag nicht, sondern wird vorgemerkt: wird
+spaeter genau dieses Projekt geoeffnet, laeuft er dort von allein los. Wird ein
+anderes Projekt geoeffnet oder ein neuer Auftrag abgeschickt, ist die
+Vormerkung hinfaellig.
+
+Enthaelt ein Auftrag ueberhaupt keinen Hinweis auf ein Projekt - weder Datei
+noch Projektname (`hinweis_auf_projekt`) -, sagt die Werkbank beim Abschicken
+kurz an, wo er laeuft.
 
 Reines Python, keine Oberflaeche. Die Werkbank ruft nur
-`fremdes_projekt_erkennen`, `auftrag_vormerken`, `vormerkung_abholen` und
-`vormerkung_verwerfen`.
+`fremdes_projekt_erkennen`, `genanntes_projekt`, `hinweis_auf_projekt`,
+`auftrag_vormerken`, `vormerkung_abholen` und `vormerkung_verwerfen`.
 """
 
 import logging
@@ -43,8 +55,15 @@ MAX_TIEFE = 6
 MAX_DATEIEN = 30000
 CACHE_ALTER = 60.0  # Sekunden, die ein gelesener Dateibestand gilt
 
+# Kuerzere Projektnamen bleiben unbeachtet: "cwb" ist noch eindeutig genug,
+# ein zweibuchstabiger Name traefe zu oft mitten im Satz zu.
+MIN_NAMENSLAENGE = 3
+
 # Dateibestand je Projektpfad: (Zeitpunkt, volle Pfade, Basisnamen)
 _bestand_cache: dict[str, tuple[float, set[str], set[str]]] = {}
+
+# Projektliste: (Zeitpunkt, Namen). Sie wird je Auftrag mehrfach gebraucht.
+_liste_cache: tuple[float, list[str]] | None = None
 
 # Der eine vorgemerkte Auftrag: (Projektname, Rohtext) oder None.
 _vorgemerkt: tuple[str, str] | None = None
@@ -158,6 +177,73 @@ def fremdes_projekt_erkennen(text: str, aktuelles: Projekt) -> str | None:
     except Exception as fehler:  # noqa: BLE001
         log.exception("Projektzuordnung fehlgeschlagen: %s", fehler)
         return None
+
+
+def _projektnamen() -> list[str]:
+    """Die Namen aller Projekte aus der Projektliste, kurz zwischengespeichert."""
+    global _liste_cache
+    jetzt = time.monotonic()
+    if _liste_cache is not None and jetzt - _liste_cache[0] < CACHE_ALTER:
+        return _liste_cache[1]
+    namen = [p.name for p in projekte_finden()]
+    _liste_cache = (jetzt, namen)
+    return namen
+
+
+def _wird_genannt(name: str, text: str) -> bool:
+    """Wahr, wenn der Projektname im Text als eigenes Wort steht. Ein Name
+    mitten in einem laengeren Wort zaehlt nicht, ein Name in einem Pfad schon."""
+    if len(name) < MIN_NAMENSLAENGE:
+        return False
+    muster = re.compile(
+        r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    return muster.search(text) is not None
+
+
+def genanntes_projekt(text: str, aktuelles: Projekt) -> str | None:
+    """Name eines anderen Projekts, das der Auftrag ausdruecklich nennt.
+
+    Zweite Regel neben `fremdes_projekt_erkennen`: sie braucht keine
+    Dateinamen. Nennt der Auftrag zusaetzlich das geoeffnete Projekt, gilt er
+    als hier gemeint und es wird nichts gemeldet. Nennt er mehrere fremde
+    Projekte, waere jede Wahl geraten - dann bleibt es ebenfalls still."""
+    try:
+        if _wird_genannt(aktuelles.name, text):
+            return None
+        fremde = [
+            name for name in _projektnamen()
+            if name != aktuelles.name and _wird_genannt(name, text)
+        ]
+        if not fremde:
+            return None
+        if len(set(fremde)) != 1:
+            log.info("Mehrere Projekte genannt: %s", ", ".join(sorted(set(fremde))))
+            return None
+        log.info("Auftrag nennt Projekt %s, geoeffnet ist %s",
+                 fremde[0], aktuelles.name)
+        return fremde[0]
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Projektname nicht pruefbar: %s", fehler)
+        return None
+
+
+def hinweis_auf_projekt(text: str, aktuelles: Projekt) -> bool:
+    """Wahr, wenn der Auftrag ueberhaupt erkennen laesst, welches Projekt
+    gemeint ist - durch einen Dateinamen, einen Pfad oder einen Projektnamen.
+    Ist das nicht der Fall, sagt die Werkbank beim Abschicken an, wo er laeuft."""
+    try:
+        if _kandidaten(text):
+            return True
+        namen = list(_projektnamen())
+        if aktuelles.name not in namen:
+            namen.append(aktuelles.name)
+        return any(_wird_genannt(name, text) for name in namen)
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Projekthinweis nicht pruefbar: %s", fehler)
+        # Im Zweifel schweigen statt bei jedem Auftrag zu reden.
+        return True
 
 
 # ---------------------------------------------------------------------------
