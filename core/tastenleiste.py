@@ -83,6 +83,10 @@ class Kachel(QPushButton):
         # Breite, die uebrig bleibt, und wird notfalls gekuerzt.
         self.text_feld.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.voller_text = beschriftung
+        # Eigener Merker statt isHidden(): solange das Fenster noch nicht
+        # angezeigt wurde, gilt in Qt jede Kachel als verborgen. Danach liesse
+        # sich nicht unterscheiden, welche absichtlich ausgeblendet ist.
+        self.verborgen = False
 
         for feld in (self.symbol_feld, self.text_feld):
             feld.setAlignment(Qt.AlignCenter)
@@ -207,36 +211,44 @@ class Kachelreihe(QWidget):
 
     # -- Umbruch ------------------------------------------------------------
 
+    def _sichtbare(self) -> list[Kachel]:
+        """Nur die Kacheln, die gerade gezeigt werden. Ausgeblendete zaehlen
+        beim Umbruch nicht mit und hinterlassen keine Luecke im Raster."""
+        return [kachel for kachel in self.kacheln if not kachel.verborgen]
+
     def _wunschbreite(self) -> int:
         """Breite, die eine Kachel gern haette - gemessen an der breitesten.
         Sie kommt aus Schrift und Stilblatt, nicht aus einer festen Zahl."""
-        return max((kachel.sizeHint().width() for kachel in self.kacheln), default=1)
+        return max((kachel.sizeHint().width() for kachel in self._sichtbare()),
+                   default=1)
 
     def _spalten_berechnen(self) -> int:
         """Wie viele Kacheln nebeneinander passen, ohne dass eine unter ihre
         Wunschbreite gedrueckt wird. Mindestens eine, hoechstens alle."""
-        if not self.kacheln:
+        sichtbare = self._sichtbare()
+        if not sichtbare:
             return 1
         rand = self.raster.contentsMargins()
         abstand = max(self.raster.horizontalSpacing(), 0)
         breite = self.width() - rand.left() - rand.right()
         wunsch = self._wunschbreite() + abstand
         if wunsch <= 0 or breite <= 0:
-            return len(self.kacheln)
+            return len(sichtbare)
         passen = int((breite + abstand) // wunsch)
-        return max(1, min(len(self.kacheln), passen))
+        return max(1, min(len(sichtbare), passen))
 
     def _einraeumen(self, spalten: int) -> None:
-        """Raeumt die Kacheln in so viele Spalten ein. Alle Spalten dehnen
-        sich gleich, damit die Kacheln gleich breit bleiben."""
-        if spalten == self._spalten or not self.kacheln:
+        """Raeumt die sichtbaren Kacheln in so viele Spalten ein. Alle Spalten
+        dehnen sich gleich, damit die Kacheln gleich breit bleiben."""
+        sichtbare = self._sichtbare()
+        if spalten == self._spalten or not sichtbare:
             return
         try:
             for spalte in range(self.raster.columnCount()):
                 self.raster.setColumnStretch(spalte, 0)
             for kachel in self.kacheln:
                 self.raster.removeWidget(kachel)
-            for nummer, kachel in enumerate(self.kacheln):
+            for nummer, kachel in enumerate(sichtbare):
                 self.raster.addWidget(kachel, nummer // spalten, nummer % spalten)
             for spalte in range(spalten):
                 self.raster.setColumnStretch(spalte, 1)
@@ -245,7 +257,7 @@ class Kachelreihe(QWidget):
             return
         self._spalten = spalten
         log.info("Kachelreihe umgebrochen: %d Spalten, %d Zeilen", spalten,
-                 (len(self.kacheln) + spalten - 1) // spalten)
+                 (len(sichtbare) + spalten - 1) // spalten)
 
     def resizeEvent(self, ereignis) -> None:
         super().resizeEvent(ereignis)
@@ -274,6 +286,26 @@ class Kachelreihe(QWidget):
         kachel = self._kachel_suchen(ansage)
         if kachel is not None:
             kachel.beschriften(text, neue_ansage, symbol)
+
+    def kachel_zeigen(self, ansage: str, sichtbar: bool) -> None:
+        """Blendet eine Kachel ein oder aus. Ausgeblendet ist sie weder zu
+        sehen noch mit der Tabulatortaste erreichbar; die uebrigen Kacheln
+        ruecken auf, weil das Raster danach neu eingeraeumt wird."""
+        kachel = self._kachel_suchen(ansage)
+        if kachel is None or kachel.verborgen == (not sichtbar):
+            return
+        try:
+            kachel.verborgen = not sichtbar
+            kachel.setVisible(sichtbar)
+            # Erzwingt das Neueinraeumen: sonst haelte die gemerkte
+            # Spaltenzahl das Raster in seiner alten Aufteilung fest.
+            self._spalten = 0
+            self._einraeumen(self._spalten_berechnen())
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kachel nicht umgeschaltet (%s): %s", ansage, fehler)
+            return
+        log.info("Kachel %s: %s", "eingeblendet" if sichtbar else "ausgeblendet",
+                 ansage)
 
     def kachel_faerben(self, ansage: str, farbe: str) -> None:
         """Wechselt die Farbe einer Kachel, etwa wenn sie einen anderen

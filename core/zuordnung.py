@@ -14,7 +14,9 @@ Zwei Regeln zeigen an, dass ein Auftrag woanders hingehoert:
 In beiden Faellen laeuft der Auftrag nicht, sondern wird vorgemerkt: wird
 spaeter genau dieses Projekt geoeffnet, laeuft er dort von allein los. Wird ein
 anderes Projekt geoeffnet oder ein neuer Auftrag abgeschickt, ist die
-Vormerkung hinfaellig.
+Vormerkung hinfaellig. Die Meldung haelt niemanden auf: solange die Vormerkung
+offen ist, laesst `vormerkung_einloesen` den Auftrag doch im geoeffneten
+Projekt laufen (in der Werkbank die Kachel "Trotzdem hier", Taste F5).
 
 Enthaelt ein Auftrag ueberhaupt keinen Hinweis auf ein Projekt - weder Datei
 noch Projektname (`hinweis_auf_projekt`) -, sagt die Werkbank beim Abschicken
@@ -22,7 +24,8 @@ kurz an, wo er laeuft.
 
 Reines Python, keine Oberflaeche. Die Werkbank ruft nur
 `fremdes_projekt_erkennen`, `genanntes_projekt`, `hinweis_auf_projekt`,
-`auftrag_vormerken`, `vormerkung_abholen` und `vormerkung_verwerfen`.
+`auftrag_vormerken`, `vormerkung_abholen`, `vormerkung_offen`,
+`vormerkung_einloesen` und `vormerkung_verwerfen`.
 """
 
 import logging
@@ -268,6 +271,19 @@ def vormerkung_verwerfen() -> None:
 def vormerkung_offen() -> str | None:
     """Projektname der offenen Vormerkung, sonst None."""
     return _vorgemerkt[0] if _vorgemerkt else None
+
+
+def vormerkung_einloesen() -> str | None:
+    """Gibt den Wortlaut der offenen Vormerkung zurueck, gleich fuer welches
+    Projekt sie gedacht war, und loescht sie. Fuer den Fall, dass der Nutzer
+    die Warnung uebergeht und den Auftrag hier ausfuehren laesst."""
+    global _vorgemerkt
+    if _vorgemerkt is None:
+        return None
+    ziel, roh = _vorgemerkt
+    _vorgemerkt = None
+    log.info("Vormerkung fuer %s eingeloest, laeuft im offenen Projekt", ziel)
+    return roh
 
 
 def vormerkung_abholen(projektname: str) -> str | None:

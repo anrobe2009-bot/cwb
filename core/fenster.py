@@ -104,6 +104,8 @@ try:
         genanntes_projekt,
         hinweis_auf_projekt,
         vormerkung_abholen,
+        vormerkung_einloesen,
+        vormerkung_offen,
         vormerkung_verwerfen,
     )
 except ImportError:
@@ -152,6 +154,8 @@ except ImportError:
         genanntes_projekt,
         hinweis_auf_projekt,
         vormerkung_abholen,
+        vormerkung_einloesen,
+        vormerkung_offen,
         vormerkung_verwerfen,
     )
 
@@ -174,6 +178,13 @@ ZUGRIFF_FARBE_NUR_LESEN = "nurlesen"
 # Was beim Umschalten gesprochen wird: nur der neue Zustand.
 ZUGRIFF_SATZ_NUR_LESEN = "Nur lesen."
 ZUGRIFF_SATZ_SCHREIBEN = "Lesen und Schreiben erlaubt."
+
+# Die Kachel hinter der Projektwarnung. Sie steht nur da, solange ein Auftrag
+# vorgemerkt ist, und fuehrt ihn im geoeffneten Projekt aus. Die Aufschrift
+# beim Aufbau dient zugleich als Kennung zum Wiederfinden.
+TROTZDEM_KENNUNG = "Trotzdem hier ausführen"
+TROTZDEM_SYMBOL = "⤓"
+TROTZDEM_FARBE = "1"
 
 # Einzige Markierung am Anfang des Eingabefelds. Steht sie in der ersten
 # Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
@@ -394,6 +405,9 @@ class Werkbank(QMainWindow):
         # Die Warteanzeige steht von Anfang an richtig da: leer, mit
         # verständlicher Beschreibung für den Screenreader.
         self._warteschlange_zeigen()
+        # "Trotzdem hier ausführen" gibt es erst, wenn eine Projektwarnung
+        # einen Auftrag zurueckgehalten hat.
+        self._vormerkung_zeigen(False)
 
         self.faden.start()
         self._wartende_absenden()
@@ -439,7 +453,8 @@ class Werkbank(QMainWindow):
             ("F10", "Nur lesen ein- oder ausschalten", self._nur_lesen_umschalten),
             ("Strg+Z", "Letzten Auftrag zurücknehmen", self._zuruecknehmen),
             ("Strg+B", "Bild anhängen", self._bild_waehlen),
-            ("F5", "Zum Eingabefeld", lambda: self._springe(self.eingabe, "Eingabefeld")),
+            ("F5", "Zum Eingabefeld, nach Projektwarnung: trotzdem hier ausführen",
+             self._f5),
             ("F6", "Bericht erneut kopieren", self._bericht_erneut_kopieren),
             ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F1", "Hilfe vorlesen", self._hilfe),
@@ -465,6 +480,10 @@ class Werkbank(QMainWindow):
             # so, wie das Schreibrecht gerade steht.
             (ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_KENNUNG, "F10",
              ZUGRIFF_FARBE_SCHREIBEN, self._nur_lesen_umschalten),
+            # Steht nur da, solange ein Auftrag vorgemerkt ist; sonst
+            # ausgeblendet (_vormerkung_zeigen).
+            (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
+             self._trotzdem_hier),
             ("⏏", "Warteschlange leeren", "F4", "8", self._warteschlange_leeren),
             ("⟳", "Neu starten", "Strg+F4", "5", self._neustart),
             ("⇄", "Projekt wechseln", "F9", "6", self._projekt_wechseln),
@@ -576,7 +595,7 @@ class Werkbank(QMainWindow):
             ("F1", self._hilfe),
             ("F2", self._wo_stehen_wir),
             ("F3", self._antwort_vorlesen),
-            ("F5", lambda: self._springe(self.eingabe, "Eingabefeld")),
+            ("F5", self._f5),
             ("F6", self._bericht_erneut_kopieren),
             ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
@@ -1111,16 +1130,23 @@ class Werkbank(QMainWindow):
             fremd = (fremdes_projekt_erkennen(text, self.projekt)
                      or genanntes_projekt(text, self.projekt))
             if fremd:
+                # Die Warnung haelt niemanden auf: sie merkt den Auftrag nur
+                # vor. F9 wechselt zum genannten Projekt, F5 fuehrt ihn hier
+                # aus - beides wird mit angesagt, sonst waere die Kachel fuer
+                # den blinden Nutzer nicht auffindbar.
                 satz = (f"Dieser Auftrag gehört vermutlich zu Projekt {fremd}, "
-                        f"geöffnet ist {self.projekt.name}. Mit F9 wechseln.")
+                        f"geöffnet ist {self.projekt.name}. Mit F9 wechseln, "
+                        f"mit F5 trotzdem hier ausführen.")
                 auftrag_vormerken(fremd, roh)
                 self.eingabe.clear()
+                self._vormerkung_zeigen(True)
                 self._verlauf_anhaengen(satz, "hinweis")
                 self._status_zeigen(satz)
                 self.sprecher.sprich(satz, art="meldung")
                 return
             # Ein neuer Auftrag hier hebt eine aeltere Vormerkung auf.
             vormerkung_verwerfen()
+            self._vormerkung_zeigen(False)
             # Laesst der Auftrag gar nicht erkennen, welches Projekt gemeint
             # ist, wird das geoeffnete kurz angesagt - sonst faellt eine
             # Verwechslung erst am Ergebnis auf.
@@ -1230,11 +1256,58 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         self.sprecher.sprich(satz, art="meldung")
 
+    def _vormerkung_zeigen(self, sichtbar: bool) -> None:
+        """Blendet die Kachel "Trotzdem hier ausführen" ein oder aus. Sie steht
+        nur da, solange ein Auftrag vorgemerkt ist - sonst zeigte sie auf
+        nichts."""
+        try:
+            self.kacheln.kachel_zeigen(TROTZDEM_KENNUNG, sichtbar)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kachel für die Vormerkung nicht umgeschaltet: %s", fehler)
+
+    @slot_geschuetzt
+    def _f5(self) -> None:
+        """F5 hat zwei Bedeutungen, je nach Lage: hält die Projektwarnung
+        gerade einen Auftrag zurück, führt F5 ihn hier aus. Sonst springt sie
+        wie gewohnt ins Eingabefeld."""
+        if vormerkung_offen():
+            self._trotzdem_hier()
+            return
+        self._springe(self.eingabe, "Eingabefeld")
+
+    @slot_geschuetzt
+    def _trotzdem_hier(self) -> None:
+        """F5 nach einer Projektwarnung: der vorgemerkte Auftrag läuft doch im
+        geöffneten Projekt. Die Vormerkung ist damit verbraucht, ein
+        Projektwechsel holt ihn nicht mehr nach."""
+        roh = vormerkung_einloesen()
+        self._vormerkung_zeigen(False)
+        if not roh:
+            satz = "Es ist kein Auftrag vorgemerkt."
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="meldung")
+            return
+        satz = f"Auftrag läuft trotzdem in {self.projekt.name}."
+        log.info("%s %s", satz, roh[:120])
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")
+        self.eingabe.setPlainText(roh)
+        # Wie beim Nachholen im richtigen Projekt: die Zuordnungspruefung wird
+        # uebergangen, sonst hielte dieselbe Warnung den Auftrag sofort wieder
+        # auf.
+        self._holt_vorgemerkten = True
+        try:
+            self._absenden()
+        finally:
+            self._holt_vorgemerkten = False
+
     @slot_geschuetzt
     def _vorgemerkten_holen(self) -> None:
         """Ein Auftrag, der in einem anderen Projekt abgeschickt wurde, aber
         hierher gehoert, laeuft beim Oeffnen dieses Projekts von allein."""
         roh = vormerkung_abholen(self.projekt.name)
+        self._vormerkung_zeigen(False)
         if not roh:
             return
         satz = "Vorgemerkter Auftrag wird jetzt ausgeführt."
