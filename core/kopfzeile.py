@@ -5,7 +5,8 @@ Kopfzeile des Ausgabefelds.
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
 Arbeit gehoert: die farbige Taetigkeitsplakette ganz links, den Namen
 der bearbeiteten Datei, die Zugriffsplakette mit dem geltenden Schreibrecht
-("Nur lesen" oder "Lesen und Schreiben"), die Modellwahl, die drei
+("Nur lesen" oder "Lesen und Schreiben"), die Warteanzeige mit der Zahl der
+vorgemerkten Auftraege (leer, solange keiner wartet), die Modellwahl, die drei
 Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
 der Reihenfolge "Auftrag", "Sitzung", "Heute" - gleiche Breite, gleiche
 Gestalt, ohne Zwischenraum. Ein eigenes Feld
@@ -76,6 +77,11 @@ TAETIGKEIT_BEISPIELE = ("führt aus", "abgebrochen", "verbindet")
 ZUGRIFF_NUR_LESEN = "Nur lesen"
 ZUGRIFF_SCHREIBEN = "Lesen und Schreiben"
 ZUGRIFF_BEISPIELE = (ZUGRIFF_NUR_LESEN, ZUGRIFF_SCHREIBEN)
+
+# Warteanzeige: wie viele Auftraege noch hinter dem laufenden stehen. Wartet
+# keiner, bleibt das Feld leer - eine Null waere nur Laerm. Die Breite wird an
+# einer zweistelligen Zahl gemessen und aendert sich nie.
+WARTE_BEISPIELE = ("Warten 99",)
 
 # Beispielnamen fuer die feste Breite des Dateifeldes daneben. Das Feld zeigt
 # den Namen ungekuerzt, also muss es die langen Namen des Projekts tragen.
@@ -252,6 +258,16 @@ class Ausgabekopf(QWidget):
         self.zugriffsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.zugriffsplakette)
 
+        # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
+        # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
+        # Normalfall ruhig bleibt. Geleert wird die Warteschlange mit F4.
+        self.warteanzeige = Schrumpffeld("")
+        self.warteanzeige.setObjectName("warteanzeige")
+        self.warteanzeige.setAccessibleName("Warteschlange")
+        self.warteanzeige.setAlignment(Qt.AlignCenter)
+        self.warteanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.warteanzeige)
+
         # Der freie Platz liegt in der Mitte: dadurch stehen Datei links und
         # die drei Zahlenfelder rechts, ohne dass eines von ihnen waechst.
         quer.addStretch(1)
@@ -358,6 +374,7 @@ class Ausgabekopf(QWidget):
                 (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
                 (self.dateianzeige, DATEI_BEISPIELE),
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
+                (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
                 (self.tageszaehler, ZAEHLER_BEISPIELE),
@@ -416,6 +433,26 @@ class Ausgabekopf(QWidget):
             self.dateianzeige.setAccessibleDescription(name or "keine Datei")
         except Exception as fehler:  # noqa: BLE001
             log.exception("Tätigkeitsanzeige nicht gesetzt: %s", fehler)
+
+    # -- Warteschlange ------------------------------------------------------
+
+    def warteschlange_zeigen(self, anzahl: int) -> None:
+        """Zeigt, wie viele Auftraege hinter dem laufenden warten. Bei null
+        bleibt das Feld leer; der volle Wortlaut steht als Beschreibung und
+        Kurzhinweis dahinter."""
+        try:
+            anzahl = max(0, int(anzahl))
+            self.warteanzeige.setText(f"Warten {anzahl}" if anzahl else "")
+            if anzahl == 0:
+                satz = "Warteschlange leer, es wartet kein Auftrag."
+            elif anzahl == 1:
+                satz = "Ein Auftrag wartet. Warteschlange leeren mit F4."
+            else:
+                satz = f"{anzahl} Aufträge warten. Warteschlange leeren mit F4."
+            self.warteanzeige.setToolTip(satz)
+            self.warteanzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Warteanzeige nicht gesetzt: %s", fehler)
 
     # -- Statusmeldung ------------------------------------------------------
 

@@ -237,6 +237,19 @@ VERLAUF_ARTEN = {
 }
 
 
+# Platzwoerter fuer die Ansage der Warteschlange. Gesprochen klingt "Platz
+# zwei" natuerlicher als "Platz 2"; ab zwoelf reicht die Ziffer.
+PLATZWOERTER = {
+    2: "zwei", 3: "drei", 4: "vier", 5: "fünf", 6: "sechs",
+    7: "sieben", 8: "acht", 9: "neun", 10: "zehn", 11: "elf",
+}
+
+
+def platzwort(platz: int) -> str:
+    """Die Platznummer als gesprochenes Wort, ab zwoelf als Ziffer."""
+    return PLATZWOERTER.get(int(platz), str(platz))
+
+
 # ---------------------------------------------------------------------------
 # Aktivitätsbalken: Farbe zeigt den Zustand, ein wandernder Streifen zeigt,
 # dass gerade gearbeitet wird
@@ -323,6 +336,13 @@ class Werkbank(QMainWindow):
         # Auftraege, die abgeschickt wurden, bevor der Arbeitsfaden stand.
         # Sie gehen nicht verloren, sondern laufen los, sobald er da ist.
         self._wartende_auftraege: list[tuple[str, list[Path]]] = []
+        # Warteschlange: Auftraege, die abgeschickt wurden, waehrend schon
+        # einer lief. Sie werden der Reihe nach abgearbeitet, einer nach dem
+        # anderen - nichts geht verloren, nichts blockiert. F4 leert sie.
+        self._warteschlange: list[tuple[str, list[Path]]] = []
+        # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
+        # erkennt _absenden, ob der neue Auftrag warten muss.
+        self._auftrag_laeuft = False
         # Wahr, solange gerade ein Auftrag des Zwischenablage-Waechters laeuft.
         # Nur daran erkennt _absenden, ob ein Auftrag von anderer Seite kam.
         self._aus_ablage = False
@@ -371,6 +391,9 @@ class Werkbank(QMainWindow):
         # Schreibrecht von Anfang an sichtbar: Kachel und Kopfzeile nennen den
         # geltenden Zustand, nicht erst nach dem ersten Umschalten.
         self._zugriff_zeigen()
+        # Die Warteanzeige steht von Anfang an richtig da: leer, mit
+        # verständlicher Beschreibung für den Screenreader.
+        self._warteschlange_zeigen()
 
         self.faden.start()
         self._wartende_absenden()
@@ -421,7 +444,8 @@ class Werkbank(QMainWindow):
             ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F1", "Hilfe vorlesen", self._hilfe),
             ("F9", "Projekt wechseln", self._projekt_wechseln),
-            ("F4", "Kompletter Neustart", self._neustart),
+            ("F4", "Warteschlange leeren", self._warteschlange_leeren),
+            ("Strg+F4", "Kompletter Neustart", self._neustart),
             ("F12", "Einstellungen", self._einstellungen_zeigen),
         ]
 
@@ -441,7 +465,8 @@ class Werkbank(QMainWindow):
             # so, wie das Schreibrecht gerade steht.
             (ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_KENNUNG, "F10",
              ZUGRIFF_FARBE_SCHREIBEN, self._nur_lesen_umschalten),
-            ("⟳", "Neu starten", "F4", "5", self._neustart),
+            ("⏏", "Warteschlange leeren", "F4", "8", self._warteschlange_leeren),
+            ("⟳", "Neu starten", "Strg+F4", "5", self._neustart),
             ("⇄", "Projekt wechseln", "F9", "6", self._projekt_wechseln),
             ("⚙", "Einstellungen", "F12", "7", self._einstellungen_zeigen),
         ]
@@ -555,7 +580,8 @@ class Werkbank(QMainWindow):
             ("F6", self._bericht_erneut_kopieren),
             ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
-            ("F4", self._neustart),
+            ("F4", self._warteschlange_leeren),
+            ("Ctrl+F4", self._neustart),
             ("F7", self._aus_zwischenablage),
             ("Ctrl+Z", self._zuruecknehmen),
             ("Ctrl+B", self._bild_waehlen),
@@ -868,7 +894,9 @@ class Werkbank(QMainWindow):
     @slot_geschuetzt
     def _fertig(self, bilanz: dict) -> None:
         self.letzte_antwort = bilanz.get("antwort", "")
-        self.bilder.clear()
+        # Der Platz beim Arbeitsfaden ist wieder frei; die Bilder wurden schon
+        # beim Abschicken uebergeben.
+        self._auftrag_laeuft = False
         self._auftrags_uhr.stop()
         self.balken.animation_stoppen()
 
@@ -910,6 +938,9 @@ class Werkbank(QMainWindow):
         if self.letzte_antwort.strip():
             self.sprecher.sprich(self.letzte_antwort, unterbrechen=False,
                                  art="antwort")
+
+        # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
+        self._naechsten_starten()
 
     def _bericht_bauen(self, bilanz: dict) -> str:
         """Baut den Bericht für die Zwischenablage: Auftrag, Antwort, geänderte
@@ -1102,10 +1133,34 @@ class Werkbank(QMainWindow):
             waechter = getattr(self, "ablage_waechter", None)
             if waechter is not None:
                 waechter.auftrag_dazwischen()
+        bilder = list(self.bilder)
+        self.bilder.clear()
+        self.eingabe.clear()
+
+        if self._auftrag_laeuft:
+            # Es laeuft schon einer. Der neue geht nicht verloren und blockiert
+            # nichts, sondern reiht sich ein und laeuft los, sobald der
+            # vorherige fertig ist.
+            self._warteschlange.append((text, bilder))
+            self._warteschlange_zeigen()
+            satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
+            log.info("Auftrag in die Warteschlange auf Platz %d: %s",
+                     len(self._warteschlange) + 1, text[:120])
+            self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="meldung")
+            return
+
+        self._auftrag_starten(text, bilder)
+
+    def _auftrag_starten(self, text: str, bilder: list[Path]) -> None:
+        """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
+        Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
+        Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange."""
+        self._auftrag_laeuft = True
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
         self.letzter_verbrauch = {}
-        self.eingabe.clear()
         # Die Statuszeile zeigt keine laufende Arbeit an, nur Ergebnisse.
         self._status_zeigen("")
         self._taetigkeit_zeigen("beginnt")
@@ -1118,7 +1173,7 @@ class Werkbank(QMainWindow):
         if faden is None:
             # Der Arbeitsfaden steht noch nicht. Der Auftrag wird gemerkt und
             # in _wartende_absenden nachgereicht, sobald es ihn gibt.
-            self._wartende_auftraege.append((text, list(self.bilder)))
+            self._wartende_auftraege.append((text, bilder))
             self._taetigkeit_zeigen("wartet")
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
             self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
@@ -1126,11 +1181,54 @@ class Werkbank(QMainWindow):
             return
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
-            faden.auftrag_geben(text, list(self.bilder))
+            faden.auftrag_geben(text, bilder)
             self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
                                  art="meldung")
             return
-        faden.auftrag_geben(text, list(self.bilder))
+        faden.auftrag_geben(text, bilder)
+
+    def _warteschlange_zeigen(self) -> None:
+        """Bringt die Zahl der wartenden Auftraege in die Kopfzeile."""
+        try:
+            self.ausgabekopf.warteschlange_zeigen(len(self._warteschlange))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Warteschlange nicht angezeigt: %s", fehler)
+
+    def _naechsten_starten(self) -> None:
+        """Holt den naechsten Auftrag aus der Warteschlange, sobald der
+        vorherige beendet ist. Ist sie leer, geschieht nichts."""
+        self._warteschlange_zeigen()
+        if not self._warteschlange:
+            return
+        text, bilder = self._warteschlange.pop(0)
+        self._warteschlange_zeigen()
+        log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
+        rest = len(self._warteschlange)
+        satz = "Nächster Auftrag aus der Warteschlange."
+        if rest:
+            satz += f" Danach warten noch {rest}." if rest > 1 else " Danach wartet noch einer."
+        # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
+        # nicht abgeschnitten werden.
+        self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
+        self._auftrag_starten(text, bilder)
+
+    @slot_geschuetzt
+    def _warteschlange_leeren(self) -> None:
+        """F4: verwirft alle wartenden Auftraege. Der gerade laufende bleibt -
+        den beendet der Not-Aus (F8)."""
+        anzahl = len(self._warteschlange)
+        self._warteschlange.clear()
+        self._warteschlange_zeigen()
+        if anzahl == 0:
+            satz = "Warteschlange ist schon leer."
+        elif anzahl == 1:
+            satz = "Warteschlange geleert, ein Auftrag verworfen."
+        else:
+            satz = f"Warteschlange geleert, {anzahl} Aufträge verworfen."
+        log.info("Warteschlange geleert: %d Auftraege verworfen", anzahl)
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")
 
     @slot_geschuetzt
     def _vorgemerkten_holen(self) -> None:
@@ -1161,7 +1259,19 @@ class Werkbank(QMainWindow):
             self.faden.auftrag_geben(text, bilder)
 
     def _not_aus(self) -> None:
-        self.sprecher.sprich("Not-Aus.", art="meldung")
+        """F8: bricht den laufenden Auftrag ab. Wartende Auftraege werden
+        dabei mit verworfen - sonst liefe nach dem Not-Aus der naechste von
+        allein los, was niemand erwartet, der eben alles gestoppt hat."""
+        verworfen = len(self._warteschlange)
+        self._warteschlange.clear()
+        self._warteschlange_zeigen()
+        satz = "Not-Aus."
+        if verworfen == 1:
+            satz += " Ein wartender Auftrag verworfen."
+        elif verworfen > 1:
+            satz += f" {verworfen} wartende Aufträge verworfen."
+        log.info("Not-Aus, wartende Auftraege verworfen: %d", verworfen)
+        self.sprecher.sprich(satz, art="meldung")
         self.faden.not_aus()
 
     def _zuruecknehmen(self) -> None:

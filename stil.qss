@@ -199,6 +199,19 @@ QToolTip {
     border-radius: 6px;
 }
 
+/* Warteanzeige: wie viele Auftraege hinter dem laufenden stehen. Sie faellt
+   durch warme Schrift auf, ohne zu schreien, und ist leer, solange keiner
+   wartet. Breite und Hoehe legt das Python fest. */
+#warteanzeige {
+    background-color: #171b22;
+    color: #ffb020;
+    font-size: 13pt;
+    font-weight: bold;
+    padding: 0.25em 0.7em;
+    border: 2px solid #333a47;
+    border-radius: 6px;
+}
+
 /* Modellwahl in der Kopfzeile: kein festes Schild, sondern ein Auswahlfeld.
    Es sieht aus wie die Felder daneben, gibt sich aber durch Rahmen und Pfeil
    als bedienbar zu erkennen. Breite und Hoehe legt das Python fest. */
