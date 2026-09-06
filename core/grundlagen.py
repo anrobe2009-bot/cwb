@@ -156,8 +156,9 @@ def verlauf_stil_lesen() -> str:
 # Pruefwert des zuletzt aus der Zwischenablage ausgefuehrten Auftrags. Er
 # liegt in einstellungen.json, weil er sonst bei jedem Neustart verloren waere
 # und derselbe markierte Text gleich nach dem Start ein zweites Mal liefe.
-# Die Sperre gilt nur kurz (siehe SPERRE_SEKUNDEN in ablagewaechter.py);
-# gespeichert wird nur der Pruefwert, nie der Text selbst.
+# Die Sperre kennt keine Zeitgrenze: sie faellt erst, wenn die Zwischenablage
+# zwischendurch etwas anderes enthaelt (siehe ablagewaechter.py). Gespeichert
+# wird nur der Pruefwert, nie der Text selbst.
 ABLAGE_MERKER = "ablage_zuletzt"
 
 
