@@ -401,7 +401,8 @@ class Werkbank(QMainWindow):
         return [
             # "Abschicken" hat hier keine Kachel: dafuer gibt es den Pfeil
             # neben dem Eingabefeld und Strg+Eingabe.
-            ("📋", "Aus Zwischenablage", "F7", "8", self._aus_zwischenablage),
+            # "Aus Zwischenablage" hat keine Kachel mehr: der Waechter holt
+            # markierte Auftraege von selbst. F7 bleibt als Notweg.
             ("⏹", "Not-Aus", "F8", "notaus", self._not_aus),
             ("✖", "Ansage abbrechen", "Escape", "2", self.sprecher.schweig),
             ("▶", "Letzte Antwort", "F3", "3", self._antwort_vorlesen),
@@ -935,9 +936,11 @@ class Werkbank(QMainWindow):
         """F7: holt den Text aus der Zwischenablage ins Eingabefeld, sagt die
         erkannte Auftragsart an und schickt ihn sofort ab.
 
-        Die erste Zeile im Log ist der Beleg, dass die Taste ueberhaupt
-        ankommt - vorher (Strg+Umschalt+V) verschluckten die Textfelder sie."""
-        log.info("Aus Zwischenablage aufgerufen (F7 oder Kachel)")
+        Notweg von Hand: gewoehnlich holt der Waechter markierte Auftraege von
+        selbst, darum gibt es dafuer keine Kachel mehr. Die erste Zeile im Log
+        ist der Beleg, dass die Taste ueberhaupt ankommt - vorher
+        (Strg+Umschalt+V) verschluckten die Textfelder sie."""
+        log.info("Aus Zwischenablage aufgerufen (F7)")
         try:
             text = QGuiApplication.clipboard().text()
         except Exception as fehler:  # noqa: BLE001

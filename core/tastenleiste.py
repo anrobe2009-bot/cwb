@@ -7,6 +7,12 @@ Schaltflaeche mit eigener Pastellfarbe, einem Symbol und kleinem Text
 darunter. Flach und kompakt, die Reihe teilt die Fensterbreite unter sich
 auf und hat keine festen Pixelgroessen im Python.
 
+Die Reihe gibt nach, statt das Fenster breit zu halten: die Kacheln
+schrumpfen mit, die Aufschrift bricht um und wird zuletzt gekuerzt, und
+reicht die Breite fuer eine Zeile nicht mehr, rueckt die Reihe in mehrere
+Zeilen. Als letzte Grenze bleibt das Symbol - kleiner wird eine Kachel nicht.
+Der Vorlesetext bleibt dabei immer vollstaendig.
+
 Gestaltung kommt vollstaendig aus stil.qss. Hier steht keine Farbe und
 keine Groesse, nur die Nummer der Pastellfarbe je Kachel.
 
@@ -18,9 +24,10 @@ import logging
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QHBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -73,6 +80,10 @@ class Kachel(QPushButton):
         self.text_feld = QLabel(beschriftung)
         self.text_feld.setObjectName("kacheltext")
         self.text_feld.setWordWrap(True)
+        # Die Aufschrift darf die Kachel nicht breit halten: sie nimmt die
+        # Breite, die uebrig bleibt, und wird notfalls gekuerzt.
+        self.text_feld.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.voller_text = beschriftung
 
         for feld in (self.symbol_feld, self.text_feld):
             feld.setAlignment(Qt.AlignCenter)
@@ -80,10 +91,61 @@ class Kachel(QPushButton):
             feld.setFocusPolicy(Qt.NoFocus)
             aufbau.addWidget(feld)
 
+    def sizeHint(self) -> QSize:
+        """Wunschbreite: so breit, dass die Aufschrift auf zwei Zeilen passt,
+        ohne ein Wort zu trennen. Weil das Textfeld selbst keine Breite
+        fordert, muss die Kachel sie nennen - daran entscheidet die Reihe, wie
+        viele Kacheln nebeneinander passen."""
+        masse = super().sizeHint()
+        woerter = self.voller_text.split()
+        if not woerter:
+            return masse
+        mass = QFontMetrics(self.text_feld.font())
+        laengstes = max(mass.horizontalAdvance(wort) for wort in woerter)
+        haelfte = mass.horizontalAdvance(self.voller_text) // 2
+        # Untergrenze sechs Zeichen: darunter waere jede Aufschrift nur noch
+        # ein Stummel. Ein einzelnes langes Wort treibt die Breite nicht hoch -
+        # es wird lieber gekuerzt, als die ganze Reihe breit zu halten.
+        breite = min(laengstes, max(haelfte, mass.averageCharWidth() * 6))
+        return QSize(max(masse.width(), breite), masse.height())
+
+    def minimumSizeHint(self) -> QSize:
+        """Schmalste zumutbare Kachel: ihr Symbol mit etwas Luft. Ohne diese
+        Grenze hielte die Aufschrift die ganze Reihe breiter als das Fenster."""
+        mass = QFontMetrics(self.symbol_feld.font())
+        breite = mass.horizontalAdvance(self.symbol_feld.text()) + mass.averageCharWidth() * 2
+        return QSize(breite, super().minimumSizeHint().height())
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        self._aufschrift_anpassen()
+
+    def _aufschrift_anpassen(self) -> None:
+        """Kuerzt die Aufschrift mit Auslassungspunkten, sobald selbst das
+        laengste Wort nicht mehr in die Kachel passt. Solange es passt, steht
+        sie vollstaendig da und bricht um. Der Vorlesetext bleibt ungekuerzt."""
+        breite = self.text_feld.width()
+        woerter = self.voller_text.split()
+        if breite <= 0 or not woerter:
+            return
+        try:
+            mass = QFontMetrics(self.text_feld.font())
+            laengstes = max(woerter, key=mass.horizontalAdvance)
+            if mass.horizontalAdvance(laengstes) <= breite:
+                self.text_feld.setText(self.voller_text)
+            else:
+                self.text_feld.setText(
+                    mass.elidedText(self.voller_text, Qt.ElideRight, breite)
+                )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Aufschrift nicht angepasst (%s): %s", self.voller_text, fehler)
+
     def beschriften(self, text: str, ansage: str = "", symbol: str = "") -> None:
         """Aendert den kleinen Text und, wenn angegeben, Vorlesetext und
         Symbol. Der Kurzhinweis geht mit, damit Auge und Ohr dasselbe sagen."""
+        self.voller_text = text
         self.text_feld.setText(text)
+        self._aufschrift_anpassen()
         if symbol:
             self.symbol_feld.setText(symbol)
         if ansage:
@@ -102,11 +164,13 @@ class Kachel(QPushButton):
 
 
 class Kachelreihe(QWidget):
-    """Waagerechte Reihe der staendig gebrauchten Befehle.
+    """Reihe der staendig gebrauchten Befehle, die umbrechen darf.
 
     `eintraege` ist eine Liste aus (symbol, beschriftung, taste, farbe, ziel).
-    Alle Kacheln teilen sich die verfuegbare Breite gleichmaessig, darum
-    passt sich die Reihe jeder Fenstergroesse an.
+    Die Kacheln teilen sich die verfuegbare Breite gleichmaessig. Wird das
+    Fenster so schmal, dass sie nebeneinander nicht mehr lesbar sind, ruecken
+    sie in eine zweite und dritte Zeile - die Reihe zwingt das Fenster nie,
+    breit zu bleiben.
     """
 
     def __init__(self, eintraege):
@@ -115,7 +179,10 @@ class Kachelreihe(QWidget):
         self.setAccessibleName("Befehlskacheln")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
-        aufbau = QHBoxLayout(self)
+        self.raster = QGridLayout(self)
+        # Zahl der Spalten, die gerade gilt. Erst ein Wechsel raeumt neu ein,
+        # sonst wuerde jedes Groessenereignis das Raster umbauen.
+        self._spalten = 0
 
         self.kacheln: list[Kachel] = []
         for symbol, beschriftung, taste, farbe, ziel in eintraege:
@@ -129,15 +196,61 @@ class Kachelreihe(QWidget):
             # Ziels verschlucken.
             kachel.clicked.connect(partial(self._kachel_merken, beschriftung, ziel))
             kachel.clicked.connect(ziel)
-            aufbau.addWidget(kachel, 1)
             self.kacheln.append(kachel)
             log.info(
                 "Kachel angelegt: %s (Taste %s) → %s",
                 beschriftung, taste or "keine", getattr(ziel, "__name__", ziel),
             )
+        self._einraeumen(len(self.kacheln) or 1)
         log.info(
             "Kacheln insgesamt angelegt: %d von %d", len(self.kacheln), len(eintraege)
         )
+
+    # -- Umbruch ------------------------------------------------------------
+
+    def _wunschbreite(self) -> int:
+        """Breite, die eine Kachel gern haette - gemessen an der breitesten.
+        Sie kommt aus Schrift und Stilblatt, nicht aus einer festen Zahl."""
+        return max((kachel.sizeHint().width() for kachel in self.kacheln), default=1)
+
+    def _spalten_berechnen(self) -> int:
+        """Wie viele Kacheln nebeneinander passen, ohne dass eine unter ihre
+        Wunschbreite gedrueckt wird. Mindestens eine, hoechstens alle."""
+        if not self.kacheln:
+            return 1
+        rand = self.raster.contentsMargins()
+        abstand = max(self.raster.horizontalSpacing(), 0)
+        breite = self.width() - rand.left() - rand.right()
+        wunsch = self._wunschbreite() + abstand
+        if wunsch <= 0 or breite <= 0:
+            return len(self.kacheln)
+        passen = int((breite + abstand) // wunsch)
+        return max(1, min(len(self.kacheln), passen))
+
+    def _einraeumen(self, spalten: int) -> None:
+        """Raeumt die Kacheln in so viele Spalten ein. Alle Spalten dehnen
+        sich gleich, damit die Kacheln gleich breit bleiben."""
+        if spalten == self._spalten or not self.kacheln:
+            return
+        try:
+            for spalte in range(self.raster.columnCount()):
+                self.raster.setColumnStretch(spalte, 0)
+            for kachel in self.kacheln:
+                self.raster.removeWidget(kachel)
+            for nummer, kachel in enumerate(self.kacheln):
+                self.raster.addWidget(kachel, nummer // spalten, nummer % spalten)
+            for spalte in range(spalten):
+                self.raster.setColumnStretch(spalte, 1)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kacheln nicht neu eingeräumt: %s", fehler)
+            return
+        self._spalten = spalten
+        log.info("Kachelreihe umgebrochen: %d Spalten, %d Zeilen", spalten,
+                 (len(self.kacheln) + spalten - 1) // spalten)
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        self._einraeumen(self._spalten_berechnen())
 
     def _kachel_merken(self, beschriftung: str, ziel) -> None:
         """Schreibt nur die Logzeile, dass der Klick angekommen ist. Das Ziel

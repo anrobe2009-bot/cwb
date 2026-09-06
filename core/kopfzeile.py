@@ -16,9 +16,13 @@ Das Modellfeld ist keine feste Anzeige, sondern ein Auswahlfeld: mit Tabulator
 erreichbar, mit den Pfeiltasten zu wechseln. Welche Modelle darin stehen, sagt
 Claude Code selbst - die Kopfzeile stellt nur dar, was ihr gereicht wird.
 
-Alle Felder haben feste Masse, gemessen an gleichbleibenden Beispieltexten.
-Kein Inhalt kann die Groesse aendern, darum rutscht das Ausgabefeld darunter
-nie auf und ab und in der Reihe verschiebt sich nichts.
+Alle Felder werden an gleichbleibenden Beispieltexten gemessen und halten
+dieses Mass, solange das Fenster breit genug ist: kein Inhalt kann die Groesse
+aendern, darum rutscht das Ausgabefeld darunter nie auf und ab und in der Reihe
+verschiebt sich nichts. Wird das Fenster schmaler als die ganze Reihe, geben
+die Felder nach und kuerzen ihren Text mit Auslassungspunkten, statt das
+Fenster breit zu halten. Der volle Wortlaut bleibt als Vorlesetext und
+Kurzhinweis erhalten.
 
 Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 """
@@ -26,7 +30,7 @@ Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -104,6 +108,91 @@ def zahl_kurz(anzahl: int) -> str:
     return zahl_lang(anzahl)
 
 
+class Schrumpffeld(QLabel):
+    """Ein Feld der Kopfzeile, das nachgibt statt abzuschneiden.
+
+    Solange Platz ist, haelt es die gemessene Wunschbreite - dadurch springt
+    in der Reihe nichts, wenn sich der Inhalt aendert. Wird das Fenster
+    schmaler, schrumpft es mit und kuerzt den Text mit Auslassungspunkten.
+    Der volle Wortlaut bleibt im Kurzhinweis und fuer den Screenreader.
+
+    Vor dem Messen steht die Wunschbreite auf null: dann meldet das Feld
+    seine echte Textbreite, und `masse_festlegen` misst nicht sich selbst.
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._voller_text = text
+        self._wunschbreite = 0
+
+    def wunschbreite_setzen(self, breite: int) -> None:
+        """Uebernimmt das gemessene Mass als Wunsch- und Hoechstbreite."""
+        self._wunschbreite = max(0, int(breite))
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(self._wunschbreite or 16777215)
+        self._darstellen()
+        self.updateGeometry()
+
+    def masse_zuruecksetzen(self) -> None:
+        """Gibt das Feld zum Messen frei: keine Grenze, kein Kuerzen."""
+        self._wunschbreite = 0
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(16777215)
+        super().setText(self._voller_text)
+
+    def voller_text(self) -> str:
+        return self._voller_text
+
+    def setText(self, text: str) -> None:
+        self._voller_text = text
+        self._darstellen()
+
+    def _darstellen(self) -> None:
+        try:
+            platz = self.contentsRect().width()
+            if self._wunschbreite <= 0 or platz <= 0:
+                super().setText(self._voller_text)
+                return
+            mass = self.fontMetrics()
+            if mass.horizontalAdvance(self._voller_text) <= platz:
+                super().setText(self._voller_text)
+            else:
+                super().setText(
+                    mass.elidedText(self._voller_text, Qt.ElideRight, platz)
+                )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Feld nicht dargestellt (%s): %s", self._voller_text, fehler)
+
+    def sizeHint(self) -> QSize:
+        masse = super().sizeHint()
+        if self._wunschbreite <= 0:
+            return masse
+        return QSize(self._wunschbreite, masse.height())
+
+    def minimumSizeHint(self) -> QSize:
+        """Schmalste Form: ein paar Zeichen und die Auslassungspunkte."""
+        masse = super().minimumSizeHint()
+        if self._wunschbreite <= 0:
+            return masse
+        schmal = self.fontMetrics().averageCharWidth() * 4
+        return QSize(min(schmal, self._wunschbreite), masse.height())
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        self._darstellen()
+
+
+class Schrumpfwahl(QComboBox):
+    """Auswahlfeld, das unter seine Wunschbreite darf. Wird es schmaler als
+    der Modellname, kuerzt Qt den angezeigten Namen von selbst; die Liste
+    dahinter bleibt vollstaendig."""
+
+    def minimumSizeHint(self) -> QSize:
+        masse = super().minimumSizeHint()
+        schmal = self.fontMetrics().averageCharWidth() * 6
+        return QSize(min(schmal, masse.width()), masse.height())
+
+
 class Ausgabekopf(QWidget):
     """Die Kopfzeile ueber dem Ausgabefeld. Sie zeigt nur an; entschieden wird
     nichts hier. Das Fenster setzt die Werte, die Kopfzeile stellt sie dar."""
@@ -127,41 +216,42 @@ class Ausgabekopf(QWidget):
         quer = QHBoxLayout(self)
         quer.setContentsMargins(0, 0, 0, 0)
 
-        titel = QLabel("Ausgabe")
-        titel.setObjectName("ausgabetitel")
-        quer.addWidget(titel)
+        self.titel = Schrumpffeld("Ausgabe")
+        self.titel.setObjectName("ausgabetitel")
+        self.titel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.titel)
 
         # Farbige Plakette neben "Ausgabe": ausschliesslich die Taetigkeit -
         # denkt, liest, schreibt, führt aus, sucht, wartet. Kein Dateiname,
         # kein Pfad. Die Farbe ist dieselbe wie die des Balkens oben.
-        self.taetigkeitsplakette = QLabel(KEINE_TAETIGKEIT)
+        self.taetigkeitsplakette = Schrumpffeld(KEINE_TAETIGKEIT)
         self.taetigkeitsplakette.setObjectName("taetigkeitsplakette")
         self.taetigkeitsplakette.setProperty("zustand", "bereit")
         self.taetigkeitsplakette.setAccessibleName("Aktuelle Tätigkeit")
         self.taetigkeitsplakette.setAlignment(Qt.AlignCenter)
-        self.taetigkeitsplakette.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.taetigkeitsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.taetigkeitsplakette)
 
         # Feld daneben: ausschliesslich der Name der Datei, an der gerade
         # gearbeitet wird - ohne Pfad, ohne Verb und ungekuerzt. Ist keine
         # Datei betroffen, bleibt es leer. Die Breite ist an den langen Namen
         # des Projekts gemessen und aendert sich nie.
-        self.dateianzeige = QLabel("")
+        self.dateianzeige = Schrumpffeld("")
         self.dateianzeige.setObjectName("dateianzeige")
         self.dateianzeige.setAccessibleName("Bearbeitete Datei")
         self.dateianzeige.setAlignment(Qt.AlignCenter)
-        self.dateianzeige.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.dateianzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.dateianzeige)
 
         # Zugriffsplakette: nennt dauerhaft, was gerade gilt - "Nur lesen"
         # oder "Lesen und Schreiben". Die Farbe kommt aus stil.qss und haengt
         # am Attribut 'modus', damit der Zustand auch ohne Lesen auffaellt.
-        self.zugriffsplakette = QLabel(ZUGRIFF_SCHREIBEN)
+        self.zugriffsplakette = Schrumpffeld(ZUGRIFF_SCHREIBEN)
         self.zugriffsplakette.setObjectName("zugriffsplakette")
         self.zugriffsplakette.setProperty("modus", "schreiben")
         self.zugriffsplakette.setAccessibleName("Zugriffsrecht")
         self.zugriffsplakette.setAlignment(Qt.AlignCenter)
-        self.zugriffsplakette.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.zugriffsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.zugriffsplakette)
 
         # Der freie Platz liegt in der Mitte: dadurch stehen Datei links und
@@ -174,11 +264,11 @@ class Ausgabekopf(QWidget):
         # sich das Modell eignet - als Kurzhinweis und fuer den Screenreader.
         # Sie steht vor den Zaehlern, damit die drei Zahlenfelder ununterbrochen
         # beieinander liegen.
-        self.modellwahl = QComboBox()
+        self.modellwahl = Schrumpfwahl()
         self.modellwahl.setObjectName("ausgabemodell")
         self.modellwahl.setAccessibleName("Modell wählen")
         self.modellwahl.setFocusPolicy(Qt.StrongFocus)
-        self.modellwahl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.modellwahl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.modellwahl.currentIndexChanged.connect(self._modell_gewechselt)
         quer.addWidget(self.modellwahl)
 
@@ -188,31 +278,31 @@ class Ausgabekopf(QWidget):
         self.zaehlerreihe = QWidget()
         self.zaehlerreihe.setObjectName("zaehlerreihe")
         self.zaehlerreihe.setAccessibleName("Tokenzähler")
-        self.zaehlerreihe.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.zaehlerreihe.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         reihe = QHBoxLayout(self.zaehlerreihe)
         reihe.setContentsMargins(0, 0, 0, 0)
         reihe.setSpacing(0)
 
         # Token dieses einen Auftrags
-        self.tokenzaehler = QLabel("Auftrag 0")
+        self.tokenzaehler = Schrumpffeld("Auftrag 0")
         self.tokenzaehler.setObjectName("tokenzaehler")
         self.tokenzaehler.setAccessibleName("Token dieses Auftrags")
 
         # Gesamtsumme der laufenden Sitzung
-        self.sitzungszaehler = QLabel("Sitzung 0")
+        self.sitzungszaehler = Schrumpffeld("Sitzung 0")
         self.sitzungszaehler.setObjectName("sitzungszaehler")
         self.sitzungszaehler.setAccessibleName("Token der ganzen Sitzung")
 
         # Summe des ganzen Kalendertages, ueber alle Sitzungen und Neustarts
         # hinweg. Sie kommt aus einstellungen.json und faengt um Mitternacht
         # von selbst wieder bei null an.
-        self.tageszaehler = QLabel("Heute 0")
+        self.tageszaehler = Schrumpffeld("Heute 0")
         self.tageszaehler.setObjectName("tageszaehler")
         self.tageszaehler.setAccessibleName("Token heute")
 
         for zaehler in (self.tokenzaehler, self.sitzungszaehler, self.tageszaehler):
             zaehler.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            zaehler.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            zaehler.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             reihe.addWidget(zaehler)
 
         quer.addWidget(self.zaehlerreihe)
@@ -257,11 +347,17 @@ class Ausgabekopf(QWidget):
 
     def masse_festlegen(self) -> None:
         """Legt die Masse der Kopfzeile fest: jedes Feld genau eine Textzeile
-        hoch und auf feste Breite, gemessen an gleichbleibenden Beispieltexten.
-        Kein Inhalt kann die Groesse aendern - weder ein langer Dateiname noch
-        eine grosse Zahl noch ein langer Modellname."""
+        hoch und auf die Breite seiner gleichbleibenden Beispieltexte. Kein
+        Inhalt kann die Groesse aendern - weder ein langer Dateiname noch eine
+        grosse Zahl noch ein langer Modellname.
+
+        Die Breite ist Wunsch und Obergrenze zugleich, keine Untergrenze: wird
+        das Fenster schmaler als die ganze Reihe, geben die Felder nach und
+        kuerzen ihren Text. Sonst liesse sich das Fenster nie schmaler ziehen
+        als die Kopfzeile breit ist."""
         try:
             felder = (
+                (self.titel, ("Ausgabe",)),
                 (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
                 (self.dateianzeige, DATEI_BEISPIELE),
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
@@ -272,6 +368,9 @@ class Ausgabekopf(QWidget):
             gemessen = []
             hoehe = 0
             for teil, beispiele in felder:
+                # Ohne Grenze messen, sonst misst das Feld seine eigene
+                # Kuerzung vom letzten Mal.
+                teil.masse_zuruecksetzen()
                 breite, teilhoehe = self._breite_messen(teil, beispiele)
                 if breite <= 0 or teilhoehe <= 0:
                     return
@@ -281,12 +380,17 @@ class Ausgabekopf(QWidget):
             wahlbreite, wahlhoehe = self._wahl_masse_messen(MODELL_BEISPIELE)
             if wahlbreite <= 0 or wahlhoehe <= 0:
                 return
-            gemessen.append((self.modellwahl, wahlbreite))
             hoehe = max(hoehe, wahlhoehe)
 
             for teil, breite in gemessen:
-                teil.setFixedWidth(breite)
+                teil.wunschbreite_setzen(breite)
                 teil.setFixedHeight(hoehe)
+
+            # Das Auswahlfeld kuerzt seinen Text von sich aus; es braucht nur
+            # die Obergrenze und darf unter sie fallen.
+            self.modellwahl.setMinimumWidth(0)
+            self.modellwahl.setMaximumWidth(wahlbreite)
+            self.modellwahl.setFixedHeight(hoehe)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Maße der Kopfzeile nicht festgelegt: %s", fehler)
 
