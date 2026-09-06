@@ -301,6 +301,13 @@ class Werkbank(QMainWindow):
         self.letzte_antwort = ""
         self.letzter_auftrag = ""
         self.letzter_verbrauch: dict = {}
+        # Bericht des zuletzt beendeten Auftrags. Er wird gemerkt, damit F6 ihn
+        # jederzeit erneut in die Zwischenablage legen kann.
+        self._letzter_bericht = ""
+        # Wahr, solange ein fertiger Bericht darauf wartet, kopiert zu werden:
+        # war das Fenster beim Ende des Auftrags nicht im Vordergrund, wuerde
+        # das Kopieren fremdes Kopiergut ueberschreiben.
+        self._bericht_wartet = False
         self.frage_offen = False
         # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
         # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
@@ -410,7 +417,8 @@ class Werkbank(QMainWindow):
             ("Strg+Z", "Letzten Auftrag zurücknehmen", self._zuruecknehmen),
             ("Strg+B", "Bild anhängen", self._bild_waehlen),
             ("F5", "Zum Eingabefeld", lambda: self._springe(self.eingabe, "Eingabefeld")),
-            ("F6", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
+            ("F6", "Bericht erneut kopieren", self._bericht_erneut_kopieren),
+            ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F1", "Hilfe vorlesen", self._hilfe),
             ("F9", "Projekt wechseln", self._projekt_wechseln),
             ("F4", "Kompletter Neustart", self._neustart),
@@ -544,7 +552,8 @@ class Werkbank(QMainWindow):
             ("F2", self._wo_stehen_wir),
             ("F3", self._antwort_vorlesen),
             ("F5", lambda: self._springe(self.eingabe, "Eingabefeld")),
-            ("F6", lambda: self._springe(self.verlauf, "Verlauf")),
+            ("F6", self._bericht_erneut_kopieren),
+            ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
             ("F4", self._neustart),
             ("F7", self._aus_zwischenablage),
@@ -939,18 +948,66 @@ class Werkbank(QMainWindow):
         """Legt den Bericht nach jedem Auftrag in die Zwischenablage, sofern in
         den Einstellungen nicht abgeschaltet.
 
+        Kopiert wird nur, wenn das CWB-Fenster im Vordergrund ist. Sonst wuerde
+        der Bericht ueberschreiben, was der Nutzer inzwischen anderswo kopiert
+        hat; er wird dann gemerkt und beim naechsten Wechsel ins Fenster
+        nachgelegt.
+
         Rückgabe: leer, wenn es geklappt hat - der gelungene Fall wird nicht
         angesagt, damit nach einem Auftrag nur der Ergebnissatz kommt. Nur das
         Scheitern wird gemeldet, sonst wartet man auf einen Bericht, der nicht
         in der Zwischenablage liegt."""
+        try:
+            self._letzter_bericht = self._bericht_bauen(bilanz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Bericht nicht gebaut: %s", fehler)
+            return " Bericht konnte nicht erstellt werden."
         if not einstellungen_lesen().get("bericht_kopieren", True):
             return ""
+        if not self.isActiveWindow():
+            self._bericht_wartet = True
+            log.info("Bericht vorgemerkt, Fenster ist nicht im Vordergrund")
+            return ""
         try:
-            QGuiApplication.clipboard().setText(self._bericht_bauen(bilanz))
+            QGuiApplication.clipboard().setText(self._letzter_bericht)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
             return " Bericht konnte nicht kopiert werden."
         return ""
+
+    def _bericht_nachlegen(self) -> None:
+        """Legt einen vorgemerkten Bericht in die Zwischenablage, sobald das
+        Fenster wieder im Vordergrund ist, und sagt es an."""
+        if not self._bericht_wartet or not self._letzter_bericht:
+            return
+        self._bericht_wartet = False
+        try:
+            QGuiApplication.clipboard().setText(self._letzter_bericht)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Vorgemerkter Bericht nicht kopiert: %s", fehler)
+            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
+            return
+        log.info("Vorgemerkter Bericht in die Zwischenablage gelegt")
+        self.sprecher.sprich("Bericht liegt jetzt in der Zwischenablage.",
+                             art="meldung")
+
+    @slot_geschuetzt
+    def _bericht_erneut_kopieren(self) -> None:
+        """F6: legt den Bericht des letzten Auftrags noch einmal in die
+        Zwischenablage, egal was inzwischen dort lag."""
+        if not self._letzter_bericht:
+            self.sprecher.sprich("Es gibt noch keinen Bericht.", art="meldung")
+            return
+        self._bericht_wartet = False
+        try:
+            QGuiApplication.clipboard().setText(self._letzter_bericht)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Bericht nicht erneut kopiert: %s", fehler)
+            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
+            return
+        log.info("Bericht erneut in die Zwischenablage gelegt (F6)")
+        self.sprecher.sprich("Bericht liegt jetzt in der Zwischenablage.",
+                             art="meldung")
 
     # -- Bedienung ----------------------------------------------------------
 
@@ -1198,6 +1255,10 @@ class Werkbank(QMainWindow):
 
     def changeEvent(self, ereignis) -> None:
         super().changeEvent(ereignis)
+        # Zurueck im Vordergrund: ein waehrenddessen fertig gewordener Bericht
+        # wird jetzt nachgelegt, ohne fremdes Kopiergut zu ueberschreiben.
+        if ereignis.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._bericht_nachlegen()
         # Ein neues Stilblatt bringt eine neue Schriftgroesse mit: die eine
         # Zeile wird dann neu ausgemessen und der Text passend gekuerzt.
         if ereignis.type() in (QEvent.StyleChange, QEvent.FontChange) and hasattr(
