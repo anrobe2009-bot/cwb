@@ -27,16 +27,15 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
 
+try:
+    from .pfade import log_einrichten
+except ImportError:
+    from pfade import log_einrichten
+
 CWB_WURZEL = Path(__file__).resolve().parent.parent
 LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 
-logging.basicConfig(
-    filename=str(LOG_DATEI),
-    filemode="a",
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+log_einrichten()
 log = logging.getLogger("cwb.ablagewaechter")
 
 # Abstand zwischen zwei Blicken in die Zwischenablage.
@@ -92,6 +91,10 @@ class Zwischenablagewaechter(QObject):
         # Fehler beim Lesen der Ablage nur einmal ins Log, nicht alle zwei
         # Sekunden erneut.
         self._lesefehler_gemeldet = False
+        # Zuletzt ins Log geschriebene Entscheidung, als (Pruefwert, gesperrt).
+        # Solange sie sich nicht aendert, schweigt der Pruefdurchlauf - sonst
+        # waechst das Log alle zwei Sekunden um eine Zeile ohne Neuigkeit.
+        self._letzte_entscheidung = None
         self._uhr = QTimer(self)
         self._uhr.setInterval(PRUEF_ABSTAND_MS)
         self._uhr.timeout.connect(self._nachsehen)
@@ -160,15 +163,19 @@ class Zwischenablagewaechter(QObject):
         # Zeit spielt keine Rolle: derselbe Auftrag bleibt gesperrt, solange
         # die Zwischenablage unveraendert daliegt.
         gesperrt = pruefwert == self._zuletzt
-        # Jeder Pruefdurchlauf ueber einem markierten Auftrag hinterlaesst
-        # eine Zeile: gefundener Pruefwert, gemerkter Pruefwert und die
-        # Entscheidung. Der Text selbst steht nie im Log, nur seine Pruefwerte.
-        log.info(
-            "Prüflauf: gefunden %s, gemerkt %s, Entscheidung %s",
-            pruefwert[:12],
-            self._zuletzt[:12] or "keiner",
-            "abgelehnt (unveränderte Zwischenablage)" if gesperrt else "angenommen",
-        )
+        # Nur eine Zeile, wenn sich die Entscheidung gegenueber dem letzten
+        # Durchlauf aendert - bei gleichem Auftrag und gleichem Ausgang
+        # bleibt das Log still. Der Text selbst steht nie im Log, nur seine
+        # Pruefwerte.
+        entscheidung = (pruefwert, gesperrt)
+        if entscheidung != self._letzte_entscheidung:
+            self._letzte_entscheidung = entscheidung
+            log.info(
+                "Prüflauf: gefunden %s, gemerkt %s, Entscheidung %s",
+                pruefwert[:12],
+                self._zuletzt[:12] or "keiner",
+                "abgelehnt (unveränderte Zwischenablage)" if gesperrt else "angenommen",
+            )
         if gesperrt:
             return
         self._zuletzt = pruefwert

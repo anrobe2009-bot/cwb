@@ -3,7 +3,7 @@ CWB - Code Workbench
 Kopfzeile des Ausgabefelds.
 
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
-Arbeit gehoert: das Wort "Ausgabe", die farbige Taetigkeitsplakette, den Namen
+Arbeit gehoert: die farbige Taetigkeitsplakette ganz links, den Namen
 der bearbeiteten Datei, die Zugriffsplakette mit dem geltenden Schreibrecht
 ("Nur lesen" oder "Lesen und Schreiben"), die Modellwahl, die drei
 Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
@@ -216,12 +216,10 @@ class Ausgabekopf(QWidget):
         quer = QHBoxLayout(self)
         quer.setContentsMargins(0, 0, 0, 0)
 
-        self.titel = Schrumpffeld("Ausgabe")
-        self.titel.setObjectName("ausgabetitel")
-        self.titel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        quer.addWidget(self.titel)
-
-        # Farbige Plakette neben "Ausgabe": ausschliesslich die Taetigkeit -
+        # Die Zeile beginnt unmittelbar mit der Plakette. Das Wort "Ausgabe"
+        # stand frueher davor, sagte nichts aus und wurde bei schmalem Fenster
+        # ohnehin zu "Ausga…" gekuerzt.
+        # Farbige Plakette ganz links: ausschliesslich die Taetigkeit -
         # denkt, liest, schreibt, führt aus, sucht, wartet. Kein Dateiname,
         # kein Pfad. Die Farbe ist dieselbe wie die des Balkens oben.
         self.taetigkeitsplakette = Schrumpffeld(KEINE_TAETIGKEIT)
@@ -357,7 +355,6 @@ class Ausgabekopf(QWidget):
         als die Kopfzeile breit ist."""
         try:
             felder = (
-                (self.titel, ("Ausgabe",)),
                 (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
                 (self.dateianzeige, DATEI_BEISPIELE),
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),

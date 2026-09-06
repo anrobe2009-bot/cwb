@@ -38,16 +38,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+try:
+    from .pfade import log_einrichten
+except ImportError:
+    from pfade import log_einrichten
+
 CWB_WURZEL = Path(__file__).resolve().parent.parent
 LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 
-logging.basicConfig(
-    filename=str(LOG_DATEI),
-    filemode="a",
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+log_einrichten()
 log = logging.getLogger("cwb.zeigeransage")
 
 # Etwa eine Drittelsekunde ruhen, dann wird angesagt.

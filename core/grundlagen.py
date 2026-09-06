@@ -29,6 +29,7 @@ try:
         LOG_DATEI,
         einstellungen_lesen,
         einstellungen_schreiben,
+        log_einrichten,
     )
 except ImportError:
     from pfade import (
@@ -37,18 +38,13 @@ except ImportError:
         LOG_DATEI,
         einstellungen_lesen,
         einstellungen_schreiben,
+        log_einrichten,
     )
 
 STIL_DATEI = CWB_WURZEL / "stil.qss"
 VERLAUF_CSS = CWB_WURZEL / "verlauf.css"
 
-logging.basicConfig(
-    filename=str(LOG_DATEI),
-    filemode="a",
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+log_einrichten()
 log = logging.getLogger("cwb.grundlagen")
 
 # Hält alle offenen Fenster fest, damit Python sie nicht wegräumt, solange

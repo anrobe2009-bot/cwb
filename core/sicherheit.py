@@ -20,19 +20,13 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from .pfade import projektwurzel
+    from .pfade import log_einrichten, projektwurzel
 except ImportError:
-    from pfade import projektwurzel
+    from pfade import log_einrichten, projektwurzel
 
 LOG_DATEI = Path(__file__).resolve().parent.parent / "cwb_fehler.log"
 
-logging.basicConfig(
-    filename=str(LOG_DATEI),
-    filemode="a",
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+log_einrichten()
 log = logging.getLogger("cwb.sicherheit")
 
 

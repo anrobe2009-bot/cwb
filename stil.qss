@@ -134,15 +134,7 @@ QToolTip {
     border-radius: 6px;
 }
 
-#ausgabetitel {
-    background-color: transparent;
-    color: #e6ecf5;
-    font-size: 15pt;
-    font-weight: bold;
-    padding: 0.4em 0.8em;
-}
-
-/* Taetigkeitsplakette neben "Ausgabe". Dieselben Farben wie der Balken
+/* Taetigkeitsplakette am linken Rand der Kopfzeile. Dieselben Farben wie der Balken
    oben, damit Farbe und Wort dasselbe sagen. Dunkle Schrift, weil alle
    Zustandsfarben hell sind. */
 #taetigkeitsplakette {

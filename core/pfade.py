@@ -22,19 +22,44 @@ Normalfall und bricht nichts. Fehlt ein Schluessel ganz, gilt der Vorschlag.
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 CWB_WURZEL = Path(__file__).resolve().parent.parent
 EINSTELLUNGEN_DATEI = CWB_WURZEL / "einstellungen.json"
 LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 
-logging.basicConfig(
-    filename=str(LOG_DATEI),
-    filemode="a",
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+# Das Log waechst sonst unbegrenzt. Ist die Datei voll, wandert sie nach
+# cwb_fehler.log.1, die aelteren rutschen nach; alles jenseits der dritten
+# Sicherung faellt weg.
+LOG_GROESSE = 500 * 1024
+LOG_SICHERUNGEN = 3
+LOG_FORM = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+
+def log_einrichten() -> None:
+    """Haengt den rotierenden Schreiber einmalig an den Wurzel-Logger.
+
+    Jedes Modul ruft das beim Laden auf; der zweite und jeder weitere Aufruf
+    tut nichts. Nur so bekommen alle Module dieselbe Rotation - `basicConfig`
+    wirkte immer nur beim zuerst geladenen Modul."""
+    wurzel = logging.getLogger()
+    for vorhanden in wurzel.handlers:
+        if getattr(vorhanden, "_cwb_log", False):
+            return
+    schreiber = RotatingFileHandler(
+        str(LOG_DATEI),
+        maxBytes=LOG_GROESSE,
+        backupCount=LOG_SICHERUNGEN,
+        encoding="utf-8",
+    )
+    schreiber.setFormatter(logging.Formatter(LOG_FORM))
+    schreiber._cwb_log = True
+    wurzel.addHandler(schreiber)
+    wurzel.setLevel(logging.INFO)
+
+
+log_einrichten()
 log = logging.getLogger("cwb.pfade")
 
 PFADE_SCHLUESSEL = "pfade"
