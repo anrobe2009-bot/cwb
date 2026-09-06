@@ -162,7 +162,7 @@ Jeder Punkt trägt seinen Stand, die betroffenen Stellen und einen Prüfschritt.
    *Test:* `git rev-list --count origin/main..main` ergibt 0 nach dem Hochladen.
 
 3. **[offen] Commit-Autor.**
-   Alle Commits laufen auf `anrobe2009-bot`; ob dort „Robert" stehen soll,
+   Alle Commits laufen auf `anrobe2009-bot`; ob dort ein anderer Name stehen soll,
    ist nicht entschieden.
    *Test:* `git log -1 --format='%an'` gegen die gewünschte Angabe halten.
 
