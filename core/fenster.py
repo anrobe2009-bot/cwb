@@ -215,15 +215,20 @@ ANSAGE_ZEICHEN = 240
 
 SATZ_MUSTER = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
 
+# Datei- und Ordnerpfade in Rueckfragen und Fehlermeldungen: weder Windows-
+# ("C:\a\b.py") noch Unix-Schreibweise ("a/b.py") soll die Stimme vorlesen -
+# nur der Wortlaut ohne Pfad. Volle Pfade bleiben im Ausgabefeld und im Log.
+PFAD_MUSTER = re.compile(r"(?:[A-Za-zÄÖÜäöüß]:[\\/])?(?:[\w.\-]+[\\/])+[\w.\-]+")
+
 
 def kurzfassen(text: str, saetze: int = ANSAGE_SAETZE) -> str:
     """Kuerzt eine Meldung auf hoechstens zwei Saetze fuer die Sprachausgabe.
 
     Rueckfragen und Fehlermeldungen muessen gesprochen werden, aber niemand
-    will eine Stapelverfolgung vorgelesen bekommen. Der volle Wortlaut bleibt
-    im Ausgabefeld, in der Statuszeile und im Log stehen; gekuerzt wird nur,
-    was durch die Stimme geht."""
-    sauber = " ".join(str(text).split())
+    will eine Stapelverfolgung oder einen Dateipfad vorgelesen bekommen. Der
+    volle Wortlaut bleibt im Ausgabefeld, in der Statuszeile und im Log
+    stehen; gekuerzt wird nur, was durch die Stimme geht."""
+    sauber = " ".join(PFAD_MUSTER.sub("Datei", str(text)).split())
     if not sauber:
         return ""
     kurz = "".join(SATZ_MUSTER.findall(sauber)[:saetze]).strip() or sauber
@@ -774,7 +779,10 @@ class Werkbank(QMainWindow):
             self.sprecher.sprich(zeile)
 
     def _escape(self) -> None:
-        if self.frage_offen:
+        # Laeuft noch eine Ansage, bricht der erste Druck nur sie ab - sonst
+        # wuerde er ungewollt zugleich eine offene Rueckfrage mit Nein
+        # beantworten, noch bevor die Rueckfrage ueberhaupt zu Ende gesprochen ist.
+        if self.frage_offen and not self.sprecher.spricht():
             self._frage_beantworten(False)
             return
         self.sprecher.schweig()
@@ -950,15 +958,10 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
-        # Gesprochen wird der kurze Ergebnissatz. Die Antwort selbst bleibt
-        # stumm - dafuer gibt es F3. Nur in der Stufe "Alles" folgt sie dem
-        # Ergebnissatz von allein; `unterbrechen=False`, damit sie ihn nicht
-        # abschneidet.
+        # Gesprochen wird nur der kurze Ergebnissatz. Der Inhalt des
+        # Ausgabefelds wird nie von allein vorgelesen - dafuer gibt es F3.
         self.sprecher.sprich((ansage + self._bericht_kopieren(bilanz)).strip(),
                              art="meldung")
-        if self.letzte_antwort.strip():
-            self.sprecher.sprich(self.letzte_antwort, unterbrechen=False,
-                                 art="antwort")
 
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
@@ -1099,7 +1102,7 @@ class Werkbank(QMainWindow):
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
         self.sprecher.sprich(f"Aus Zwischenablage. {ansage}", art="meldung")
-        self._absenden()
+        self._absenden(bereits_angesagt=True)
 
     @slot_geschuetzt
     def _ablage_auftrag(self, inhalt: str) -> None:
@@ -1110,12 +1113,12 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich("Auftrag übernommen, Zwischenablage geleert.", art="meldung")
         self._aus_ablage = True
         try:
-            self._absenden()
+            self._absenden(bereits_angesagt=True)
         finally:
             self._aus_ablage = False
 
     @slot_geschuetzt
-    def _absenden(self) -> None:
+    def _absenden(self, bereits_angesagt: bool = False) -> None:
         roh = self.eingabe.toPlainText()
         art, text = markierung_erkennen(roh)
         if not text:
@@ -1174,12 +1177,18 @@ class Werkbank(QMainWindow):
             self.sprecher.sprich(satz, art="meldung")
             return
 
-        self._auftrag_starten(text, bilder)
+        self._auftrag_starten(text, bilder, bereits_angesagt=bereits_angesagt)
 
-    def _auftrag_starten(self, text: str, bilder: list[Path]) -> None:
+    def _auftrag_starten(self, text: str, bilder: list[Path],
+                          bereits_angesagt: bool = False) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
-        Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange."""
+        Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
+
+        `bereits_angesagt` ist gesetzt, wenn der Aufrufer den Auftrag schon
+        mit einer eigenen Ansage angenommen hat (Zwischenablage, Wächter,
+        Warteschlange, Vormerkung) - dann spricht diese Methode nicht noch
+        einmal "Auftrag angenommen", sonst waere es doppelt."""
         self._auftrag_laeuft = True
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
@@ -1199,15 +1208,19 @@ class Werkbank(QMainWindow):
             self._wartende_auftraege.append((text, bilder))
             self._taetigkeit_zeigen("wartet")
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
-            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
-                                 art="meldung")
+            if not bereits_angesagt:
+                self.sprecher.sprich("Auftrag angenommen, Verbindung wird noch aufgebaut.",
+                                     art="meldung")
             return
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
             faden.auftrag_geben(text, bilder)
-            self.sprecher.sprich("Auftrag vorgemerkt, Verbindung wird noch aufgebaut.",
-                                 art="meldung")
+            if not bereits_angesagt:
+                self.sprecher.sprich("Auftrag angenommen, Verbindung wird noch aufgebaut.",
+                                     art="meldung")
             return
+        if not bereits_angesagt:
+            self.sprecher.sprich("Auftrag angenommen.", art="meldung")
         faden.auftrag_geben(text, bilder)
 
     def _warteschlange_zeigen(self) -> None:
@@ -1233,7 +1246,7 @@ class Werkbank(QMainWindow):
         # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
         # nicht abgeschnitten werden.
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
-        self._auftrag_starten(text, bilder)
+        self._auftrag_starten(text, bilder, bereits_angesagt=True)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
@@ -1251,7 +1264,7 @@ class Werkbank(QMainWindow):
         log.info("Warteschlange geleert: %d Auftraege verworfen", anzahl)
         self._verlauf_anhaengen(satz, "hinweis")
         self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="meldung")
+        self.sprecher.sprich(satz)
 
     def _vormerkung_zeigen(self, sichtbar: bool) -> None:
         """Blendet die Kachel "Trotzdem hier ausführen" ein oder aus. Sie steht
@@ -1295,7 +1308,7 @@ class Werkbank(QMainWindow):
         # auf.
         self._holt_vorgemerkten = True
         try:
-            self._absenden()
+            self._absenden(bereits_angesagt=True)
         finally:
             self._holt_vorgemerkten = False
 
@@ -1315,7 +1328,7 @@ class Werkbank(QMainWindow):
         self.eingabe.setPlainText(roh)
         self._holt_vorgemerkten = True
         try:
-            self._absenden()
+            self._absenden(bereits_angesagt=True)
         finally:
             self._holt_vorgemerkten = False
 
@@ -1341,7 +1354,9 @@ class Werkbank(QMainWindow):
         elif verworfen > 1:
             satz += f" {verworfen} wartende Aufträge verworfen."
         log.info("Not-Aus, wartende Auftraege verworfen: %d", verworfen)
-        self.sprecher.sprich(satz, art="meldung")
+        # "Abgebrochen." kommt gleich ueber _fertig - diese Zwischenmeldung
+        # bleibt still, sonst spricht CWB zweimal fuer denselben Abbruch.
+        self.sprecher.sprich(satz)
         self.faden.not_aus()
 
     def _zuruecknehmen(self) -> None:

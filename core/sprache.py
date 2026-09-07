@@ -12,7 +12,8 @@ Wiederkehrende Sätze werden zwischengespeichert und beim zweiten Mal
 ohne Verzögerung abgespielt. Fällt das Internet aus, springt SAPI ein.
 
 Wie viel gesprochen wird, regelt die Stufe (Einstellungen, Reiter "Sprache"):
-1 nur Meldungen, 2 zusätzlich Berührtes, 3 zusätzlich die volle Antwort.
+1 nur Meldungen, 2 zusätzlich Berührtes. Der Inhalt des Ausgabefelds wird nie
+von allein vorgelesen, dafür gibt es F3 (letzte Antwort) und Strg+L (Markiertes).
 Jeder Aufruf von `sprich` nennt dazu die Art seines Satzes.
 """
 
@@ -24,6 +25,7 @@ import math
 import queue
 import struct
 import threading
+import time
 import wave
 from ctypes import WinDLL, create_unicode_buffer
 from dataclasses import dataclass
@@ -66,17 +68,19 @@ STANDARD_STIMME = "de-DE-KatjaNeural"
 # der Fokus steht - CWB wuerde das nur doppeln.
 STUFE_MELDUNGEN = 1
 STUFE_BERUEHRT = 2
-STUFE_ALLES = 3
 STUFE_STANDARD = STUFE_MELDUNGEN
 
+# Stufe eins ist bewusst eng: automatisch spricht CWB nur noch, wenn ein
+# Auftrag angenommen wird, wenn er fertig ist samt Bilanz, beim Hinweis auf
+# den Bericht in der Zwischenablage, sowie kurz bei Rueckfragen und Fehlern.
+# Der Inhalt des Ausgabefelds wird nie von allein vorgelesen - dafuer gibt es
+# F3 (letzte Antwort) und Strg+L (Markiertes), unabhaengig von der Stufe.
 STUFEN = [
     (STUFE_MELDUNGEN, "Nur Meldungen",
-     "Auftrag aus der Zwischenablage, Ergebnissatz nach dem Auftrag, "
-     "Rückfragen und Fehler"),
+     "Auftrag angenommen, Ergebnissatz mit Bilanz nach dem Auftrag, Hinweis "
+     "auf den Bericht in der Zwischenablage, Rückfragen und Fehler"),
     (STUFE_BERUEHRT, "Meldungen und Berührtes",
      "zusätzlich, worauf der Mauszeiger ruht und wohin der Tastaturfokus springt"),
-    (STUFE_ALLES, "Alles",
-     "zusätzlich die vollständige Antwort nach jedem Auftrag"),
 ]
 
 # Art eines Satzes -> ab welcher Stufe er zu hoeren ist.
@@ -88,7 +92,6 @@ SATZARTEN = {
     "immer": 0,
     "meldung": STUFE_MELDUNGEN,
     "beruehrt": STUFE_BERUEHRT,
-    "antwort": STUFE_ALLES,
 }
 SATZART_STANDARD = "beruehrt"
 
@@ -99,7 +102,7 @@ def stufe_pruefen(wert) -> int:
         zahl = int(wert)
     except (TypeError, ValueError):
         return STUFE_STANDARD
-    return zahl if STUFE_MELDUNGEN <= zahl <= STUFE_ALLES else STUFE_STANDARD
+    return zahl if STUFE_MELDUNGEN <= zahl <= STUFE_BERUEHRT else STUFE_STANDARD
 
 
 @dataclass(frozen=True)
@@ -211,7 +214,16 @@ def _toene_bereitstellen() -> dict[str, Path]:
 # ---------------------------------------------------------------------------
 
 class Abspieler:
-    """Spielt MP3-Dateien über winmm ab. Ein Stück zur Zeit, abbrechbar."""
+    """Spielt MP3-Dateien über winmm ab. Ein Stück zur Zeit, abbrechbar.
+
+    `play alias wait` blockierte frueher den Sprech-Faden bis zum Ende des
+    Stuecks. Ein "close" von einem anderen Faden - etwa Escape ueber
+    `schweig()` - reihte sich dann hinter diesem blockierenden Befehl ein und
+    kam faktisch nie rechtzeitig an, die Ansage liess sich nicht abbrechen.
+    Jetzt startet `play` ohne `wait`, ein eigener Wartelauf fragt den Stand
+    ab - `stopp()` bleibt so aus jedem Faden jederzeit sofort wirksam."""
+
+    _ABFRAGE_SEKUNDEN = 0.05
 
     def __init__(self):
         self._zaehler = 0
@@ -234,11 +246,20 @@ class Abspieler:
             return False
         return True
 
+    def _status(self, alias: str) -> str:
+        if self._winmm is None:
+            return ""
+        puffer = create_unicode_buffer(32)
+        if self._winmm.mciSendStringW(f"status {alias} mode", puffer, 32, None):
+            return ""
+        return puffer.value.strip().lower()
+
     def stopp(self) -> None:
         with self._sperre:
-            if self._laufend:
-                self._befehl(f"close {self._laufend}")
-                self._laufend = None
+            alias, self._laufend = self._laufend, None
+        if alias:
+            self._befehl(f"stop {alias}")
+            self._befehl(f"close {alias}")
 
     def spiele(self, datei: Path, warten: bool = True) -> None:
         self.stopp()
@@ -248,9 +269,24 @@ class Abspieler:
             if not self._befehl(f'open "{datei}" type mpegvideo alias {alias}'):
                 return
             self._laufend = alias
-        self._befehl(f"play {alias}{' wait' if warten else ''}")
+        if not self._befehl(f"play {alias}"):
+            return
         if warten:
-            self.stopp()
+            self._bis_fertig_warten(alias)
+
+    def _bis_fertig_warten(self, alias: str) -> None:
+        """Fragt den Wiedergabestatus ab, statt mit `play ... wait` zu
+        blockieren. So merkt diese Methode sofort, wenn `stopp()` aus einem
+        anderen Faden den Alias schon entfernt hat, statt bis zum natuerlichen
+        Ende des Stuecks zu warten."""
+        while True:
+            with self._sperre:
+                if self._laufend != alias:
+                    return
+            if self._status(alias) != "playing":
+                break
+            time.sleep(self._ABFRAGE_SEKUNDEN)
+        self.stopp()
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +326,12 @@ class Sprecher:
         self._nvda = self._nvda_laden() if self.weg == "nvda" else None
         self._sapi = self._sapi_laden()
         self._abspieler = Abspieler()
+        # Fuer schweig() und spricht(): welcher Weg zuletzt tatsaechlich
+        # gesprochen hat (self.weg kann "edge" sagen, waehrend ein einzelner
+        # Satz mangels Netz doch ueber SAPI ausweicht), und ob gerade ein Satz
+        # laeuft.
+        self._letzter_weg = ""
+        self._aktuell_sprechend = False
 
         if self.weg == "edge" and not self._edge_vorhanden():
             log.warning("Edge-TTS nicht vorhanden, weiche auf SAPI aus")
@@ -495,20 +537,27 @@ class Sprecher:
                 log.exception("Sprechen gescheitert: %s", fehler)
 
     def _sprich_jetzt(self, text: str) -> None:
-        if self.weg == "nvda" and self._nvda:
-            self._nvda.nvdaController_cancelSpeech()
-            self._nvda.nvdaController_speakText(text)
-            return
-
-        if self.weg == "edge":
-            datei = self._pfad_fuer(text)
-            if datei.exists() or self._erzeugen(text, datei):
-                self._abspieler.spiele(datei, warten=True)
+        self._aktuell_sprechend = True
+        try:
+            if self.weg == "nvda" and self._nvda:
+                self._letzter_weg = "nvda"
+                self._nvda.nvdaController_cancelSpeech()
+                self._nvda.nvdaController_speakText(text)
                 return
-            log.warning("Für diesen Satz weiche ich auf SAPI aus")
 
-        if self._sapi:
-            self._sapi.Speak(text, 0)
+            if self.weg == "edge":
+                datei = self._pfad_fuer(text)
+                if datei.exists() or self._erzeugen(text, datei):
+                    self._letzter_weg = "edge (mp3)"
+                    self._abspieler.spiele(datei, warten=True)
+                    return
+                log.warning("Für diesen Satz weiche ich auf SAPI aus")
+
+            if self._sapi:
+                self._letzter_weg = "sapi"
+                self._sapi.Speak(text, 0)
+        finally:
+            self._aktuell_sprechend = False
 
     def stufe_setzen(self, stufe: int, sichern: bool = True) -> None:
         """Wechselt die Redseligkeit im laufenden Betrieb."""
@@ -538,6 +587,15 @@ class Sprecher:
 
     def schweig(self) -> None:
         """Bricht laufende Sprachausgabe ab und leert die Warteschlange."""
+        # Damit sich am Log ablesen laesst, ob schweig() ueberhaupt ankommt
+        # und ob die Ansage gerade wirklich ueber die MP3-Datei lief oder
+        # mangels Netz stillschweigend auf SAPI auswich.
+        log.info(
+            "schweig() aufgerufen: Ausgabeweg=%s, zuletzt gesprochen ueber=%s, "
+            "spricht gerade=%s, wartend in der Schlange=%d",
+            self.weg, self._letzter_weg or "-", self._aktuell_sprechend,
+            self._sprech_schlange.qsize(),
+        )
         while not self._sprech_schlange.empty():
             try:
                 self._sprech_schlange.get_nowait()
@@ -551,6 +609,12 @@ class Sprecher:
                 self._sapi.Speak("", 1 | 2)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Abbrechen gescheitert: %s", fehler)
+
+    def spricht(self) -> bool:
+        """Ist gerade eine Ansage unterwegs oder wartet noch eine in der
+        Schlange? Fuer Escape: der erste Druck soll nur die Ansage abbrechen,
+        nicht zugleich eine offene Rueckfrage mit Nein beantworten."""
+        return self._aktuell_sprechend or not self._sprech_schlange.empty()
 
     # -- Töne ---------------------------------------------------------------
 
