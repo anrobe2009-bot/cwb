@@ -2,7 +2,7 @@
 CWB - Code Workbench
 Einstellungsseite (F12, Kachel "Einstellungen").
 
-Fuenf Reiter; passt der Inhalt eines Reiters nicht auf die Seite, wird
+Sechs Reiter; passt der Inhalt eines Reiters nicht auf die Seite, wird
 dort gerollt statt abgeschnitten:
 
 - Sprache   Sprachausgabe in drei Stufen, Ausgabeweg, Stimme, Tempo,
@@ -13,6 +13,8 @@ dort gerollt statt abgeschnitten:
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
 - Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
             bei der Ersteinrichtung, jederzeit aenderbar
+- Projekte  gepflegte Zusatzliste: Projekte ausserhalb des Projektordners,
+            mit Ordnerdialog hinzugefuegt, frei benannt, entfernbar
 
 Gewechselt wird mit Strg+Tabulator (vorwaerts), Strg+Umschalt+Tabulator
 (rueckwaerts) und mit den Pfeiltasten, sobald die Reiterleiste den Fokus hat.
@@ -43,6 +45,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -73,6 +76,9 @@ try:
         projektwurzel_vorschlag,
         skill_ordner,
         skill_ordner_merken,
+        zusatzprojekt_entfernen,
+        zusatzprojekt_hinzufuegen,
+        zusatzprojekte_lesen,
     )
     from .sprache import (
         STUFEN,
@@ -94,6 +100,9 @@ except ImportError:
         projektwurzel_vorschlag,
         skill_ordner,
         skill_ordner_merken,
+        zusatzprojekt_entfernen,
+        zusatzprojekt_hinzufuegen,
+        zusatzprojekte_lesen,
     )
     from sprache import (
         STUFEN,
@@ -306,12 +315,13 @@ class EinstellungenFenster(QDialog):
         self._projekt_pfad = Path(projekt_pfad) if projekt_pfad else None
         self._skills: list[dict] = []
         self._verbrauchstage: list[tuple[str, int]] = []
+        self._zusatzprojekte: list[dict] = []
 
         self.setObjectName("einstellungen")
         self.setWindowTitle("CWB — Einstellungen")
         self.setAccessibleName("Einstellungen")
         self.setAccessibleDescription(
-            "Fünf Reiter: Sprache, Töne, Verhalten, Skills, Pfade. "
+            "Sechs Reiter: Sprache, Töne, Verhalten, Skills, Pfade, Projekte. "
             "Strg und Tabulator wechselt den Reiter, Escape schließt."
         )
 
@@ -373,7 +383,7 @@ class EinstellungenFenster(QDialog):
             "Strg und Tabulator wechselt den Reiter, Pfeiltasten ebenso"
         )
         # Rollpfeile fuer die Reiterleiste selbst bleiben aus, die braucht bei
-        # fuenf Reitern niemand; der Inhalt je Reiter rollt bei Bedarf ueber
+        # sechs Reitern niemand; der Inhalt je Reiter rollt bei Bedarf ueber
         # den Rollbereich aus `_reiterseite`.
         self.reiter.setUsesScrollButtons(False)
         self.reiter.tabBar().setAccessibleName("Reiter")
@@ -384,6 +394,7 @@ class EinstellungenFenster(QDialog):
         self.reiter.addTab(self._reiterseite(self._gruppe_verhalten()), "Verhalten")
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
         self.reiter.addTab(self._reiterseite(self._gruppe_pfade()), "Pfade")
+        self.reiter.addTab(self._reiterseite(self._gruppe_projekte()), "Projekte")
         self.reiter.currentChanged.connect(self._reiter_gewechselt)
         aufbau.addWidget(self.reiter, 1)
 
@@ -932,6 +943,153 @@ class EinstellungenFenster(QDialog):
             self.sprecher.sprich("Gemerkt, aber diese Datei gibt es nicht.")
             return
         self.sprecher.sprich("Memory Hub gemerkt.")
+
+    # -- Bereich Projekte -----------------------------------------------------
+
+    def _gruppe_projekte(self) -> Gruppe:
+        """Gepflegte Zusatzliste: Projekte, die nicht unter dem Projektordner
+        liegen und deshalb dort nicht von selbst auftauchen (core/sicherheit.py,
+        `projekte_finden`). Jeder Eintrag hat Ordner und frei waehlbaren
+        Anzeigenamen und erscheint ab dem naechsten Projektwechsel (F9)."""
+        gruppe = Gruppe(
+            "Projekte",
+            "Zusätzliche Projekte, die irgendwo liegen dürfen, nicht nur unter "
+            "dem Projektordner. Ordner wählen, Anzeigename eintragen, "
+            "hinzufügen — sichtbar ab dem nächsten Projektwechsel.",
+        )
+
+        self._zusatzprojekte = zusatzprojekte_lesen()
+
+        self.projekt_liste = QListWidget()
+        self.projekt_liste.setObjectName("projekteliste")
+        self.projekt_liste.setAccessibleName("Zusätzliche Projekte")
+        self.projekt_liste.setAccessibleDescription(
+            "Mit Pfeiltasten durchgehen; jeder Eintrag nennt Namen und Pfad"
+        )
+        self._projektliste_fuellen()
+        self.projekt_liste.currentRowChanged.connect(self._projekt_ansagen)
+        gruppe.feld(self.projekt_liste)
+
+        self.projekt_pfad_feld = QLineEdit()
+        self.projekt_pfad_feld.setObjectName("pfadfeld")
+        self.projekt_pfad_feld.setAccessibleName("Ordner des neuen Projekts")
+        self.projekt_pfad_feld.setAccessibleDescription(
+            "Wird über die Schaltfläche Ordner wählen gefüllt"
+        )
+        self.projekt_pfad_feld.setReadOnly(True)
+        gruppe.zeile("Ordner", self.projekt_pfad_feld)
+
+        ordner_waehlen = QPushButton("Ordner wählen …")
+        ordner_waehlen.setObjectName("probe")
+        ordner_waehlen.setAccessibleName("Ordner wählen")
+        ordner_waehlen.setAccessibleDescription(
+            "Öffnet die Ordnerauswahl für das neue Projekt"
+        )
+        ordner_waehlen.clicked.connect(self._projektordner_waehlen)
+        gruppe.feld(ordner_waehlen)
+
+        self.projekt_name_feld = QLineEdit()
+        self.projekt_name_feld.setObjectName("pfadfeld")
+        self.projekt_name_feld.setAccessibleName("Anzeigename")
+        self.projekt_name_feld.setAccessibleDescription(
+            "Name, unter dem das Projekt in der Projektwahl erscheint"
+        )
+        gruppe.zeile("Anzeigename", self.projekt_name_feld)
+
+        hinzufuegen = QPushButton("Hinzufügen")
+        hinzufuegen.setObjectName("probe")
+        hinzufuegen.setAccessibleName("Projekt hinzufügen")
+        hinzufuegen.setAccessibleDescription(
+            "Nimmt Ordner und Anzeigename in die Projektliste auf"
+        )
+        hinzufuegen.clicked.connect(self._projekt_hinzufuegen)
+        gruppe.feld(hinzufuegen)
+
+        entfernen = QPushButton("Entfernen")
+        entfernen.setObjectName("probe")
+        entfernen.setAccessibleName("Projekt entfernen")
+        entfernen.setAccessibleDescription(
+            "Entfernt das in der Liste gewählte Projekt"
+        )
+        entfernen.clicked.connect(self._projekt_entfernen)
+        gruppe.feld(entfernen)
+        return gruppe
+
+    def _projektliste_fuellen(self) -> None:
+        self.projekt_liste.clear()
+        if not self._zusatzprojekte:
+            eintrag = QListWidgetItem("Keine Zusatzprojekte eingetragen")
+            eintrag.setFlags(Qt.ItemIsEnabled)
+            self.projekt_liste.addItem(eintrag)
+            return
+        for projekt in self._zusatzprojekte:
+            self.projekt_liste.addItem(
+                QListWidgetItem(f"{projekt['name']} — {projekt['pfad']}")
+            )
+
+    def _projekt_ansagen(self, zeile: int) -> None:
+        if 0 <= zeile < len(self._zusatzprojekte):
+            projekt = self._zusatzprojekte[zeile]
+            self.sprecher.sprich(f"{projekt['name']}, {projekt['pfad']}.")
+
+    def _projektordner_waehlen(self) -> None:
+        start = self.projekt_pfad_feld.text().strip() or str(Path.home())
+        try:
+            gewaehlt = QFileDialog.getExistingDirectory(self, "Projektordner wählen", start)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Ordnerauswahl gescheitert: %s", fehler)
+            self.sprecher.sprich("Die Auswahl ließ sich nicht öffnen.")
+            return
+        if not gewaehlt:
+            self.sprecher.sprich("Nichts gewählt.")
+            return
+        self.projekt_pfad_feld.setText(str(Path(gewaehlt)))
+        if not self.projekt_name_feld.text().strip():
+            self.projekt_name_feld.setText(Path(gewaehlt).name)
+        self.sprecher.sprich(f"Ordner {Path(gewaehlt).name} gewählt.")
+
+    def _projekt_hinzufuegen(self) -> None:
+        pfad = self.projekt_pfad_feld.text().strip()
+        name = self.projekt_name_feld.text().strip()
+        if not pfad:
+            self.sprecher.sprich("Erst einen Ordner wählen.")
+            return
+        if not name:
+            self.sprecher.sprich("Der Anzeigename darf nicht leer bleiben.")
+            return
+        if not Path(pfad).is_dir():
+            log.warning("Zu übernehmender Projektordner gibt es nicht: %s", pfad)
+            self.sprecher.sprich("Diesen Ordner gibt es nicht.")
+            return
+        try:
+            zusatzprojekt_hinzufuegen(name, pfad)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zusatzprojekt nicht zu merken: %s", fehler)
+            self.sprecher.sprich("Das Projekt ließ sich nicht speichern.")
+            return
+        self._zusatzprojekte = zusatzprojekte_lesen()
+        self._projektliste_fuellen()
+        self.projekt_pfad_feld.clear()
+        self.projekt_name_feld.clear()
+        log.info("Zusatzprojekt hinzugefügt: %s (%s)", name, pfad)
+        self.sprecher.sprich(f"{name} hinzugefügt. Erscheint ab dem nächsten Projektwechsel.")
+
+    def _projekt_entfernen(self) -> None:
+        zeile = self.projekt_liste.currentRow()
+        if not (0 <= zeile < len(self._zusatzprojekte)):
+            self.sprecher.sprich("Kein Projekt gewählt.")
+            return
+        projekt = self._zusatzprojekte[zeile]
+        try:
+            zusatzprojekt_entfernen(projekt["name"])
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zusatzprojekt nicht zu entfernen: %s", fehler)
+            self.sprecher.sprich("Das Projekt ließ sich nicht entfernen.")
+            return
+        self._zusatzprojekte = zusatzprojekte_lesen()
+        self._projektliste_fuellen()
+        log.info("Zusatzprojekt entfernt: %s", projekt["name"])
+        self.sprecher.sprich(f"{projekt['name']} entfernt.")
 
     # -- Einstellungen lesen und schreiben ----------------------------------
 

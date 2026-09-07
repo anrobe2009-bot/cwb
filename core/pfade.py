@@ -66,6 +66,7 @@ PFADE_SCHLUESSEL = "pfade"
 PROJEKTWURZEL = "projektwurzel"
 SKILLS = "skills"
 MEMORY_HUB = "memory_hub"
+ZUSATZPROJEKTE_SCHLUESSEL = "zusatzprojekte"
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +191,55 @@ def hub_datenbank() -> Path | None:
 
 def hub_datenbank_merken(pfad: Path | str | None) -> None:
     pfad_merken(MEMORY_HUB, pfad)
+
+
+# -- Zusatzprojekte ----------------------------------------------------------
+# Projekte ausserhalb der Projektwurzel: von Hand eingetragen im Reiter
+# "Projekte" der Einstellungen, mit frei waehlbarem Anzeigenamen. Sie stehen
+# nicht unter "pfade", sondern als eigene Liste in einstellungen.json:
+#
+#   "zusatzprojekte": [
+#     {"name": "Lisa", "pfad": "E:/Sonstiges/lisa"}
+#   ]
+
+def zusatzprojekte_lesen() -> list[dict]:
+    """Die gepflegte Projektliste. Ungueltige Eintraege (ohne Name oder
+    Pfad) werden stillschweigend uebergangen."""
+    liste = einstellungen_lesen().get(ZUSATZPROJEKTE_SCHLUESSEL)
+    if not isinstance(liste, list):
+        return []
+    ergebnis = []
+    for eintrag in liste:
+        if not isinstance(eintrag, dict):
+            continue
+        name = str(eintrag.get("name", "")).strip()
+        pfad = str(eintrag.get("pfad", "")).strip()
+        if name and pfad:
+            ergebnis.append({"name": name, "pfad": pfad})
+    return ergebnis
+
+
+def zusatzprojekte_schreiben(liste: list[dict]) -> None:
+    werte = einstellungen_lesen()
+    werte[ZUSATZPROJEKTE_SCHLUESSEL] = liste
+    einstellungen_schreiben(werte)
+
+
+def zusatzprojekt_hinzufuegen(name: str, pfad: Path | str) -> None:
+    """Nimmt ein Projekt in die gepflegte Liste auf. Steht der Name schon
+    dort, wird der alte Eintrag ersetzt."""
+    name = name.strip()
+    pfad = str(Path(pfad))
+    liste = [e for e in zusatzprojekte_lesen() if e["name"] != name]
+    liste.append({"name": name, "pfad": pfad})
+    zusatzprojekte_schreiben(liste)
+    log.info("Zusatzprojekt gemerkt: %s = %s", name, pfad)
+
+
+def zusatzprojekt_entfernen(name: str) -> None:
+    liste = [e for e in zusatzprojekte_lesen() if e["name"] != name]
+    zusatzprojekte_schreiben(liste)
+    log.info("Zusatzprojekt entfernt: %s", name)
 
 
 # -- Zustand ----------------------------------------------------------------

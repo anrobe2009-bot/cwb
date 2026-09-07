@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from .pfade import log_einrichten, projektwurzel
+    from .pfade import log_einrichten, projektwurzel, zusatzprojekte_lesen
 except ImportError:
-    from pfade import log_einrichten, projektwurzel
+    from pfade import log_einrichten, projektwurzel, zusatzprojekte_lesen
 
 LOG_DATEI = Path(__file__).resolve().parent.parent / "cwb_fehler.log"
 
@@ -523,35 +523,50 @@ class Projekt:
 
 
 def projekte_finden(wurzel: Path | None = None) -> list[Projekt]:
-    """Liest die Auswahlliste fuer den Startdialog aus dem Wurzelordner.
+    """Liest die Auswahlliste fuer den Startdialog: alle Unterordner der
+    Projektwurzel, dazu die gepflegte Liste der Zusatzprojekte (Reiter
+    "Projekte" der Einstellungen) - die duerfen ueberall liegen, nicht nur
+    unter der Projektwurzel.
 
-    Ohne Angabe gilt der eingestellte Projektordner. Ist keiner eingestellt,
-    bleibt die Liste leer - der Start fragt dann danach."""
+    Ohne eingestellte oder vorhandene Projektwurzel liefert allein der
+    Ordnerscan nichts; Zusatzprojekte erscheinen trotzdem."""
     if wurzel is None:
         wurzel = projektwurzel()
-    if wurzel is None:
-        log.error("Keine Projektwurzel eingestellt")
-        return []
-    wurzel = Path(wurzel)
-    if not wurzel.is_dir():
-        log.error("Projektwurzel nicht gefunden: %s", wurzel)
-        return []
 
     gefunden: list[Projekt] = []
-    try:
-        for eintrag in sorted(wurzel.iterdir(), key=lambda p: p.name.lower()):
-            if not eintrag.is_dir():
-                continue
-            if eintrag.name in ORDNER_AUSSCHLUSS or eintrag.name.startswith("."):
-                continue
-            gefunden.append(
-                Projekt(eintrag.name, eintrag.resolve(), (eintrag / ".git").is_dir())
-            )
-    except OSError as fehler:
-        log.error("Projektliste nicht lesbar: %s", fehler)
-        return []
+    vorhandene_pfade: set[Path] = set()
 
-    log.info("%d Projekte gefunden in %s", len(gefunden), wurzel)
+    if wurzel is None:
+        log.info("Keine Projektwurzel eingestellt, nur Zusatzprojekte")
+    else:
+        wurzel = Path(wurzel)
+        if not wurzel.is_dir():
+            log.error("Projektwurzel nicht gefunden: %s", wurzel)
+        else:
+            try:
+                for eintrag in sorted(wurzel.iterdir(), key=lambda p: p.name.lower()):
+                    if not eintrag.is_dir():
+                        continue
+                    if eintrag.name in ORDNER_AUSSCHLUSS or eintrag.name.startswith("."):
+                        continue
+                    pfad = eintrag.resolve()
+                    gefunden.append(Projekt(eintrag.name, pfad, (eintrag / ".git").is_dir()))
+                    vorhandene_pfade.add(pfad)
+            except OSError as fehler:
+                log.error("Projektliste nicht lesbar: %s", fehler)
+
+    for zusatz in zusatzprojekte_lesen():
+        pfad = Path(zusatz["pfad"])
+        if not pfad.is_dir():
+            log.warning("Zusatzprojekt nicht gefunden: %s (%s)", zusatz["name"], pfad)
+            continue
+        pfad = pfad.resolve()
+        if pfad in vorhandene_pfade:
+            continue
+        gefunden.append(Projekt(zusatz["name"], pfad, (pfad / ".git").is_dir()))
+        vorhandene_pfade.add(pfad)
+
+    log.info("%d Projekte gefunden (Wurzel: %s)", len(gefunden), wurzel)
     return gefunden
 
 
