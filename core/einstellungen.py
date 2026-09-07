@@ -2,7 +2,8 @@
 CWB - Code Workbench
 Einstellungsseite (F12, Kachel "Einstellungen").
 
-Fuenf Reiter, jeder passt ohne Rollen auf eine Seite:
+Fuenf Reiter; passt der Inhalt eines Reiters nicht auf die Seite, wird
+dort gerollt statt abgeschnitten:
 
 - Sprache   Sprachausgabe in drei Stufen, Ausgabeweg, Stimme, Tempo,
             Probehoeren
@@ -36,7 +37,7 @@ from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTabBar,
@@ -324,12 +326,27 @@ class EinstellungenFenster(QDialog):
     # -- Aufbau -------------------------------------------------------------
 
     def _groesse_setzen(self, eltern) -> None:
-        """Groesse relativ zum Hauptfenster, damit nichts fest in Pixeln
-        haengt und die Seite auf jedem Bildschirm passt."""
-        if eltern is None:
+        """Groesse relativ zum Bildschirm, nicht in festen Pixeln: hoechstens
+        85 Prozent von Bildschirmbreite und -hoehe, egal wie gross das
+        Elternfenster oder die Systemschrift ist. Nach unten laesst sich das
+        Fenster deutlich weiter verkleinern, weil jeder Reiterinhalt in
+        einem Rollbereich liegt (siehe `_reiterseite`)."""
+        bildschirm = self.screen() or QGuiApplication.primaryScreen()
+        if bildschirm is None:
             return
+        verfuegbar = bildschirm.availableGeometry()
+        hoechstbreite = int(verfuegbar.width() * 0.85)
+        hoechsthoehe = int(verfuegbar.height() * 0.85)
         try:
-            self.resize(int(eltern.width() * 0.82), int(eltern.height() * 0.88))
+            self.setMaximumSize(hoechstbreite, hoechsthoehe)
+            self.setMinimumSize(
+                min(320, hoechstbreite), min(240, hoechsthoehe)
+            )
+            breite, hoehe = hoechstbreite, hoechsthoehe
+            if eltern is not None:
+                breite = min(int(eltern.width() * 0.82), hoechstbreite)
+                hoehe = min(int(eltern.height() * 0.88), hoechsthoehe)
+            self.resize(breite, hoehe)
         except Exception as fehler:  # noqa: BLE001
             log.warning("Fenstergröße nicht setzbar: %s", fehler)
 
@@ -355,8 +372,9 @@ class EinstellungenFenster(QDialog):
         self.reiter.setAccessibleDescription(
             "Strg und Tabulator wechselt den Reiter, Pfeiltasten ebenso"
         )
-        # Ohne Rollpfeile: jeder Reiter passt vollstaendig auf eine Seite,
-        # es wird nirgends mehr gerollt.
+        # Rollpfeile fuer die Reiterleiste selbst bleiben aus, die braucht bei
+        # fuenf Reitern niemand; der Inhalt je Reiter rollt bei Bedarf ueber
+        # den Rollbereich aus `_reiterseite`.
         self.reiter.setUsesScrollButtons(False)
         self.reiter.tabBar().setAccessibleName("Reiter")
         self.reiter.addTab(
@@ -382,16 +400,24 @@ class EinstellungenFenster(QDialog):
 
     @staticmethod
     def _reiterseite(*gruppen: "Gruppe") -> QWidget:
-        """Haengt eine oder mehrere Karten oben in eine Reiterseite. Die
-        Streckung darunter haelt den Inhalt oben, statt ihn ueber die Hoehe
-        zu zerren."""
+        """Haengt eine oder mehrere Karten oben in eine Reiterseite und legt
+        sie in einen Rollbereich. Die Streckung darunter haelt den Inhalt
+        oben, statt ihn ueber die Hoehe zu zerren; reicht die Fensterhoehe
+        nicht, wird gerollt statt abgeschnitten - so laesst sich das Fenster
+        auch deutlich kleiner ziehen, ohne dass etwas verschwindet."""
         seite = QWidget()
         seite.setObjectName("reiterseite")
         seitenaufbau = QVBoxLayout(seite)
         for gruppe in gruppen:
             seitenaufbau.addWidget(gruppe)
         seitenaufbau.addStretch(1)
-        return seite
+
+        rollbereich = QScrollArea()
+        rollbereich.setObjectName("reiterrollbereich")
+        rollbereich.setFrameShape(QFrame.NoFrame)
+        rollbereich.setWidgetResizable(True)
+        rollbereich.setWidget(seite)
+        return rollbereich
 
     def _reiterkuerzel_anlegen(self) -> None:
         """Strg+Tabulator vor, Strg+Umschalt+Tabulator zurueck. Die Pfeiltasten

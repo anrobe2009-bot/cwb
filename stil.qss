@@ -470,11 +470,12 @@ QPushButton#kopieren:focus {
 }
 
 /* --------------------------------------------------------------------
-   Einstellungsseite (F12): vier Reiter Sprache, Toene, Verhalten, Skills.
-   Je Reiter eine flache Karte, nichts wird gerollt. Schriftstufen:
-   Seitentitel 24pt, Reiter 17pt, Gruppentitel 19pt, Fliesstext 17pt,
-   Nebentext 14pt. Alle Abstaende sind Vielfache von 8px, alle Ecken haben
-   denselben Radius.
+   Einstellungsseite (F12): fuenf Reiter Sprache, Toene, Verhalten, Skills,
+   Pfade. Je Reiter eine oder mehrere flache Karten in einem Rollbereich -
+   reicht die Fensterhoehe nicht, wird dort gerollt statt abgeschnitten.
+   Schriftstufen: Seitentitel 24pt, Reiter 17pt, Gruppentitel 19pt,
+   Fliesstext 17pt, Nebentext 14pt. Alle Abstaende sind Vielfache von 8px,
+   alle Ecken haben denselben Radius.
    -------------------------------------------------------------------- */
 
 #einstellungen {
@@ -535,6 +536,15 @@ QPushButton#kopieren:focus {
 }
 
 #reiterseite {
+    background-color: #101216;
+}
+
+#reiterrollbereich {
+    background-color: #101216;
+    border: none;
+}
+
+#reiterrollbereich > QWidget {
     background-color: #101216;
 }
 
