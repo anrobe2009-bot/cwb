@@ -809,16 +809,17 @@ class Werkbank(QMainWindow):
     # -- Rückfrage ----------------------------------------------------------
 
     @slot_geschuetzt
-    def _frage(self, satz: str) -> None:
+    def _frage(self, satz: str, kurz_satz: str) -> None:
         self.frage_offen = True
         self._zustand_zeigen("wartet")
         self._status_zeigen(f"Rückfrage: {satz}   Eingabe = ja, Escape = nein")
         self._verlauf_anhaengen(
             f"{satz}\nEingabe = ja, Escape = nein", "frage"
         )
-        # Gesprochen wird nur der Kern der Rueckfrage. Der volle Wortlaut
-        # steht in der Statuszeile und im Ausgabefeld.
-        self.sprecher.melde("wartet", kurzfassen(satz), sprechen=True, art="meldung")
+        # Gesprochen wird ausschliesslich der fertig gekuerzte kurz_satz aus
+        # sitzung.py (Anlass ohne Befehl oder Pfad, hoechstens ein kurzer
+        # Satz). Der volle Wortlaut steht in Statuszeile und Ausgabefeld.
+        self.sprecher.melde("wartet", kurz_satz, sprechen=True, art="meldung")
 
     def _frage_beantworten(self, ja: bool) -> None:
         self.frage_offen = False

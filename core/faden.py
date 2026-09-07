@@ -36,7 +36,7 @@ class SitzungsFaden(QThread):
     ereignis_da = Signal(str, str, str, str, str, bool)
     text_da = Signal(str)
     fertig_da = Signal(dict)
-    frage_da = Signal(str)
+    frage_da = Signal(str, str)
     bereit_da = Signal()
     verbrauch_da = Signal(dict)
     # Die vom Abo wirklich waehlbaren Modelle, sobald die Verbindung steht
@@ -88,9 +88,9 @@ class SitzungsFaden(QThread):
 
     # -- innerhalb des Fadens ----------------------------------------------
 
-    async def _rueckfrage(self, satz: str) -> bool:
+    async def _rueckfrage(self, satz: str, kurz_satz: str) -> bool:
         self._antwort.clear()
-        self.frage_da.emit(satz)
+        self.frage_da.emit(satz, kurz_satz)
         await asyncio.get_running_loop().run_in_executor(None, self._antwort.wait)
         return self._antwort_wert
 

@@ -240,7 +240,7 @@ PROTOKOLL_ERGEBNIS_LAENGE = 300
 # Rueckrufe, die die Oberflaeche setzt
 EreignisRuf = Callable[[Ereignis], None]
 TextRuf = Callable[[str], None]
-FrageRuf = Callable[[str], Awaitable[bool]]
+FrageRuf = Callable[[str, str], Awaitable[bool]]
 VerbrauchRuf = Callable[[dict[str, int]], None]
 
 
@@ -466,7 +466,13 @@ class Sitzung:
     async def _frage(self, grund: str, detail: str) -> PermissionResultAllow | PermissionResultDeny:
         """Gesprochene Ein-Satz-Rueckfrage mit dem betroffenen Pfad oder Befehl.
         Ohne Rueckruf wird abgelehnt. Ergebnis-Ansagen bleiben kurz und ohne
-        Pfad; der volle Wortlaut geht ins Ausgabefeld, Protokoll und Log."""
+        Pfad; der volle Wortlaut geht ins Ausgabefeld, Protokoll und Log.
+
+        Gesprochen wird ausschliesslich `kurz_satz`, gebaut allein aus `grund`
+        (ein kurzer, fest formulierter Anlass wie "Node-Paket installieren
+        oder ausfuehren") - nie aus `ziel`, denn dort steht der Befehl oder
+        Pfad im vollen Wortlaut. Der volle Satz `satz` geht nur ins
+        Ausgabefeld, Protokoll und Log."""
         ziel = (detail or "").strip()
         mit_ziel = f"{grund}: {ziel}" if ziel else grund
         kurz_grund, _ = self._ablehnungssaetze(grund, ziel)
@@ -481,10 +487,11 @@ class Sitzung:
             return PermissionResultDeny(message=satz)
 
         satz = f"{mit_ziel}. Fortfahren?"
+        kurz_satz = f"{grund.strip()}. Fortfahren?"
         log.info("Rueckfrage: %s | Ziel: %s", grund, ziel or "(ohne Ziel)")
         self._melde(Zustand.WARTET, f"Rueckfrage: {kurz_grund}", f"Rueckfrage: {mit_ziel}", ziel)
         try:
-            erlaubt = await self.bei_rueckfrage(satz)
+            erlaubt = await self.bei_rueckfrage(satz, kurz_satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Rueckfrage gescheitert (%s): %s", mit_ziel, fehler)
             fehlersatz = f"Rueckfrage gescheitert: {mit_ziel}"
@@ -1007,7 +1014,7 @@ async def _selbsttest() -> None:
         return
     projekt = projekte[int(wahl) - 1]
 
-    async def frage(satz: str) -> bool:
+    async def frage(satz: str, kurz_satz: str) -> bool:
         return input(f"\n{satz} [j/n] ").strip().lower().startswith("j")
 
     sitzung = Sitzung(

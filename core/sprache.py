@@ -332,6 +332,12 @@ class Sprecher:
         # laeuft.
         self._letzter_weg = ""
         self._aktuell_sprechend = False
+        # Zaehlt hoch, sobald schweig() eine neue Ansage gegen die laufende
+        # durchsetzt. Ein Satz, dessen Erzeugung (Netzabruf bei Edge-TTS)
+        # noch laeuft, wenn schweig() schon einmal weiterzaehlt, wird beim
+        # Fertigwerden verworfen statt verspaetet und ueberlappend zu klingen.
+        self._sprech_generation = 0
+        self._generation_sperre = threading.Lock()
 
         if self.weg == "edge" and not self._edge_vorhanden():
             log.warning("Edge-TTS nicht vorhanden, weiche auf SAPI aus")
@@ -345,7 +351,7 @@ class Sprecher:
         except OSError as fehler:
             log.error("Stimmenordner nicht anlegbar: %s", fehler)
 
-        self._sprech_schlange: queue.Queue[str | None] = queue.Queue()
+        self._sprech_schlange: queue.Queue[tuple[int, str] | None] = queue.Queue()
         self._sprech_faden = threading.Thread(target=self._sprech_schleife, daemon=True)
         self._sprech_faden.start()
 
@@ -528,15 +534,19 @@ class Sprecher:
 
     def _sprech_schleife(self) -> None:
         while True:
-            text = self._sprech_schlange.get()
-            if text is None:
+            eintrag = self._sprech_schlange.get()
+            if eintrag is None:
                 return
+            generation, text = eintrag
+            if generation != self._sprech_generation:
+                # Schon vor dem Start durch eine neuere Ansage ueberholt.
+                continue
             try:
-                self._sprich_jetzt(text)
+                self._sprich_jetzt(generation, text)
             except Exception as fehler:  # noqa: BLE001
                 log.exception("Sprechen gescheitert: %s", fehler)
 
-    def _sprich_jetzt(self, text: str) -> None:
+    def _sprich_jetzt(self, generation: int, text: str) -> None:
         self._aktuell_sprechend = True
         try:
             if self.weg == "nvda" and self._nvda:
@@ -547,12 +557,20 @@ class Sprecher:
 
             if self.weg == "edge":
                 datei = self._pfad_fuer(text)
-                if datei.exists() or self._erzeugen(text, datei):
+                erzeugt = datei.exists() or self._erzeugen(text, datei)
+                if generation != self._sprech_generation:
+                    # Waehrend der Erzeugung (Netzabruf) kam eine neuere
+                    # Ansage dazwischen - jetzt noch abzuspielen wuerde sich
+                    # mit ihr ueberlagern, darum lieber schweigen.
+                    return
+                if erzeugt:
                     self._letzter_weg = "edge (mp3)"
                     self._abspieler.spiele(datei, warten=True)
                     return
                 log.warning("Für diesen Satz weiche ich auf SAPI aus")
 
+            if generation != self._sprech_generation:
+                return
             if self._sapi:
                 self._letzter_weg = "sapi"
                 self._sapi.Speak(text, 0)
@@ -583,10 +601,18 @@ class Sprecher:
         text = " ".join(text.split())
         if unterbrechen:
             self.schweig()
-        self._sprech_schlange.put(text)
+        with self._generation_sperre:
+            generation = self._sprech_generation
+        self._sprech_schlange.put((generation, text))
 
     def schweig(self) -> None:
         """Bricht laufende Sprachausgabe ab und leert die Warteschlange."""
+        # Erst hochzaehlen: jeder Satz, der schon in der Erzeugung steckt
+        # (Netzabruf bei Edge-TTS) oder noch in der Schlange wartet, traegt
+        # eine aeltere Generation und wird beim Fertigwerden verworfen statt
+        # sich mit der neuen Ansage zu ueberlagern.
+        with self._generation_sperre:
+            self._sprech_generation += 1
         # Damit sich am Log ablesen laesst, ob schweig() ueberhaupt ankommt
         # und ob die Ansage gerade wirklich ueber die MP3-Datei lief oder
         # mangels Netz stillschweigend auf SAPI auswich.
