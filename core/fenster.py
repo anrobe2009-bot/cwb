@@ -849,21 +849,29 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _ereignis(self, zustand: str, ansage: str, detail: str,
-                  pfad: str = "", taetigkeit: str = "") -> None:
+                  pfad: str = "", taetigkeit: str = "", ablehnung: bool = False) -> None:
         """Waehrend der Arbeit bleibt die Statusmeldung leer: die laufende
         Taetigkeit steht ausschliesslich in der Plakette neben 'Ausgabe',
         farblich passend zum Balken, die betroffene Datei im Feld daneben.
-        Die Statusmeldung zeigt nur Ergebnisse."""
+        Die Statusmeldung zeigt nur Ergebnisse.
+
+        Bei einer abgelehnten Aktion (ablehnung=True) ist ansage bewusst kurz
+        und ohne Pfad - das ist alles, was gesprochen und in der Statuszeile
+        angezeigt wird. Der volle Wortlaut mit Pfad steckt in detail und
+        kommt, rot markiert wie ein Fehler, ins Ausgabefeld."""
         self._zustand_zeigen(zustand)
         self._taetigkeit_zeigen(
             taetigkeit or ZUSTAND_TAETIGKEIT.get(zustand, ""), pfad
         )
-        if zustand == "fehler":
+        if ablehnung:
+            self._status_zeigen(ansage)
+            self._verlauf_anhaengen(detail or ansage, "fehler")
+        elif zustand == "fehler":
             self._status_zeigen(ansage)
             self._verlauf_anhaengen(ansage, "fehler")
         # Waehrend der Arbeit wird nichts gesprochen, nur der Ton wechselt.
-        # Fehler werden gesprochen, aber auf zwei Saetze gekuerzt.
-        gesprochen = kurzfassen(ansage) if zustand == "fehler" else ""
+        # Fehler und Ablehnungen werden gesprochen, aber auf zwei Saetze gekuerzt.
+        gesprochen = kurzfassen(ansage) if (zustand == "fehler" or ablehnung) else ""
         self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen),
                             art="meldung")
 

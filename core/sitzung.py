@@ -169,12 +169,15 @@ class Zustand(Enum):
 @dataclass
 class Ereignis:
     """Ein Schritt. ansage ist kurz und vorlesbar, detail nur auf Abruf.
-    pfad ist die Datei, um die es gerade geht - leer, wenn es keine gibt."""
+    pfad ist die Datei, um die es gerade geht - leer, wenn es keine gibt.
+    ablehnung markiert eine abgelehnte oder verweigerte Aktion: nur dann
+    kommt der volle Wortlaut (detail) ins Ausgabefeld."""
     zustand: Zustand
     ansage: str
     detail: str = ""
     pfad: str = ""
     taetigkeit: str = ""
+    ablehnung: bool = False
     zeitpunkt: datetime = field(default_factory=datetime.now)
 
     def zeile(self) -> str:
@@ -303,8 +306,8 @@ class Sitzung:
     # -- Ereignisse ---------------------------------------------------------
 
     def _melde(self, zustand: Zustand, ansage: str, detail: str = "",
-               pfad: str = "", taetigkeit: str = "") -> None:
-        ereignis = Ereignis(zustand, ansage, detail, pfad, taetigkeit)
+               pfad: str = "", taetigkeit: str = "", ablehnung: bool = False) -> None:
+        ereignis = Ereignis(zustand, ansage, detail, pfad, taetigkeit, ablehnung)
         self.schritte.append(ereignis)
         try:
             self.bei_ereignis(ereignis)
@@ -416,51 +419,89 @@ class Sitzung:
         except Exception as fehler:  # noqa: BLE001
             ziel = self._pfad_aus_eingabe(eingabe) or str(eingabe.get("command", "")) or name
             log.exception("Berechtigungspruefung gescheitert fuer %s: %s", ziel, fehler)
-            return PermissionResultDeny(
-                message=f"Pruefung gescheitert, sicherheitshalber abgelehnt: {ziel}"
+            kurz, satz = self._ablehnungssaetze(
+                "Pruefung gescheitert, sicherheitshalber abgelehnt", ziel
             )
+            self._melde(Zustand.FEHLER, kurz, satz, ziel, ablehnung=True)
+            return PermissionResultDeny(message=satz)
+
+    def _kurzes_ziel(self, ziel: str) -> str:
+        """Kurzform eines Ziels fuer die Ansage: bei Pfaden nur der Dateiname
+        ohne Ordner und Laufwerk, sonst das Ziel selbst, notfalls gekuerzt.
+        Der volle Pfad bleibt in Ausgabefeld, Protokoll und Log stehen."""
+        ziel = (ziel or "").strip()
+        if not ziel:
+            return ""
+        if "/" in ziel or "\\" in ziel:
+            name = Path(ziel).name
+            return f"Datei {name}" if name else ziel
+        if len(ziel) > 60:
+            return ziel[:60].rstrip() + " …"
+        return ziel
+
+    def _ablehnungssaetze(self, begruendung: str, ziel: str) -> tuple[str, str]:
+        """Baut aus Begruendung und Ziel zwei Saetze: einen kurzen ohne Pfad
+        fuer Ansage und Statuszeile, einen vollstaendigen mit Pfad fuer
+        Ausgabefeld, Protokoll und Log."""
+        ziel = (ziel or "").strip()
+        if not ziel or ziel in begruendung:
+            return begruendung, begruendung
+        kurzziel = self._kurzes_ziel(ziel)
+        trenner = ", " if kurzziel.startswith("Datei ") else ": "
+        return f"{begruendung}{trenner}{kurzziel}", f"{begruendung}: {ziel}"
 
     def _ablehnen(self, urteil: Urteil, ziel: str) -> PermissionResultDeny:
-        """Harte Ablehnung. Nennt das Ziel vollstaendig in Meldung, Ansage,
-        Protokoll und Log."""
+        """Harte Ablehnung. Der volle Wortlaut mit Pfad geht ins Ausgabefeld,
+        Protokoll und Log; gesprochen und in der Statuszeile steht nur ein
+        kurzer Satz ohne Pfad."""
         ziel = (ziel or "").strip()
-        if ziel and ziel not in urteil.begruendung:
-            satz = f"{urteil.begruendung}: {ziel}"
-        else:
-            satz = urteil.begruendung
+        kurz, satz = self._ablehnungssaetze(urteil.begruendung, ziel)
         log.warning("Abgelehnt: %s | Ziel: %s", urteil.begruendung, ziel or "(ohne Ziel)")
-        self._melde(Zustand.FEHLER, f"Abgelehnt: {satz}", ziel)
+        self._melde(Zustand.FEHLER, kurz, satz, ziel, ablehnung=True)
         self._protokoll_ablehnung_erfassen(ziel, urteil.begruendung)
         return PermissionResultDeny(message=satz)
 
     async def _frage(self, grund: str, detail: str) -> PermissionResultAllow | PermissionResultDeny:
         """Gesprochene Ein-Satz-Rueckfrage mit dem betroffenen Pfad oder Befehl.
-        Ohne Rueckruf wird abgelehnt."""
+        Ohne Rueckruf wird abgelehnt. Ergebnis-Ansagen bleiben kurz und ohne
+        Pfad; der volle Wortlaut geht ins Ausgabefeld, Protokoll und Log."""
         ziel = (detail or "").strip()
         mit_ziel = f"{grund}: {ziel}" if ziel else grund
+        kurz_grund, _ = self._ablehnungssaetze(grund, ziel)
 
         if self.bei_rueckfrage is None:
             log.warning("Keine Rueckfragestelle gesetzt, abgelehnt: %s", mit_ziel)
-            return PermissionResultDeny(
-                message=f"Keine Bestaetigung moeglich: {mit_ziel}"
+            satz = f"Keine Bestaetigung moeglich: {mit_ziel}"
+            self._melde(
+                Zustand.FEHLER, f"Keine Bestaetigung moeglich, {kurz_grund}", satz, ziel,
+                ablehnung=True,
             )
+            return PermissionResultDeny(message=satz)
 
         satz = f"{mit_ziel}. Fortfahren?"
         log.info("Rueckfrage: %s | Ziel: %s", grund, ziel or "(ohne Ziel)")
-        self._melde(Zustand.WARTET, f"Rueckfrage: {mit_ziel}", ziel)
+        self._melde(Zustand.WARTET, f"Rueckfrage: {kurz_grund}", f"Rueckfrage: {mit_ziel}", ziel)
         try:
             erlaubt = await self.bei_rueckfrage(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Rueckfrage gescheitert (%s): %s", mit_ziel, fehler)
-            return PermissionResultDeny(message=f"Rueckfrage gescheitert: {mit_ziel}")
+            fehlersatz = f"Rueckfrage gescheitert: {mit_ziel}"
+            self._melde(
+                Zustand.FEHLER, f"Rueckfrage gescheitert, {kurz_grund}", fehlersatz, ziel,
+                ablehnung=True,
+            )
+            return PermissionResultDeny(message=fehlersatz)
 
         if erlaubt:
             log.info("Freigegeben: %s", mit_ziel)
-            self._melde(Zustand.FUEHRT_AUS, f"Freigegeben: {mit_ziel}", ziel)
+            self._melde(Zustand.FUEHRT_AUS, f"Freigegeben: {kurz_grund}", f"Freigegeben: {mit_ziel}", ziel)
             self._protokoll_rueckfrage_erfassen(grund, ziel, True)
             return PermissionResultAllow()
         log.warning("Vom Nutzer abgelehnt: %s", mit_ziel)
-        self._melde(Zustand.ABGEBROCHEN, f"Abgelehnt: {mit_ziel}", ziel)
+        self._melde(
+            Zustand.ABGEBROCHEN, f"Abgelehnt: {kurz_grund}", f"Abgelehnt: {mit_ziel}", ziel,
+            ablehnung=True,
+        )
         self._protokoll_rueckfrage_erfassen(grund, ziel, False)
         return PermissionResultDeny(message=f"Vom Nutzer abgelehnt: {mit_ziel}")
 
