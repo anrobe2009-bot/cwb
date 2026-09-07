@@ -5,7 +5,8 @@ Kopfzeile des Ausgabefelds.
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
 Arbeit gehoert: die farbige Taetigkeitsplakette ganz links, den Namen
 der bearbeiteten Datei, die Zugriffsplakette mit dem geltenden Schreibrecht
-("Nur lesen" oder "Lesen und Schreiben"), die Warteanzeige mit der Zahl der
+("Nur lesen" oder "Lesen und Schreiben"), das Zeichen fuer aktive Rueckfrage-
+Ausnahmen (Internet, Loeschen im Projekt), die Warteanzeige mit der Zahl der
 vorgemerkten Auftraege (leer, solange keiner wartet), die Modellwahl, die drei
 Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
 der Reihenfolge "Auftrag", "Sitzung", "Heute" - gleiche Breite, gleiche
@@ -82,6 +83,11 @@ ZUGRIFF_BEISPIELE = (ZUGRIFF_NUR_LESEN, ZUGRIFF_SCHREIBEN)
 # keiner, bleibt das Feld leer - eine Null waere nur Laerm. Die Breite wird an
 # einer zweistelligen Zahl gemessen und aendert sich nie.
 WARTE_BEISPIELE = ("Warten 99",)
+
+# Zeichen fuer die beiden Rueckfrage-Ausnahmen (Einstellungen, Reiter
+# Verhalten). Bleibt leer, solange keine der beiden an ist - die Breite wird
+# am laengsten moeglichen Text gemessen, damit nichts in der Reihe springt.
+SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen",)
 
 # Beispielnamen fuer die feste Breite des Dateifeldes daneben. Das Feld zeigt
 # den Namen ungekuerzt, also muss es die langen Namen des Projekts tragen.
@@ -258,6 +264,16 @@ class Ausgabekopf(QWidget):
         self.zugriffsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.zugriffsplakette)
 
+        # Kleines Zeichen, solange mindestens einer der beiden Rueckfrage-
+        # Schalter aus den Einstellungen (Internet, Loeschen im Projekt) an
+        # ist. Ab Werk sind beide aus, das Feld bleibt dann leer.
+        self.sicherheitshinweis = Schrumpffeld("")
+        self.sicherheitshinweis.setObjectName("sicherheitshinweis")
+        self.sicherheitshinweis.setAccessibleName("Rückfrage-Ausnahmen")
+        self.sicherheitshinweis.setAlignment(Qt.AlignCenter)
+        self.sicherheitshinweis.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.sicherheitshinweis)
+
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
         # Normalfall ruhig bleibt. Geleert wird die Warteschlange mit F4.
@@ -374,6 +390,7 @@ class Ausgabekopf(QWidget):
                 (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
                 (self.dateianzeige, DATEI_BEISPIELE),
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
+                (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
@@ -489,6 +506,29 @@ class Ausgabekopf(QWidget):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zugriffsplakette nicht gesetzt: %s", fehler)
         self.status_zeichnen()
+
+    def sicherheitshinweis_setzen(
+        self, internet_ohne_rueckfrage: bool, loeschen_ohne_rueckfrage: bool
+    ) -> None:
+        """Zeigt ein kurzes Zeichen, solange mindestens einer der beiden
+        Rueckfrage-Schalter (Einstellungen, Reiter Verhalten) an ist. Sind
+        beide aus, bleibt das Feld leer."""
+        try:
+            teile = []
+            if internet_ohne_rueckfrage:
+                teile.append("Internet")
+            if loeschen_ohne_rueckfrage:
+                teile.append("Löschen")
+            if teile:
+                self.sicherheitshinweis.setText("⚠ " + " · ".join(teile))
+                satz = "Ohne Rückfrage erlaubt: " + " und ".join(teile) + "."
+            else:
+                self.sicherheitshinweis.setText("")
+                satz = "Keine Rückfrage-Ausnahme aktiv."
+            self.sicherheitshinweis.setToolTip(satz)
+            self.sicherheitshinweis.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Sicherheitshinweis nicht gesetzt: %s", fehler)
 
     def status_zeichnen(self) -> None:
         """Legt die gemerkte Meldung samt Nur-Lesen-Zustand als Beschreibung

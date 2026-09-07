@@ -9,7 +9,9 @@ dort gerollt statt abgeschnitten:
             Probehoeren
 - Toene     Hauptschalter und drei Gruppen, je mit Probehoeren
 - Verhalten Zwischenablage, Bericht, Mauszeiger-Ansage fuer das ganze
-  Fenster (core/zeigeransage.py), Tokenverbrauch je Tag
+  Fenster (core/zeigeransage.py), zwei Rueckfrage-Ausnahmen (Internet,
+  Loeschen im Projektordner - beide ab Werk aus, core/sicherheit.py
+  wertet sie aus, core/kopfzeile.py zeigt sie an), Tokenverbrauch je Tag
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
 - Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
             bei der Ersteinrichtung, jederzeit aenderbar
@@ -734,6 +736,24 @@ class EinstellungenFenster(QDialog):
             "Sagt jedes Bedien- und Anzeigefeld an, sobald der Mauszeiger kurz "
             "darauf ruht — im ganzen Fenster und auf dieser Seite.",
             bool(werte.get("mauszeiger_ansage", False)),
+        )
+        self.internet_ohne_rueckfrage = self._schalter(
+            gruppe,
+            "internet_ohne_rueckfrage",
+            "Internetzugriff ohne Rückfrage erlauben",
+            "Befehle und Werkzeuge, die ins Internet gehen (etwa curl, wget, "
+            "Websuche), laufen ohne Rückfrage. In der Kopfzeile erscheint "
+            "dafür ein Zeichen.",
+            bool(werte.get("internet_ohne_rueckfrage", False)),
+        )
+        self.loeschen_ohne_rueckfrage = self._schalter(
+            gruppe,
+            "loeschen_ohne_rueckfrage",
+            "Löschen ohne Rückfrage erlauben",
+            "Gilt nur für Löschbefehle innerhalb des Projektordners. "
+            "Außerhalb, bei Installationen, fremden Programmen und Git-Push "
+            "wird weiter gefragt. In der Kopfzeile erscheint dafür ein Zeichen.",
+            bool(werte.get("loeschen_ohne_rueckfrage", False)),
         )
 
         self._verbrauchsliste_anlegen(gruppe)

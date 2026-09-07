@@ -411,6 +411,8 @@ class Sitzung:
                     return await self._frage(urteil.begruendung, befehl)
 
             if name in NETZ_WERKZEUGE:
+                if self.wache.internet_frei():
+                    return PermissionResultAllow()
                 ziel = str(eingabe.get("url") or eingabe.get("query") or "")
                 return await self._frage("Zugriff auf das Internet", ziel)
 

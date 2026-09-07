@@ -403,6 +403,9 @@ class Werkbank(QMainWindow):
         # Schreibrecht von Anfang an sichtbar: Kachel und Kopfzeile nennen den
         # geltenden Zustand, nicht erst nach dem ersten Umschalten.
         self._zugriff_zeigen()
+        # Rueckfrage-Ausnahmen (Internet, Loeschen im Projekt) von Anfang an
+        # sichtbar - beide Schalter stehen ab Werk aus.
+        self._sicherheitshinweis_aktualisieren()
         # Die Warteanzeige steht von Anfang an richtig da: leer, mit
         # verständlicher Beschreibung für den Screenreader.
         self._warteschlange_zeigen()
@@ -670,6 +673,17 @@ class Werkbank(QMainWindow):
         self.kacheln.kachel_faerben(ZUGRIFF_KENNUNG, farbe)
         self.ausgabekopf.nur_lesen_setzen(self.nur_lesen)
 
+    def _sicherheitshinweis_aktualisieren(self) -> None:
+        """Liest die beiden Rueckfrage-Schalter aus den Einstellungen (Reiter
+        Verhalten) und zeigt in der Kopfzeile ein Zeichen, solange mindestens
+        einer an ist. Wird beim Start und nach jedem Schliessen der
+        Einstellungsseite aufgerufen."""
+        werte = einstellungen_lesen()
+        self.ausgabekopf.sicherheitshinweis_setzen(
+            bool(werte.get("internet_ohne_rueckfrage", False)),
+            bool(werte.get("loeschen_ohne_rueckfrage", False)),
+        )
+
     def _nur_lesen_umschalten(self) -> None:
         """Schaltet den Nur-Lesen-Modus um: Schreiben und Loeschen wird
         abgelehnt, Lesen und Suchen bleiben erlaubt."""
@@ -722,6 +736,7 @@ class Werkbank(QMainWindow):
             return
         self.sprecher.sprich("Einstellungen.")
         fenster.exec()
+        self._sicherheitshinweis_aktualisieren()
 
     def _wo_stehen_wir(self) -> None:
         if self.faden.sitzung:

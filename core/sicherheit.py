@@ -20,9 +20,19 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from .pfade import log_einrichten, projektwurzel, zusatzprojekte_lesen
+    from .pfade import (
+        einstellungen_lesen,
+        log_einrichten,
+        projektwurzel,
+        zusatzprojekte_lesen,
+    )
 except ImportError:
-    from pfade import log_einrichten, projektwurzel, zusatzprojekte_lesen
+    from pfade import (
+        einstellungen_lesen,
+        log_einrichten,
+        projektwurzel,
+        zusatzprojekte_lesen,
+    )
 
 LOG_DATEI = Path(__file__).resolve().parent.parent / "cwb_fehler.log"
 
@@ -158,8 +168,15 @@ BEFEHL_SCHREIBT = [
 # Werkzeuge, die im Nur-Lesen-Modus nie laufen duerfen.
 SCHREIB_WERKZEUGE = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
+# Begruendungen, auf die core/sicherheit.py und die beiden Rueckfrage-
+# Ausnahmen in den Einstellungen (Reiter Verhalten) sich gemeinsam beziehen -
+# als Konstante, damit ein spaeterer Umbau des Wortlauts die Ausnahme nicht
+# stillschweigend verfehlt.
+GRUND_LOESCHEN = "Loeschen von Dateien"
+GRUND_INTERNET = "Zugriff auf das Internet"
+
 BEFEHL_RUECKFRAGE = [
-    (r"\bremove-item\b|\bdel\b|\berase\b|\brmdir\b|\brd\b|\brm\b", "Loeschen von Dateien"),
+    (r"\bremove-item\b|\bdel\b|\berase\b|\brmdir\b|\brd\b|\brm\b", GRUND_LOESCHEN),
     (r"\bmove-item\b|\bmove\b|\bmv\b|\brename-item\b|\bren\b", "Verschieben oder Umbenennen"),
     (r"\bgit\s+push\b", "Hochladen zu GitHub"),
     (r"\bgit\s+reset\s+--hard\b|\bgit\s+clean\b", "Verwerfen lokaler Aenderungen"),
@@ -167,7 +184,7 @@ BEFEHL_RUECKFRAGE = [
     (r"\bpip\s+(install|uninstall)\b|\bpip3\s+(install|uninstall)\b", "Python-Paket installieren oder entfernen"),
     (r"\bnpm\s+(install|uninstall|update)\b|\bnpx\b|\byarn\b|\bpnpm\b", "Node-Paket installieren oder ausfuehren"),
     (r"\bwinget\b|\bchoco\b|\bscoop\b", "Programminstallation"),
-    (r"\bcurl\b|\bwget\b|\binvoke-webrequest\b|\biwr\b|\binvoke-restmethod\b", "Zugriff auf das Internet"),
+    (r"\bcurl\b|\bwget\b|\binvoke-webrequest\b|\biwr\b|\binvoke-restmethod\b", GRUND_INTERNET),
     (r"\bstart-process\b|\bstart\b\s+\S+\.(exe|msi|bat|cmd)", "Starten eines fremden Programms"),
     (r"\bset-executionpolicy\b", "Aenderung der Ausfuehrungsrichtlinie"),
     (r"\bschtasks\b|\bnew-scheduledtask\b", "Aufgabenplanung aendern"),
@@ -264,6 +281,27 @@ class Ordnergrenze:
             )
 
         return Urteil(Stufe.FREI, "Pfad liegt im Projekt", str(kandidat))
+
+    def loeschziel_im_projekt(self, befehl: str) -> bool:
+        """Wahr, nur wenn jedes erkennbare Ziel eines Loeschbefehls sicher
+        innerhalb des Projektordners liegt. Bei jeder Unsicherheit -
+        Platzhalter, Aufstieg per '..', ein Ziel ausserhalb - bleibt es bei
+        der Rueckfrage, statt zu raten."""
+        if re.search(r"\*|\.\.[\\/]|~", befehl):
+            return False
+        ziele = [t.strip("\"'") for t in befehl.split()[1:] if not t.startswith("-")]
+        if not ziele:
+            return False
+        for ziel in ziele:
+            try:
+                kandidat = Path(ziel)
+                if not kandidat.is_absolute():
+                    kandidat = self.projekt / kandidat
+                kandidat = kandidat.resolve()
+                kandidat.relative_to(self.projekt)
+            except (OSError, ValueError):
+                return False
+        return True
 
     def pruefe_befehl(self, befehl: str) -> Urteil:
         """Ordnet einen Shell-Befehl einer Stufe zu."""
@@ -639,7 +677,31 @@ class Wache:
             if grund:
                 log.warning("Nur-Lesen-Modus: Befehl abgelehnt (%s): %s", grund, befehl)
                 return Urteil(Stufe.VERBOTEN, f"Nur lesen ist an, {grund} ist gesperrt", befehl)
-        return self.grenze.pruefe_befehl(befehl)
+
+        urteil = self.grenze.pruefe_befehl(befehl)
+        if urteil.stufe is not Stufe.RUECKFRAGE:
+            return urteil
+
+        werte = einstellungen_lesen()
+        if urteil.begruendung == GRUND_INTERNET and werte.get("internet_ohne_rueckfrage", False):
+            log.info("Internetzugriff ohne Rueckfrage erlaubt: %s", befehl)
+            return Urteil(Stufe.FREI, "Internetzugriff ohne Rueckfrage erlaubt", befehl)
+
+        if (
+            urteil.begruendung == GRUND_LOESCHEN
+            and werte.get("loeschen_ohne_rueckfrage", False)
+            and self.grenze.loeschziel_im_projekt(befehl)
+        ):
+            log.info("Loeschen ohne Rueckfrage erlaubt (Projektordner): %s", befehl)
+            return Urteil(Stufe.FREI, "Loeschen ohne Rueckfrage erlaubt (Projektordner)", befehl)
+
+        return urteil
+
+    def internet_frei(self) -> bool:
+        """Wahr, wenn der Schalter 'Internetzugriff ohne Rueckfrage erlauben'
+        an ist (Einstellungen, Reiter Verhalten). Fuer Werkzeuge wie
+        WebFetch und WebSearch, die keinen Shell-Befehl durchlaufen."""
+        return bool(einstellungen_lesen().get("internet_ohne_rueckfrage", False))
 
 
 # ---------------------------------------------------------------------------
