@@ -43,8 +43,8 @@ QToolTip {
    -------------------------------------------------------------------- */
 
 #balken {
-    min-height: 26px;
-    max-height: 26px;
+    min-height: 64px;
+    max-height: 64px;
     border: 2px solid #0b0d10;
     border-radius: 6px;
     background-color: #4a5160;
@@ -74,6 +74,19 @@ QToolTip {
     );
     border: none;
 }
+
+/* Text im Aktivitaetsbalken: Taetigkeit und Dateiname, gross und fett.
+   Dunkle Schrift, weil fast alle Zustandsfarben hell sind; nur bei Fehler
+   (kraeftiges Rot) wird sie hell. */
+#balkentext {
+    background-color: transparent;
+    color: #101216;
+    font-size: 22pt;
+    font-weight: bold;
+    border: none;
+}
+
+#balkentext[zustand="fehler"] { color: #ffffff; }
 
 /* Verstrichene Zeit neben dem Balken */
 #zeitanzeige {
@@ -134,33 +147,6 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* Taetigkeitsplakette am linken Rand der Kopfzeile. Dieselben Farben wie der Balken
-   oben, damit Farbe und Wort dasselbe sagen. Dunkle Schrift, weil alle
-   Zustandsfarben hell sind. */
-#taetigkeitsplakette {
-    color: #101216;
-    background-color: #3fa9f5;
-    font-size: 13pt;
-    font-weight: bold;
-    padding: 0.25em 0.9em;
-    border: 2px solid #0b0d11;
-    border-radius: 6px;
-}
-
-#taetigkeitsplakette[zustand="bereit"]      { background-color: #3fa9f5; }
-#taetigkeitsplakette[zustand="schaerft"]    { background-color: #9b6bff; }
-#taetigkeitsplakette[zustand="denkt"]       { background-color: #00c2b2; }
-#taetigkeitsplakette[zustand="liest"]       { background-color: #4dd964; }
-#taetigkeitsplakette[zustand="sucht"]       { background-color: #b5e61d; }
-#taetigkeitsplakette[zustand="schreibt"]    { background-color: #ffcc33; }
-#taetigkeitsplakette[zustand="fuehrt_aus"]  { background-color: #ff8a1f; }
-#taetigkeitsplakette[zustand="netz"]        { background-color: #00d0ff; }
-#taetigkeitsplakette[zustand="wartet"]      { background-color: #ff4fd8; }
-#taetigkeitsplakette[zustand="fertig"]      { background-color: #ffffff; }
-#taetigkeitsplakette[zustand="abgebrochen"] { background-color: #8892a4; }
-#taetigkeitsplakette[zustand="fehler"]      { background-color: #ff2d2d;
-                                              color: #ffffff; }
-
 /* Zugriffsplakette: nennt dauerhaft das geltende Schreibrecht. Zwei klar
    verschiedene Farben, damit der Zustand schon am Farbfleck erkennbar ist -
    ruhiges Gruen fuer "Lesen und Schreiben", warnendes Bernstein mit
@@ -184,19 +170,6 @@ QToolTip {
 #zugriffsplakette[modus="nur_lesen"] {
     background-color: #ffb020;
     border: 3px solid #7a4600;
-}
-
-/* Feld neben der Plakette: allein der Name der Datei, an der gerade
-   gearbeitet wird - ohne Pfad, ohne Verb. Ist keine Datei betroffen,
-   bleibt es leer. Ruhige Farbe, damit die Plakette daneben fuehrt;
-   Breite und Hoehe legt das Python fest, sie aendern sich nie. */
-#dateianzeige {
-    background-color: #171b22;
-    color: #d8e2f0;
-    font-size: 13pt;
-    padding: 0.25em 0.9em;
-    border: 2px solid #333a47;
-    border-radius: 6px;
 }
 
 /* Warteanzeige: wie viele Auftraege hinter dem laufenden stehen. Sie faellt
@@ -268,7 +241,7 @@ QPushButton#kopieren:focus {
 /* --------------------------------------------------------------------
    Verlauf und Eingabefeld.
    Das Ausgabefeld bekommt den ganzen uebrigen Platz (Streckung in
-   fenster.py), das Eingabefeld bleibt bei rund drei Zeilen.
+   fenster.py), das Eingabefeld bleibt flach bei rund anderthalb Zeilen.
    -------------------------------------------------------------------- */
 
 #verlauf, #eingabe {
@@ -297,8 +270,8 @@ QPushButton#kopieren:focus {
 #eingabe {
     background-color: #151922;
     color: #ffffff;
-    min-height: 4.4em;
-    max-height: 4.4em;
+    min-height: 2.2em;
+    max-height: 2.2em;
 }
 
 #verlauf:focus, #eingabe:focus {

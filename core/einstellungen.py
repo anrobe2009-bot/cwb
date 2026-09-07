@@ -9,9 +9,10 @@ dort gerollt statt abgeschnitten:
             Probehoeren
 - Toene     Hauptschalter und drei Gruppen, je mit Probehoeren
 - Verhalten Zwischenablage, Bericht, Mauszeiger-Ansage fuer das ganze
-  Fenster (core/zeigeransage.py), zwei Rueckfrage-Ausnahmen (Internet,
-  Loeschen im Projektordner - beide ab Werk aus, core/sicherheit.py
-  wertet sie aus, core/kopfzeile.py zeigt sie an), Tokenverbrauch je Tag
+  Fenster (core/zeigeransage.py), drei Rueckfrage-Ausnahmen (Internet,
+  Loeschen im Projektordner, Installieren - alle drei ab Werk aus,
+  core/sicherheit.py wertet sie aus, core/kopfzeile.py zeigt sie an),
+  Tokenverbrauch je Tag
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
 - Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
             bei der Ersteinrichtung, jederzeit aenderbar
@@ -754,6 +755,16 @@ class EinstellungenFenster(QDialog):
             "Außerhalb, bei Installationen, fremden Programmen und Git-Push "
             "wird weiter gefragt. In der Kopfzeile erscheint dafür ein Zeichen.",
             bool(werte.get("loeschen_ohne_rueckfrage", False)),
+        )
+        self.installieren_ohne_rueckfrage = self._schalter(
+            gruppe,
+            "installieren_ohne_rueckfrage",
+            "Installieren ohne Rückfrage erlauben",
+            "Pip, npm und ähnliche Installationen laufen ohne Rückfrage, "
+            "auch außerhalb des Projekts. Löschen außerhalb des Projekts, "
+            "fremde Programme starten und Git-Push wird weiter gefragt. "
+            "In der Kopfzeile erscheint dafür ein Zeichen.",
+            bool(werte.get("installieren_ohne_rueckfrage", False)),
         )
 
         self._verbrauchsliste_anlegen(gruppe)

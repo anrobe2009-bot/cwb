@@ -3,16 +3,18 @@ CWB - Code Workbench
 Kopfzeile des Ausgabefelds.
 
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
-Arbeit gehoert: die farbige Taetigkeitsplakette ganz links, den Namen
-der bearbeiteten Datei, die Zugriffsplakette mit dem geltenden Schreibrecht
+Arbeit gehoert: die Zugriffsplakette mit dem geltenden Schreibrecht
 ("Nur lesen" oder "Lesen und Schreiben"), das Zeichen fuer aktive Rueckfrage-
-Ausnahmen (Internet, Loeschen im Projekt), die Warteanzeige mit der Zahl der
-vorgemerkten Auftraege (leer, solange keiner wartet), die Modellwahl, die drei
-Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen unmittelbar nebeneinander in
-der Reihenfolge "Auftrag", "Sitzung", "Heute" - gleiche Breite, gleiche
-Gestalt, ohne Zwischenraum. Ein eigenes Feld
-fuer die Statusmeldung gibt es nicht mehr; die Meldung wird gesprochen und
-steht als Beschreibung an der Kopfzeile selbst.
+Ausnahmen (Internet, Loeschen im Projekt, Installieren), die Warteanzeige mit
+der Zahl der vorgemerkten Auftraege (leer, solange keiner wartet), die
+Modellwahl, die drei Tokenzaehler und die Schaltflaeche zum Kopieren. Die
+Zaehler stehen unmittelbar nebeneinander in der Reihenfolge "Auftrag",
+"Sitzung", "Heute" - gleiche Breite, gleiche Gestalt, ohne Zwischenraum. Ein
+eigenes Feld fuer die Statusmeldung gibt es nicht mehr; die Meldung wird
+gesprochen und steht als Beschreibung an der Kopfzeile selbst.
+
+Taetigkeit und bearbeitete Datei stehen nicht mehr hier, sondern gross und
+fett direkt im Aktivitaetsbalken oben (core/fenster.py, Aktivitaetsbalken).
 
 Das Modellfeld ist keine feste Anzeige, sondern ein Auswahlfeld: mit Tabulator
 erreichbar, mit den Pfeiltasten zu wechseln. Welche Modelle darin stehen, sagt
@@ -30,7 +32,6 @@ Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 """
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
@@ -49,11 +50,8 @@ except ImportError:
 
 log = logging.getLogger("cwb.kopfzeile")
 
-# Aufschrift der Taetigkeitsplakette, solange noch nichts getan wurde
-KEINE_TAETIGKEIT = "—"
-
-# Taetigkeit je Zustand, falls die Sitzung keine eigene mitschickt. In der
-# Plakette steht immer nur das Tun, nie ein Dateiname oder Pfad.
+# Taetigkeit je Zustand, falls die Sitzung keine eigene mitschickt. Steht im
+# Aktivitaetsbalken (core/fenster.py), nie ein Dateiname oder Pfad.
 ZUSTAND_TAETIGKEIT = {
     "bereit": "wartet",
     "schaerft": "denkt",
@@ -69,10 +67,6 @@ ZUSTAND_TAETIGKEIT = {
     "fehler": "Fehler",
 }
 
-# Beispielwoerter, aus denen die feste Breite der Plakette gemessen wird.
-# Sie muss das laengste Wort tragen, damit die Breite nie springt.
-TAETIGKEIT_BEISPIELE = ("führt aus", "abgebrochen", "verbindet")
-
 # Aufschrift der Zugriffsplakette. Sie nennt dauerhaft den geltenden Zustand,
 # nie eine Aufforderung - man soll ablesen koennen, was gerade gilt.
 ZUGRIFF_NUR_LESEN = "Nur lesen"
@@ -84,14 +78,10 @@ ZUGRIFF_BEISPIELE = (ZUGRIFF_NUR_LESEN, ZUGRIFF_SCHREIBEN)
 # einer zweistelligen Zahl gemessen und aendert sich nie.
 WARTE_BEISPIELE = ("Warten 99",)
 
-# Zeichen fuer die beiden Rueckfrage-Ausnahmen (Einstellungen, Reiter
-# Verhalten). Bleibt leer, solange keine der beiden an ist - die Breite wird
+# Zeichen fuer die drei Rueckfrage-Ausnahmen (Einstellungen, Reiter
+# Verhalten). Bleibt leer, solange keine der drei an ist - die Breite wird
 # am laengsten moeglichen Text gemessen, damit nichts in der Reihe springt.
-SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen",)
-
-# Beispielnamen fuer die feste Breite des Dateifeldes daneben. Das Feld zeigt
-# den Namen ungekuerzt, also muss es die langen Namen des Projekts tragen.
-DATEI_BEISPIELE = ("ablagewaechter.py", "einstellungen.json", "projektwahl.py")
+SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen · Installieren",)
 
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
@@ -228,31 +218,9 @@ class Ausgabekopf(QWidget):
         quer = QHBoxLayout(self)
         quer.setContentsMargins(0, 0, 0, 0)
 
-        # Die Zeile beginnt unmittelbar mit der Plakette. Das Wort "Ausgabe"
-        # stand frueher davor, sagte nichts aus und wurde bei schmalem Fenster
-        # ohnehin zu "Ausga…" gekuerzt.
-        # Farbige Plakette ganz links: ausschliesslich die Taetigkeit -
-        # denkt, liest, schreibt, führt aus, sucht, wartet. Kein Dateiname,
-        # kein Pfad. Die Farbe ist dieselbe wie die des Balkens oben.
-        self.taetigkeitsplakette = Schrumpffeld(KEINE_TAETIGKEIT)
-        self.taetigkeitsplakette.setObjectName("taetigkeitsplakette")
-        self.taetigkeitsplakette.setProperty("zustand", "bereit")
-        self.taetigkeitsplakette.setAccessibleName("Aktuelle Tätigkeit")
-        self.taetigkeitsplakette.setAlignment(Qt.AlignCenter)
-        self.taetigkeitsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        quer.addWidget(self.taetigkeitsplakette)
-
-        # Feld daneben: ausschliesslich der Name der Datei, an der gerade
-        # gearbeitet wird - ohne Pfad, ohne Verb und ungekuerzt. Ist keine
-        # Datei betroffen, bleibt es leer. Die Breite ist an den langen Namen
-        # des Projekts gemessen und aendert sich nie.
-        self.dateianzeige = Schrumpffeld("")
-        self.dateianzeige.setObjectName("dateianzeige")
-        self.dateianzeige.setAccessibleName("Bearbeitete Datei")
-        self.dateianzeige.setAlignment(Qt.AlignCenter)
-        self.dateianzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        quer.addWidget(self.dateianzeige)
-
+        # Die Zeile beginnt unmittelbar mit der Zugriffsplakette. Taetigkeit
+        # und bearbeitete Datei stehen seitdem gross im Aktivitaetsbalken
+        # oben (core/fenster.py), nicht mehr hier.
         # Zugriffsplakette: nennt dauerhaft, was gerade gilt - "Nur lesen"
         # oder "Lesen und Schreiben". Die Farbe kommt aus stil.qss und haengt
         # am Attribut 'modus', damit der Zustand auch ohne Lesen auffaellt.
@@ -264,9 +232,10 @@ class Ausgabekopf(QWidget):
         self.zugriffsplakette.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.zugriffsplakette)
 
-        # Kleines Zeichen, solange mindestens einer der beiden Rueckfrage-
-        # Schalter aus den Einstellungen (Internet, Loeschen im Projekt) an
-        # ist. Ab Werk sind beide aus, das Feld bleibt dann leer.
+        # Kleines Zeichen, solange mindestens einer der drei Rueckfrage-
+        # Schalter aus den Einstellungen (Internet, Loeschen im Projekt,
+        # Installieren) an ist. Ab Werk sind alle drei aus, das Feld bleibt
+        # dann leer.
         self.sicherheitshinweis = Schrumpffeld("")
         self.sicherheitshinweis.setObjectName("sicherheitshinweis")
         self.sicherheitshinweis.setAccessibleName("Rückfrage-Ausnahmen")
@@ -284,8 +253,9 @@ class Ausgabekopf(QWidget):
         self.warteanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.warteanzeige)
 
-        # Der freie Platz liegt in der Mitte: dadurch stehen Datei links und
-        # die drei Zahlenfelder rechts, ohne dass eines von ihnen waechst.
+        # Der freie Platz liegt in der Mitte: dadurch stehen Zugriff, Hinweis
+        # und Warteanzeige links, Modellwahl und Zaehler rechts, ohne dass
+        # eines der Felder waechst.
         quer.addStretch(1)
 
         # Modellwahl: anklickbar und mit der Tastatur bedienbar. Mit Tabulator
@@ -387,8 +357,6 @@ class Ausgabekopf(QWidget):
         als die Kopfzeile breit ist."""
         try:
             felder = (
-                (self.taetigkeitsplakette, TAETIGKEIT_BEISPIELE),
-                (self.dateianzeige, DATEI_BEISPIELE),
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
                 (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
@@ -424,32 +392,6 @@ class Ausgabekopf(QWidget):
             self.modellwahl.setFixedHeight(hoehe)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Maße der Kopfzeile nicht festgelegt: %s", fehler)
-
-    # -- Tätigkeit und Datei ------------------------------------------------
-
-    def zustand_setzen(self, zustand: str) -> None:
-        """Faerbt die Plakette wie den Balken oben. Die Farben stehen in
-        stil.qss und haengen am Attribut 'zustand'."""
-        self.taetigkeitsplakette.setProperty("zustand", zustand)
-        self.taetigkeitsplakette.style().polish(self.taetigkeitsplakette)
-        self.taetigkeitsplakette.update()
-
-    def taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
-        """Fuellt die beiden Felder: die farbige Plakette traegt allein die
-        Taetigkeit ('liest'), das Feld daneben allein den Dateinamen ohne Pfad
-        und ungekuerzt ('ablagewaechter.py'). Ohne betroffene Datei bleibt es
-        leer. Die Anzeige bleibt nach dem Auftrag beim letzten Schritt stehen."""
-        try:
-            self.taetigkeitsplakette.setText(taetigkeit or KEINE_TAETIGKEIT)
-            self.taetigkeitsplakette.setAccessibleDescription(
-                taetigkeit or "keine Tätigkeit"
-            )
-            name = Path(pfad).name if pfad else ""
-            self.dateianzeige.setText(name)
-            self.dateianzeige.setToolTip(pfad)
-            self.dateianzeige.setAccessibleDescription(name or "keine Datei")
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Tätigkeitsanzeige nicht gesetzt: %s", fehler)
 
     # -- Warteschlange ------------------------------------------------------
 
@@ -508,17 +450,22 @@ class Ausgabekopf(QWidget):
         self.status_zeichnen()
 
     def sicherheitshinweis_setzen(
-        self, internet_ohne_rueckfrage: bool, loeschen_ohne_rueckfrage: bool
+        self,
+        internet_ohne_rueckfrage: bool,
+        loeschen_ohne_rueckfrage: bool,
+        installieren_ohne_rueckfrage: bool = False,
     ) -> None:
-        """Zeigt ein kurzes Zeichen, solange mindestens einer der beiden
+        """Zeigt ein kurzes Zeichen, solange mindestens einer der drei
         Rueckfrage-Schalter (Einstellungen, Reiter Verhalten) an ist. Sind
-        beide aus, bleibt das Feld leer."""
+        alle drei aus, bleibt das Feld leer."""
         try:
             teile = []
             if internet_ohne_rueckfrage:
                 teile.append("Internet")
             if loeschen_ohne_rueckfrage:
                 teile.append("Löschen")
+            if installieren_ohne_rueckfrage:
+                teile.append("Installieren")
             if teile:
                 self.sicherheitshinweis.setText("⚠ " + " · ".join(teile))
                 satz = "Ohne Rückfrage erlaubt: " + " und ".join(teile) + "."

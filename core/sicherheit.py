@@ -185,6 +185,18 @@ SCHREIB_WERKZEUGE = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 # stillschweigend verfehlt.
 GRUND_LOESCHEN = "Loeschen von Dateien"
 GRUND_INTERNET = "Zugriff auf das Internet"
+GRUND_INSTALLIEREN_PIP = "Python-Paket installieren oder entfernen"
+GRUND_INSTALLIEREN_NODE = "Node-Paket installieren oder ausfuehren"
+GRUND_INSTALLIEREN_PROGRAMM = "Programminstallation"
+
+# Begruendungen, bei denen der Schalter "Installieren ohne Rueckfrage
+# erlauben" (Einstellungen, Reiter Verhalten) greift - unabhaengig davon,
+# ob das Ziel im Projektordner liegt.
+GRUENDE_INSTALLIEREN = {
+    GRUND_INSTALLIEREN_PIP,
+    GRUND_INSTALLIEREN_NODE,
+    GRUND_INSTALLIEREN_PROGRAMM,
+}
 
 BEFEHL_RUECKFRAGE = [
     (r"\bremove-item\b|\bdel\b|\berase\b|\brmdir\b|\brd\b|\brm\b", GRUND_LOESCHEN),
@@ -192,9 +204,9 @@ BEFEHL_RUECKFRAGE = [
     (r"\bgit\s+push\b", "Hochladen zu GitHub"),
     (r"\bgit\s+reset\s+--hard\b|\bgit\s+clean\b", "Verwerfen lokaler Aenderungen"),
     (r"\bgit\s+checkout\b|\bgit\s+switch\b", "Wechsel des Git-Standes"),
-    (r"\bpip\s+(install|uninstall)\b|\bpip3\s+(install|uninstall)\b", "Python-Paket installieren oder entfernen"),
-    (r"\bnpm\s+(install|uninstall|update)\b|\bnpx\b|\byarn\b|\bpnpm\b", "Node-Paket installieren oder ausfuehren"),
-    (r"\bwinget\b|\bchoco\b|\bscoop\b", "Programminstallation"),
+    (r"\bpip\s+(install|uninstall)\b|\bpip3\s+(install|uninstall)\b", GRUND_INSTALLIEREN_PIP),
+    (r"\bnpm\s+(install|uninstall|update)\b|\bnpx\b|\byarn\b|\bpnpm\b", GRUND_INSTALLIEREN_NODE),
+    (r"\bwinget\b|\bchoco\b|\bscoop\b", GRUND_INSTALLIEREN_PROGRAMM),
     (r"\bcurl\b|\bwget\b|\binvoke-webrequest\b|\biwr\b|\binvoke-restmethod\b", GRUND_INTERNET),
     (r"\bstart-process\b|\bstart\b\s+\S+\.(exe|msi|bat|cmd)", "Starten eines fremden Programms"),
     (r"\bset-executionpolicy\b", "Aenderung der Ausfuehrungsrichtlinie"),
@@ -589,48 +601,53 @@ class Projekt:
 
 
 def projekte_finden(wurzel: Path | None = None) -> list[Projekt]:
-    """Liest die Auswahlliste fuer den Startdialog: alle Unterordner der
-    Projektwurzel, dazu die gepflegte Liste der Zusatzprojekte (Reiter
-    "Projekte" der Einstellungen) - die duerfen ueberall liegen, nicht nur
-    unter der Projektwurzel.
+    """Liest die Auswahlliste fuer den Startdialog.
 
-    Ohne eingestellte oder vorhandene Projektwurzel liefert allein der
-    Ordnerscan nichts; Zusatzprojekte erscheinen trotzdem."""
-    if wurzel is None:
-        wurzel = projektwurzel()
-
+    Ist mindestens ein Zusatzprojekt eingetragen (Reiter "Projekte" der
+    Einstellungen), erscheinen ausschliesslich diese - der Projektordner wird
+    dann nicht durchsucht. Nur bei leerer Zusatzliste schlaegt CWB stattdessen
+    alle Unterordner der Projektwurzel vor."""
     gefunden: list[Projekt] = []
     vorhandene_pfade: set[Path] = set()
 
-    if wurzel is None:
-        log.info("Keine Projektwurzel eingestellt, nur Zusatzprojekte")
-    else:
-        wurzel = Path(wurzel)
-        if not wurzel.is_dir():
-            log.error("Projektwurzel nicht gefunden: %s", wurzel)
-        else:
-            try:
-                for eintrag in sorted(wurzel.iterdir(), key=lambda p: p.name.lower()):
-                    if not eintrag.is_dir():
-                        continue
-                    if eintrag.name in ORDNER_AUSSCHLUSS or eintrag.name.startswith("."):
-                        continue
-                    pfad = eintrag.resolve()
-                    gefunden.append(Projekt(eintrag.name, pfad, (eintrag / ".git").is_dir()))
-                    vorhandene_pfade.add(pfad)
-            except OSError as fehler:
-                log.error("Projektliste nicht lesbar: %s", fehler)
+    zusatzprojekte = zusatzprojekte_lesen()
+    if zusatzprojekte:
+        for zusatz in zusatzprojekte:
+            pfad = Path(zusatz["pfad"])
+            if not pfad.is_dir():
+                log.warning("Zusatzprojekt nicht gefunden: %s (%s)", zusatz["name"], pfad)
+                continue
+            pfad = pfad.resolve()
+            if pfad in vorhandene_pfade:
+                continue
+            gefunden.append(Projekt(zusatz["name"], pfad, (pfad / ".git").is_dir()))
+            vorhandene_pfade.add(pfad)
+        log.info("%d Zusatzprojekte gefunden, Projektordner wird nicht durchsucht", len(gefunden))
+        return gefunden
 
-    for zusatz in zusatzprojekte_lesen():
-        pfad = Path(zusatz["pfad"])
-        if not pfad.is_dir():
-            log.warning("Zusatzprojekt nicht gefunden: %s (%s)", zusatz["name"], pfad)
-            continue
-        pfad = pfad.resolve()
-        if pfad in vorhandene_pfade:
-            continue
-        gefunden.append(Projekt(zusatz["name"], pfad, (pfad / ".git").is_dir()))
-        vorhandene_pfade.add(pfad)
+    if wurzel is None:
+        wurzel = projektwurzel()
+
+    if wurzel is None:
+        log.info("Keine Projektwurzel eingestellt und keine Zusatzprojekte")
+        return gefunden
+
+    wurzel = Path(wurzel)
+    if not wurzel.is_dir():
+        log.error("Projektwurzel nicht gefunden: %s", wurzel)
+        return gefunden
+
+    try:
+        for eintrag in sorted(wurzel.iterdir(), key=lambda p: p.name.lower()):
+            if not eintrag.is_dir():
+                continue
+            if eintrag.name in ORDNER_AUSSCHLUSS or eintrag.name.startswith("."):
+                continue
+            pfad = eintrag.resolve()
+            gefunden.append(Projekt(eintrag.name, pfad, (eintrag / ".git").is_dir()))
+            vorhandene_pfade.add(pfad)
+    except OSError as fehler:
+        log.error("Projektliste nicht lesbar: %s", fehler)
 
     log.info("%d Projekte gefunden (Wurzel: %s)", len(gefunden), wurzel)
     return gefunden
@@ -722,6 +739,13 @@ class Wache:
         ):
             log.info("Loeschen ohne Rueckfrage erlaubt (Projektordner): %s", befehl)
             return Urteil(Stufe.FREI, "Loeschen ohne Rueckfrage erlaubt (Projektordner)", befehl)
+
+        if (
+            urteil.begruendung in GRUENDE_INSTALLIEREN
+            and werte.get("installieren_ohne_rueckfrage", False)
+        ):
+            log.info("Installation ohne Rueckfrage erlaubt: %s", befehl)
+            return Urteil(Stufe.FREI, "Installation ohne Rueckfrage erlaubt", befehl)
 
         return urteil
 

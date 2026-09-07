@@ -270,7 +270,11 @@ def platzwort(platz: int) -> str:
 class Aktivitaetsbalken(QFrame):
     """Der Balken oben. Ein heller Streifen wandert waehrend eines Auftrags
     ruhig und gleichmaessig von links nach rechts und beginnt von vorn.
-    Die Farbe (Zustand) kommt weiter aus stil.qss ueber das Attribut."""
+    Die Farbe (Zustand) kommt weiter aus stil.qss ueber das Attribut.
+
+    Der Balken traegt selbst die laufende Taetigkeit ('liest', 'schreibt', …)
+    und dahinter den Dateinamen, gross und fett - die frueheren getrennten
+    Felder in der Kopfzeile (core/kopfzeile.py) entfallen dafuer."""
 
     STREIFEN_ANTEIL = 0.22
     STREIFEN_DAUER_MS = 2600
@@ -281,6 +285,12 @@ class Aktivitaetsbalken(QFrame):
         self.glanz.setObjectName("balkenglanz")
         self.glanz.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.glanz.hide()
+
+        self.text = QLabel("", self)
+        self.text.setObjectName("balkentext")
+        self.text.setAlignment(Qt.AlignCenter)
+        self.text.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.text.raise_()
 
         self._animation = QPropertyAnimation(self.glanz, b"pos", self)
         self._animation.setDuration(self.STREIFEN_DAUER_MS)
@@ -297,6 +307,7 @@ class Aktivitaetsbalken(QFrame):
     def resizeEvent(self, ereignis) -> None:
         super().resizeEvent(ereignis)
         self._streifen_geometrie_setzen()
+        self.text.setGeometry(self.rect())
         if self._laeuft:
             self._animation.start()
 
@@ -310,6 +321,30 @@ class Aktivitaetsbalken(QFrame):
         self._laeuft = False
         self._animation.stop()
         self.glanz.hide()
+
+    def zustand_setzen(self, zustand: str) -> None:
+        """Faerbt Balken und Text gemeinsam. Die Farben stehen in stil.qss
+        und haengen am Attribut 'zustand'."""
+        self.setProperty("zustand", zustand)
+        self.style().polish(self)
+        self.update()
+        self.text.setProperty("zustand", zustand)
+        self.text.style().polish(self.text)
+
+    def taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
+        """Traegt die Taetigkeit ('liest') und dahinter den Dateinamen ohne
+        Pfad ('ablagewaechter.py') im Balken ein. Ohne betroffene Datei steht
+        nur die Taetigkeit da. Der volle Pfad bleibt als Kurzhinweis."""
+        try:
+            name = Path(pfad).name if pfad else ""
+            text = f"{taetigkeit}  —  {name}" if (taetigkeit and name) else taetigkeit
+            self.text.setText(text or "")
+            self.text.setToolTip(pfad)
+            self.text.setAccessibleDescription(
+                f"{taetigkeit or 'keine Tätigkeit'}. {name or 'keine Datei'}."
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Tätigkeit im Balken nicht gesetzt: %s", fehler)
 
 
 # ---------------------------------------------------------------------------
@@ -645,18 +680,15 @@ class Werkbank(QMainWindow):
         if zustand == self._letzter_zustand:
             return
         self._letzter_zustand = zustand
-        self.balken.setProperty("zustand", zustand)
-        self.balken.style().polish(self.balken)
-        self.balken.update()
-        self.ausgabekopf.zustand_setzen(zustand)
+        self.balken.zustand_setzen(zustand)
 
     def _status_zeigen(self, text: str) -> None:
         """Setzt die Statusmeldung in der Kopfzeile."""
         self.ausgabekopf.status_zeigen(text)
 
     def _taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
-        """Setzt Plakette und Dateifeld in der Kopfzeile."""
-        self.ausgabekopf.taetigkeit_zeigen(taetigkeit, pfad)
+        """Setzt Taetigkeit und Dateiname im Aktivitaetsbalken."""
+        self.balken.taetigkeit_zeigen(taetigkeit, pfad)
 
     def _zugriff_zeigen(self) -> None:
         """Bringt Kachel und Kopfzeile auf den geltenden Zustand. Die Kachel
@@ -682,6 +714,7 @@ class Werkbank(QMainWindow):
         self.ausgabekopf.sicherheitshinweis_setzen(
             bool(werte.get("internet_ohne_rueckfrage", False)),
             bool(werte.get("loeschen_ohne_rueckfrage", False)),
+            bool(werte.get("installieren_ohne_rueckfrage", False)),
         )
 
     def _nur_lesen_umschalten(self) -> None:
