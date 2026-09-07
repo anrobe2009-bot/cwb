@@ -92,6 +92,17 @@ except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
     log.error("Benutzerverzeichnis nicht auswertbar: %s", _fehler)
     SKILL_ORDNER = None
 
+# Gemeinsamer Werkzeugordner ausserhalb aller Projekte. Dort liegen
+# projektuebergreifende Werkzeuge wie Playwright und Chromium, damit sie nicht
+# in jedem Projekt einzeln installiert werden muessen. Nur dieser eine Ordner
+# ist frei, kein anderer Ort ausserhalb der Projekte; die Sperrliste fuer
+# Zugangsdaten gilt auch hier.
+try:
+    WERKZEUG_ORDNER = (Path.home() / ".cwb-werkzeuge").resolve()
+except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
+    log.error("Benutzerverzeichnis nicht auswertbar: %s", _fehler)
+    WERKZEUG_ORDNER = None
+
 # Erzeugte Daten: taucht nie in Bilanz oder Bericht auf.
 ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
 
@@ -229,6 +240,16 @@ class Ordnergrenze:
             return False
         return True
 
+    def _ist_werkzeugordner(self, pfad: Path) -> bool:
+        """Wahr, wenn der Pfad im gemeinsamen Werkzeugordner liegt."""
+        if WERKZEUG_ORDNER is None:
+            return False
+        try:
+            pfad.relative_to(WERKZEUG_ORDNER)
+        except ValueError:
+            return False
+        return True
+
     def pruefe(self, pfad: str | Path) -> Urteil:
         """Prueft einen Datei- oder Ordnerpfad gegen Grenze und Sperrliste."""
         try:
@@ -264,6 +285,13 @@ class Ordnergrenze:
             return Urteil(
                 Stufe.FREI,
                 "Pfad liegt im Skill-Ordner des Benutzers",
+                str(kandidat),
+            )
+
+        if self._ist_werkzeugordner(kandidat):
+            return Urteil(
+                Stufe.FREI,
+                "Pfad liegt im gemeinsamen Werkzeugordner",
                 str(kandidat),
             )
 
