@@ -22,6 +22,7 @@ Aussehen kommt vollständig aus stil.qss. Im Python steht keine Gestaltung.
 import functools
 import html
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -185,6 +186,11 @@ ZUGRIFF_SATZ_SCHREIBEN = "Lesen und Schreiben erlaubt."
 TROTZDEM_KENNUNG = "Trotzdem hier ausführen"
 TROTZDEM_SYMBOL = "⤓"
 TROTZDEM_FARBE = "1"
+
+# Ordner fuer die Berichtdateien, relativ zum Projekt. Der Bericht liegt schon
+# in der Zwischenablage; fuer den Fall, dass daraus beim Einfuegen im Chat nur
+# eine leere Anlage wird, gibt es ihn zusaetzlich als Datei zum Hochladen.
+BERICHT_UNTERORDNER = Path(".cwb") / "bericht"
 
 # Markierungen am Anfang des Eingabefelds. Steht eine davon in der ersten
 # Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
@@ -534,6 +540,7 @@ class Werkbank(QMainWindow):
             ("F5", "Zum Eingabefeld, nach Projektwarnung: trotzdem hier ausführen",
              self._f5),
             ("F6", "Bericht erneut kopieren", self._bericht_erneut_kopieren),
+            ("Strg+F6", "Berichtordner öffnen", self._berichtordner_oeffnen),
             ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F1", "Hilfe vorlesen", self._hilfe),
             ("F9", "Projekt wechseln", self._projekt_wechseln),
@@ -562,6 +569,7 @@ class Werkbank(QMainWindow):
             # ausgeblendet (_vormerkung_zeigen).
             (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
              self._trotzdem_hier),
+            ("📁", "Berichtordner öffnen", "Strg+F6", "1", self._berichtordner_oeffnen),
             ("⏏", "Warteschlange leeren", "F4", "8", self._warteschlange_leeren),
             ("⟳", "Neu starten", "Strg+F4", "5", self._neustart),
             ("⇄", "Projekt wechseln", "F9", "6", self._projekt_wechseln),
@@ -675,6 +683,7 @@ class Werkbank(QMainWindow):
             ("F3", self._antwort_vorlesen),
             ("F5", self._f5),
             ("F6", self._bericht_erneut_kopieren),
+            ("Ctrl+F6", self._berichtordner_oeffnen),
             ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
             ("F4", self._warteschlange_leeren),
@@ -1126,13 +1135,25 @@ class Werkbank(QMainWindow):
             hinweis = " Antwort vorlesen mit F3, zurücknehmen mit Strg Z."
             ansage = satz
 
+        try:
+            self._letzter_bericht = self._bericht_bauen(bilanz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Bericht nicht gebaut: %s", fehler)
+            self._letzter_bericht = ""
+
+        bericht_pfad = self._bericht_datei_speichern() if self._letzter_bericht else None
+        if bericht_pfad:
+            hinweis += f" Bericht auch gespeichert unter {bericht_pfad}."
+
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
         # Gesprochen wird nur der kurze Ergebnissatz. Der Inhalt des
         # Ausgabefelds wird nie von allein vorgelesen - dafuer gibt es F3.
-        self.sprecher.sprich((ansage + self._bericht_kopieren(bilanz)).strip(),
-                             art="meldung")
+        zusatz = self._bericht_kopieren()
+        if bericht_pfad:
+            zusatz += " Auch als Datei gespeichert."
+        self.sprecher.sprich((ansage + zusatz).strip(), art="meldung")
 
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
@@ -1170,9 +1191,48 @@ class Werkbank(QMainWindow):
             teile.append("Tokenverbrauch: keine Daten")
         return "\n".join(teile).strip() + "\n"
 
-    def _bericht_kopieren(self, bilanz: dict) -> str:
-        """Legt den Bericht nach jedem Auftrag in die Zwischenablage, sofern in
-        den Einstellungen nicht abgeschaltet.
+    def _bericht_datei_speichern(self) -> Path | None:
+        """Speichert den zuletzt gebauten Bericht (self._letzter_bericht)
+        zusaetzlich als Textdatei unter .cwb/bericht/, mit Datum und Uhrzeit im
+        Dateinamen. So laesst er sich hochladen, wenn das Einfuegen aus der
+        Zwischenablage im Chat nur als leere Anlage ankommt."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        try:
+            ordner.mkdir(parents=True, exist_ok=True)
+        except OSError as fehler:
+            log.error("Berichtordner nicht anlegbar: %s", fehler)
+            return None
+        ziel = ordner / f"{datetime.now():%Y-%m-%d_%H-%M-%S}.txt"
+        try:
+            ziel.write_text(self._letzter_bericht, encoding="utf-8")
+        except OSError as fehler:
+            log.error("Berichtdatei nicht schreibbar: %s", fehler)
+            return None
+        log.info("Bericht als Datei gespeichert: %s", ziel)
+        return ziel
+
+    def _berichtordner_oeffnen(self) -> None:
+        """Oeffnet den Ordner mit den Berichtdateien im Explorer, damit die
+        zuletzt gespeicherte Datei sofort hochgeladen werden kann."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        if not ordner.is_dir():
+            log.warning("Berichtordner fehlt: %s", ordner)
+            self.sprecher.sprich("Es gibt noch keinen gespeicherten Bericht.",
+                                 art="meldung")
+            return
+        try:
+            os.startfile(str(ordner))  # noqa: S606
+        except OSError as fehler:
+            log.exception("Explorer nicht zu öffnen (%s): %s", ordner, fehler)
+            self.sprecher.sprich("Der Ordner ließ sich nicht öffnen.", art="meldung")
+            return
+        log.info("Berichtordner geöffnet: %s", ordner)
+        self.sprecher.sprich("Berichtordner geöffnet.", art="meldung")
+
+    def _bericht_kopieren(self) -> str:
+        """Legt den zuletzt gebauten Bericht (self._letzter_bericht) nach jedem
+        Auftrag in die Zwischenablage, sofern in den Einstellungen nicht
+        abgeschaltet.
 
         Kopiert wird nur, wenn das CWB-Fenster im Vordergrund ist. Sonst wuerde
         der Bericht ueberschreiben, was der Nutzer inzwischen anderswo kopiert
@@ -1182,10 +1242,7 @@ class Werkbank(QMainWindow):
         Rückgabe: haengt sich an den Ergebnissatz an, damit Bilanz und
         Zwischenablage-Hinweis in einer einzigen Ansage zusammenkommen statt
         in zwei kurz hintereinander."""
-        try:
-            self._letzter_bericht = self._bericht_bauen(bilanz)
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Bericht nicht gebaut: %s", fehler)
+        if not self._letzter_bericht:
             return " Bericht konnte nicht erstellt werden."
         if not einstellungen_lesen().get("bericht_kopieren", True):
             return ""
