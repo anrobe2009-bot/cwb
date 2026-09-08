@@ -68,6 +68,7 @@ try:
         OFFENE_FENSTER,
         einstellungen_lesen,
         einstellungen_schreiben,
+        fenster_geometrie_merken,
         slot_geschuetzt,
         stil_erneuern,
         stil_laden,
@@ -117,6 +118,7 @@ except ImportError:
         OFFENE_FENSTER,
         einstellungen_lesen,
         einstellungen_schreiben,
+        fenster_geometrie_merken,
         slot_geschuetzt,
         stil_erneuern,
         stil_laden,
@@ -1636,6 +1638,9 @@ class Werkbank(QMainWindow):
     def closeEvent(self, ereignis) -> None:
         if self in OFFENE_FENSTER:
             OFFENE_FENSTER.remove(self)
+        # Nicht die Maximiert-Geometrie merken, sondern die normale - sonst
+        # ließe sich nach dem nächsten Start keine kleinere Größe mehr sehen.
+        fenster_geometrie_merken(self.normalGeometry())
         try:
             waechter = getattr(self, "ablage_waechter", None)
             if waechter is not None:

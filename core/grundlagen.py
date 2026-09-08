@@ -17,7 +17,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QRect, QTimer
 from PySide6.QtWidgets import QApplication
 
 # Die Einstellungsdatei und alle einstellbaren Pfade liegen in pfade.py, weil
@@ -220,6 +220,69 @@ def tagesverbrauch_erhoehen(anzahl: int) -> int:
     except Exception as fehler:  # noqa: BLE001
         log.exception("Tagesverbrauch nicht fortgeschrieben: %s", fehler)
         return tagesverbrauch_heute()
+
+
+# ---------------------------------------------------------------------------
+# Fenstergeometrie der Werkbank: Position und Größe merken sich beim
+# Schließen in einstellungen.json unter "fenster", damit das Fenster beim
+# nächsten Start wieder genau dort und genauso groß erscheint.
+# ---------------------------------------------------------------------------
+
+FENSTER_SCHLUESSEL = "fenster"
+FENSTER_BREITE_VORSCHLAG = 1200
+FENSTER_HOEHE_VORSCHLAG = 850
+
+
+def fenster_geometrie_merken(rechteck: QRect) -> None:
+    """Sichert Position und Größe der Werkbank. Schlägt das Schreiben fehl,
+    läuft CWB trotzdem weiter - nur ohne gemerkte Geometrie."""
+    try:
+        werte = einstellungen_lesen()
+        werte[FENSTER_SCHLUESSEL] = {
+            "x": rechteck.x(),
+            "y": rechteck.y(),
+            "breite": rechteck.width(),
+            "hoehe": rechteck.height(),
+        }
+        einstellungen_schreiben(werte)
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Fenstergeometrie nicht sicherbar: %s", fehler)
+
+
+def _fenster_geometrie_gelesen() -> QRect | None:
+    """Die gemerkte Geometrie als QRect, sonst nichts."""
+    geo = einstellungen_lesen().get(FENSTER_SCHLUESSEL)
+    if not isinstance(geo, dict):
+        return None
+    try:
+        breite, hoehe = int(geo["breite"]), int(geo["hoehe"])
+        if breite <= 0 or hoehe <= 0:
+            return None
+        return QRect(int(geo["x"]), int(geo["y"]), breite, hoehe)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def fenster_geometrie_anwenden(fenster) -> None:
+    """Stellt die gemerkte Position und Größe wieder her. Fehlt sie, oder
+    liegt sie außerhalb jedes sichtbaren Bildschirms, erscheint das Fenster
+    stattdessen mittig in Vorschlagsgröße."""
+    try:
+        rechteck = _fenster_geometrie_gelesen()
+        if rechteck is not None and any(
+            bildschirm.availableGeometry().intersects(rechteck)
+            for bildschirm in QApplication.screens()
+        ):
+            fenster.setGeometry(rechteck)
+            return
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Fenstergeometrie nicht lesbar: %s", fehler)
+    fenster.resize(FENSTER_BREITE_VORSCHLAG, FENSTER_HOEHE_VORSCHLAG)
+    bildschirm = QApplication.primaryScreen()
+    if bildschirm is not None:
+        rahmen = fenster.frameGeometry()
+        rahmen.moveCenter(bildschirm.availableGeometry().center())
+        fenster.move(rahmen.topLeft())
 
 
 # ---------------------------------------------------------------------------

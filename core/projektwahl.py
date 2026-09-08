@@ -29,6 +29,7 @@ try:
         OFFENE_FENSTER,
         einstellungen_lesen,
         einstellungen_schreiben,
+        fenster_geometrie_anwenden,
         stil_verzoegert,
     )
     from .sicherheit import Projekt, projekte_finden
@@ -38,6 +39,7 @@ except ImportError:
         OFFENE_FENSTER,
         einstellungen_lesen,
         einstellungen_schreiben,
+        fenster_geometrie_anwenden,
         stil_verzoegert,
     )
     from sicherheit import Projekt, projekte_finden
@@ -152,6 +154,7 @@ class Start(QMainWindow):
         self.sprecher.sprich(f"Öffne {projekt.name}.")
         self.werkbank = self.werkbank_klasse(projekt, self.sprecher)
         OFFENE_FENSTER.append(self.werkbank)
-        self.werkbank.showMaximized()
+        fenster_geometrie_anwenden(self.werkbank)
+        self.werkbank.show()
         self.hide()
         QTimer.singleShot(0, self.close)

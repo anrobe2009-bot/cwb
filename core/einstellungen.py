@@ -48,7 +48,7 @@ from datetime import date
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -67,8 +68,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QTabBar,
-    QTabWidget,
+    QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -316,6 +317,188 @@ class Gruppe(QFrame):
 
 
 # ---------------------------------------------------------------------------
+# Reiterleiste mit Zeilenumbruch: ein QTabWidget versteckt ueberzaehlige
+# Reiter hinter Rollpfeilen oder schneidet sie ab, sobald das Fenster
+# schmaler ist als die Summe aller Reiterbreiten. Hier bricht die Leiste
+# stattdessen in eine zweite Zeile um - jeder Reiter bleibt sichtbar und
+# erreichbar, egal wie klein das Fenster oder wie gross die Systemschrift.
+# ---------------------------------------------------------------------------
+
+class Fliessraster(QLayout):
+    """Reiht seine Kinder nebeneinander und bricht in die naechste Zeile um,
+    sobald die Breite nicht mehr reicht - anders als QHBoxLayout, das Kinder
+    seitlich abschneidet oder gleichmaessig staucht."""
+
+    def __init__(self, eltern: QWidget | None = None):
+        super().__init__(eltern)
+        self._eintraege: list = []
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, eintrag) -> None:
+        self._eintraege.append(eintrag)
+
+    def count(self) -> int:
+        return len(self._eintraege)
+
+    def itemAt(self, index: int):
+        if 0 <= index < len(self._eintraege):
+            return self._eintraege[index]
+        return None
+
+    def takeAt(self, index: int):
+        if 0 <= index < len(self._eintraege):
+            return self._eintraege.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Orientations()
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, breite: int) -> int:
+        return self._auslegen(QRect(0, 0, breite, 0), wirklich=False)
+
+    def setGeometry(self, rechteck: QRect) -> None:
+        super().setGeometry(rechteck)
+        self._auslegen(rechteck, wirklich=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        groesse = QSize()
+        for eintrag in self._eintraege:
+            groesse = groesse.expandedTo(eintrag.minimumSize())
+        links, oben, rechts, unten = self.getContentsMargins()
+        return groesse + QSize(links + rechts, oben + unten)
+
+    def _auslegen(self, rechteck: QRect, wirklich: bool) -> int:
+        links, oben, rechts, unten = self.getContentsMargins()
+        wirksam = rechteck.adjusted(links, oben, -rechts, -unten)
+        x, y = wirksam.x(), wirksam.y()
+        zeilenhoehe = 0
+        for eintrag in self._eintraege:
+            hinweis = eintrag.sizeHint()
+            naechstes_x = x + hinweis.width() + self.spacing()
+            if naechstes_x - self.spacing() > wirksam.right() and zeilenhoehe > 0:
+                x = wirksam.x()
+                y = y + zeilenhoehe + self.spacing()
+                naechstes_x = x + hinweis.width() + self.spacing()
+                zeilenhoehe = 0
+            if wirklich:
+                eintrag.setGeometry(QRect(x, y, hinweis.width(), hinweis.height()))
+            x = naechstes_x
+            zeilenhoehe = max(zeilenhoehe, hinweis.height())
+        return y + zeilenhoehe - rechteck.y() + unten
+
+
+class Reiterleiste(QWidget):
+    """Ersetzt die Reiterleiste eines QTabWidget: ein einziger Tabulator-
+    Stopp fuer die ganze Leiste, Pfeiltasten wechseln den aktiven Reiter -
+    wie bei QTabBar. Anders als QTabBar bricht sie bei Platzmangel um,
+    statt Reiter seitlich zu verstecken."""
+
+    aktuelleStelleGewechselt = Signal(int)
+
+    def __init__(self, eltern: QWidget | None = None):
+        super().__init__(eltern)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._knoepfe: list[QToolButton] = []
+        self._stelle = -1
+        Fliessraster(self)  # setzt sich als Layout dieses Widgets selbst ein
+
+    def anzahl(self) -> int:
+        return len(self._knoepfe)
+
+    def text(self, stelle: int) -> str:
+        if 0 <= stelle < len(self._knoepfe):
+            return self._knoepfe[stelle].text()
+        return ""
+
+    def hinzufuegen(self, titel: str) -> int:
+        neue_stelle = len(self._knoepfe)
+        knopf = QToolButton(self)
+        knopf.setText(titel)
+        knopf.setCheckable(True)
+        knopf.setFocusPolicy(Qt.NoFocus)
+        knopf.clicked.connect(partial(self._angeklickt, neue_stelle))
+        self.layout().addWidget(knopf)
+        self._knoepfe.append(knopf)
+        if self._stelle < 0:
+            self.stelle_setzen(0)
+        return neue_stelle
+
+    def stelle(self) -> int:
+        return self._stelle
+
+    def stelle_setzen(self, stelle: int) -> None:
+        if not 0 <= stelle < len(self._knoepfe) or stelle == self._stelle:
+            return
+        self._stelle = stelle
+        for index, knopf in enumerate(self._knoepfe):
+            knopf.setChecked(index == stelle)
+        self.aktuelleStelleGewechselt.emit(stelle)
+
+    def _angeklickt(self, stelle: int) -> None:
+        self.stelle_setzen(stelle)
+        self.setFocus()
+
+    def keyPressEvent(self, ereignis) -> None:
+        if not self._knoepfe:
+            super().keyPressEvent(ereignis)
+            return
+        if ereignis.key() in (Qt.Key_Right, Qt.Key_Down):
+            self.stelle_setzen((self._stelle + 1) % len(self._knoepfe))
+            return
+        if ereignis.key() in (Qt.Key_Left, Qt.Key_Up):
+            self.stelle_setzen((self._stelle - 1) % len(self._knoepfe))
+            return
+        super().keyPressEvent(ereignis)
+
+
+class ReiterAnsicht(QWidget):
+    """Ersatz fuer QTabWidget aus `Reiterleiste` (umbrechende Reiter) und
+    einem QStackedWidget fuer die Seiten. Bietet dieselbe schmale
+    Schnittstelle, die der Rest der Datei benutzt: addTab, count,
+    currentIndex, setCurrentIndex, tabText, tabBar, currentChanged."""
+
+    currentChanged = Signal(int)
+
+    def __init__(self, eltern: QWidget | None = None):
+        super().__init__(eltern)
+        aufbau = QVBoxLayout(self)
+        aufbau.setContentsMargins(0, 0, 0, 0)
+        self._leiste = Reiterleiste(self)
+        self._stapel = QStackedWidget(self)
+        self._stapel.setObjectName("reiterstapel")
+        aufbau.addWidget(self._leiste)
+        aufbau.addWidget(self._stapel, 1)
+        self._leiste.aktuelleStelleGewechselt.connect(self._stapel.setCurrentIndex)
+        self._leiste.aktuelleStelleGewechselt.connect(self.currentChanged)
+
+    def addTab(self, seite: QWidget, titel: str) -> int:
+        self._stapel.addWidget(seite)
+        return self._leiste.hinzufuegen(titel)
+
+    def count(self) -> int:
+        return self._leiste.anzahl()
+
+    def currentIndex(self) -> int:
+        return self._leiste.stelle()
+
+    def setCurrentIndex(self, stelle: int) -> None:
+        self._leiste.stelle_setzen(stelle)
+
+    def tabText(self, stelle: int) -> str:
+        return self._leiste.text(stelle)
+
+    def tabBar(self) -> Reiterleiste:
+        return self._leiste
+
+
+# ---------------------------------------------------------------------------
 # Die Seite selbst
 # ---------------------------------------------------------------------------
 
@@ -393,16 +576,15 @@ class EinstellungenFenster(QDialog):
         hinweis.setWordWrap(True)
         aufbau.addWidget(hinweis)
 
-        self.reiter = QTabWidget()
+        self.reiter = ReiterAnsicht()
         self.reiter.setObjectName("einstellungsreiter")
         self.reiter.setAccessibleName("Bereich")
         self.reiter.setAccessibleDescription(
             "Strg und Tabulator wechselt den Reiter, Pfeiltasten ebenso"
         )
-        # Rollpfeile fuer die Reiterleiste selbst bleiben aus, die braucht bei
-        # sechs Reitern niemand; der Inhalt je Reiter rollt bei Bedarf ueber
-        # den Rollbereich aus `_reiterseite`.
-        self.reiter.setUsesScrollButtons(False)
+        # Reicht die Breite nicht fuer alle Reiter, bricht die Leiste in eine
+        # zweite Zeile um (siehe `Reiterleiste`), statt Reiter zu verstecken.
+        self.reiter.tabBar().setObjectName("reiterleiste")
         self.reiter.tabBar().setAccessibleName("Reiter")
         self.reiter.addTab(
             self._reiterseite(self._gruppe_stufe(), self._gruppe_sprache()), "Sprache"
@@ -1333,8 +1515,8 @@ class EinstellungenFenster(QDialog):
             teile.append(widget.currentText())
         elif isinstance(widget, QSpinBox):
             teile.append(str(widget.value()))
-        elif isinstance(widget, QTabBar):
-            teile.append(widget.tabText(widget.currentIndex()))
+        elif isinstance(widget, Reiterleiste):
+            teile.append(widget.text(widget.stelle()))
         elif isinstance(widget, QListWidget):
             eintrag = widget.currentItem()
             teile.append(eintrag.text() if eintrag else "leer")
