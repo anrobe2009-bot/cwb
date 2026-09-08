@@ -46,11 +46,13 @@ from claude_agent_sdk import (
 try:
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
+    from .pfade import freigaben_lesen
     from .sicherheit import Stufe, Urteil, Wache
     from .wissen import NACHTRAG_ANWEISUNG, Wissen
 except ImportError:
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
+    from pfade import freigaben_lesen
     from sicherheit import Stufe, Urteil, Wache
     from wissen import NACHTRAG_ANWEISUNG, Wissen
 
@@ -647,8 +649,16 @@ class Sitzung:
     # -- Verbindung ---------------------------------------------------------
 
     def _einstellungen(self) -> ClaudeAgentOptions:
+        # Wird bei jedem Verbindungsaufbau neu gelesen, damit zwischenzeitlich
+        # hinzugekommene Freigaben (auch die automatisch eingetragenen aus
+        # sicherheit.Ordnergrenze.pruefe) in die naechste Sitzung uebernommen
+        # werden. Fuer die bereits laufende Sitzung wirkt das nicht - add_dirs
+        # geht als Startparameter an den CLI-Unterprozess und laesst sich dort
+        # nicht nachtraeglich erweitern.
+        zusatzordner = [eintrag["pfad"] for eintrag in freigaben_lesen()]
         return ClaudeAgentOptions(
             cwd=str(self.wache.projekt.pfad),
+            add_dirs=zusatzordner,
             system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_ZUSATZ},
             setting_sources=["user", "project"],
             permission_mode="default",
