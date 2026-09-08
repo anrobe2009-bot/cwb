@@ -31,12 +31,12 @@ log = logging.getLogger("cwb.wissen")
 # Wo der Memory Hub liegt, steht in einstellungen.json (siehe pfade.py). Er
 # darf ganz fehlen; dann arbeitet CWB nur mit dem Gedächtnis im Projekt.
 
-MAX_TAGEBUCH = 25        # jüngste Tagebucheinträge im Kontextblock
-MAX_HUB = 15             # Einträge aus dem Memory Hub im Kontextblock
+MAX_TAGEBUCH = 40        # jüngste Tagebucheinträge im Kontextblock
+MAX_HUB = 40             # Einträge aus dem Memory Hub im Kontextblock
 ARCHIV_AB_TAGEN = 60     # ab diesem Alter wird verdichtet
 
-ZEILE_MAX_LAENGE = 200   # jede Zeile im Kontextblock wird hierauf gekappt
-BLOCK_MAX_LAENGE = 4000  # Obergrenze für den gesamten Kontextblock
+ZEILE_MAX_LAENGE = 350   # jede Zeile im Kontextblock wird hierauf gekappt
+BLOCK_MAX_LAENGE = 12000 # Obergrenze für den gesamten Kontextblock
 
 HINWEIS_GEKUERZT = "\n(Gekürzt. Mehr ist über die Suche erreichbar.)"
 HINWEIS_GEDAECHTNIS = (
@@ -212,6 +212,34 @@ class HubLeser:
             return []
         return [Eintrag(str(z[0])[:10], str(z[1]).strip()) for z in zeilen if z[1]]
 
+    def eintrag_schreiben(self, projekt: str, text: str, datum: str | None = None) -> bool:
+        """Schreibt eine neue Zeile in die Hub-Datenbank, unter Verwendung der
+        bereits erkannten Spalten. Fehlt der Hub, ist er nicht erreichbar oder
+        schlaegt das Schreiben fehl, wird nur geloggt - die Sitzung darf
+        davon nicht beeintraechtigt werden."""
+        if not self.bereit:
+            log.info("Kein Memory Hub erreichbar, Eintrag nicht geschrieben")
+            return False
+        spalten = [self.spalte_projekt, self.spalte_text]
+        werte = [projekt, text]
+        if self.spalte_datum:
+            spalten.append(self.spalte_datum)
+            werte.append(datum or date.today().isoformat())
+        platzhalter = ", ".join("?" for _ in werte)
+        befehl = (
+            f"INSERT INTO {self.tabelle} ({', '.join(spalten)}) "
+            f"VALUES ({platzhalter})"
+        )
+        try:
+            with sqlite3.connect(str(self.datenbank)) as verbindung:
+                verbindung.execute(befehl, werte)
+                verbindung.commit()
+            log.info("Eintrag in Memory Hub geschrieben (Projekt %s)", projekt)
+            return True
+        except sqlite3.Error as fehler:
+            log.error("Eintrag nicht in Memory Hub schreibbar: %s", fehler)
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Wissensschicht im Projekt
@@ -377,18 +405,17 @@ class Wissen:
         if not text:
             return False
         heute = date.today().isoformat()
-        zeilen = [
-            f"- {heute} {z.strip()}"
-            for z in text.splitlines()
-            if z.strip()
-        ]
+        inhalte = [z.strip() for z in text.splitlines() if z.strip()]
+        zeilen = [f"- {heute} {z}" for z in inhalte]
         try:
             with self.tagebuch_datei.open("a", encoding="utf-8") as datei:
                 datei.write("\n".join(zeilen) + "\n")
-            return True
         except OSError as fehler:
             log.error("Tagebuch nicht schreibbar: %s", fehler)
             return False
+        for inhalt in inhalte:
+            self.hub.eintrag_schreiben(self.name, inhalt, heute)
+        return True
 
     def offen_anhaengen(self, text: str) -> bool:
         text = text.strip()
