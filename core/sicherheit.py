@@ -505,6 +505,7 @@ class GitNetz:
             if not war_sauber:
                 self._git("add", "-A")
                 self._git("commit", "-m", f"CWB Sicherungspunkt: {kurz}")
+                self._push_versuchen()
             kennung = self._git("rev-parse", "HEAD").stdout.strip()
         except RuntimeError as fehler:
             log.error("Sicherungspunkt gescheitert: %s", fehler)
@@ -513,6 +514,29 @@ class GitNetz:
         punkt = Sicherungspunkt(kennung, datetime.now(), kurz, war_sauber)
         log.info("Sicherungspunkt %s | %s", kennung[:8], kurz)
         return punkt
+
+    def _push_versuchen(self) -> None:
+        """Nach einem Sicherungspunkt-Commit: still zum konfigurierten Remote pushen.
+
+        Kein Remote, kein Netzwerk oder ein Konflikt duerfen den Auftrag nicht
+        unterbrechen - jeder Fehlschlag landet nur im Log.
+        """
+        try:
+            fern = self._git("remote", pruefen=False)
+        except RuntimeError as fehler:
+            log.error("Push uebersprungen, Fernabfrage gescheitert: %s", fehler)
+            return
+        if not fern.stdout.strip():
+            return
+        try:
+            ergebnis = self._git("push", pruefen=False)
+        except RuntimeError as fehler:
+            log.error("Push nach Sicherungspunkt gescheitert: %s", fehler)
+            return
+        if ergebnis.returncode != 0:
+            log.error("Push nach Sicherungspunkt gescheitert: %s", ergebnis.stderr.strip())
+        else:
+            log.info("Push nach Sicherungspunkt erfolgreich")
 
     def geaenderte_dateien(self, punkt: Sicherungspunkt) -> list[str]:
         """Was sich seit dem Sicherungspunkt geaendert hat - fuer die Ansage."""
