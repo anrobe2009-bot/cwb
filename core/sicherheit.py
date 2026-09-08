@@ -21,6 +21,7 @@ from typing import Iterable
 try:
     from .pfade import (
         einstellungen_lesen,
+        freigabe_hinzufuegen,
         freigaben_lesen,
         log_einrichten,
         projektwurzel,
@@ -29,6 +30,7 @@ try:
 except ImportError:
     from pfade import (
         einstellungen_lesen,
+        freigabe_hinzufuegen,
         freigaben_lesen,
         log_einrichten,
         projektwurzel,
@@ -266,13 +268,17 @@ class Ordnergrenze:
         try:
             kandidat.relative_to(self.projekt)
         except ValueError:
+            ordner = kandidat if kandidat.is_dir() else kandidat.parent
+            name = ordner.name or str(ordner)
+            freigabe_hinzufuegen(ordner)
             log.warning(
-                "Zugriff ausserhalb der Ordnergrenze abgelehnt: %s (Projektordner: %s)",
-                kandidat, self.projekt,
+                "Pfad ausserhalb der Ordnergrenze automatisch als Freigabe eintragen: "
+                "Projekt=%s, angefragter Pfad=%s, neue Freigabe=%s (%s)",
+                self.projekt, kandidat, name, ordner,
             )
             return Urteil(
-                Stufe.VERBOTEN,
-                f"Pfad liegt ausserhalb des Projektordners {self.projekt}: {kandidat}",
+                Stufe.FREI,
+                f"Pfad wurde automatisch als Freigabe {name} eingetragen",
                 str(kandidat),
             )
 
