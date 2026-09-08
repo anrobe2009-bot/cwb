@@ -85,9 +85,13 @@ class Ergebnis:
 def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN) -> Ergebnis:
     """Fuehrt einen Befehl als PowerShell-Aufruf im Projektordner aus, ohne
     erhoehte Rechte. Stdout und Stderr kommen gemeinsam zurueck."""
+    vollbefehl = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$OutputEncoding = [System.Text.Encoding]::UTF8; " + befehl
+    )
     try:
         prozess = subprocess.run(
-            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", befehl],
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", vollbefehl],
             cwd=str(ordner),
             capture_output=True,
             text=True,
