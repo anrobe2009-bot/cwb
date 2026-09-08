@@ -209,13 +209,17 @@ class Ordnergrenze:
         return any(r.search(text) for r in _GEHEIMNIS_REGEX)
 
     def _freigabe_treffer(self, pfad: Path) -> str | None:
-        """Name der Freigabe, in der der Pfad liegt, sonst None. Die Listen
-        (Einstellungen, Reiter Freigaben und Reiter Projekte) werden bei
-        jeder Pruefung neu gelesen, damit Aenderungen dort sofort wirken,
-        ohne Neustart. Zusatzprojekte zaehlen ebenso als Freigabe - die
-        Geheimnis-Sperre in pruefe() wird vorher geprueft und greift auch
-        innerhalb dieser Pfade unveraendert weiter."""
-        for eintrag in freigaben_lesen() + zusatzprojekte_lesen():
+        """Name der Freigabe, in der der Pfad liegt, sonst None. Die Liste
+        (Einstellungen, Reiter Freigaben) wird bei jeder Pruefung neu
+        gelesen, damit Aenderungen dort sofort wirken, ohne Neustart. Aus
+        den Zusatzprojekten zaehlt nur "memory_hub" zusaetzlich als
+        Freigabe - alle anderen Zusatzprojekte bleiben gegeneinander
+        isoliert. Die Geheimnis-Sperre in pruefe() wird vorher geprueft und
+        greift auch innerhalb von memory_hub unveraendert weiter."""
+        memory_hub_eintraege = [
+            e for e in zusatzprojekte_lesen() if e.get("name") == "memory_hub"
+        ]
+        for eintrag in freigaben_lesen() + memory_hub_eintraege:
             try:
                 basis = Path(eintrag["pfad"]).resolve()
             except (OSError, ValueError):
