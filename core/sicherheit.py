@@ -11,7 +11,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +21,7 @@ from typing import Iterable
 try:
     from .pfade import (
         einstellungen_lesen,
+        freigaben_lesen,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -29,6 +29,7 @@ try:
 except ImportError:
     from pfade import (
         einstellungen_lesen,
+        freigaben_lesen,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -71,37 +72,12 @@ GEHEIMNIS_MUSTER = [
 ]
 _GEHEIMNIS_REGEX = [re.compile(m, re.IGNORECASE) for m in GEHEIMNIS_MUSTER]
 
-# Eigener Arbeitsordner von Claude Code unterhalb des Temp-Ordners des
-# Benutzers. Dort liegen Zwischenergebnisse; nur dieser eine Unterordner ist
-# erlaubt, der uebrige Temp-Ordner bleibt gesperrt. Die Sperrliste fuer
-# Zugangsdaten gilt auch hier.
-try:
-    ARBEITSORDNER_CLAUDE = (Path(tempfile.gettempdir()) / "claude").resolve()
-except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
-    log.error("Temp-Ordner nicht auswertbar: %s", _fehler)
-    ARBEITSORDNER_CLAUDE = None
-
-# Skill-Ordner im Benutzerverzeichnis (.claude/skills). Dort duerfen Skills
-# ohne Rueckfrage gelesen und geschrieben werden - es ist die einzige weitere
-# Ausnahme ausserhalb des Projektordners. Weder .claude selbst noch ein
-# anderer Ordner darunter ist damit frei; die Sperrliste fuer Zugangsdaten
-# gilt auch hier.
-try:
-    SKILL_ORDNER = (Path.home() / ".claude" / "skills").resolve()
-except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
-    log.error("Benutzerverzeichnis nicht auswertbar: %s", _fehler)
-    SKILL_ORDNER = None
-
-# Gemeinsamer Werkzeugordner ausserhalb aller Projekte. Dort liegen
-# projektuebergreifende Werkzeuge wie Playwright und Chromium, damit sie nicht
-# in jedem Projekt einzeln installiert werden muessen. Nur dieser eine Ordner
-# ist frei, kein anderer Ort ausserhalb der Projekte; die Sperrliste fuer
-# Zugangsdaten gilt auch hier.
-try:
-    WERKZEUG_ORDNER = (Path.home() / ".cwb-werkzeuge").resolve()
-except (OSError, ValueError) as _fehler:  # pragma: no cover - sehr selten
-    log.error("Benutzerverzeichnis nicht auswertbar: %s", _fehler)
-    WERKZEUG_ORDNER = None
+# Ordner ausserhalb des Projekts, in denen ohne Rueckfrage gelesen und
+# geschrieben werden darf, stehen nicht mehr fest hier eingebaut: sie kommen
+# aus der gepflegten Liste im Reiter "Freigaben" der Einstellungen
+# (core/pfade.py, `freigaben_lesen`). Skill-Ordner, Claude-Temp-Ordner und
+# cwb-werkzeuge sind dort nur noch Voreintraege und lassen sich entfernen;
+# die Sperrliste fuer Zugangsdaten gilt in jeder Freigabe unveraendert weiter.
 
 # Erzeugte Daten: taucht nie in Bilanz oder Bericht auf.
 ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
@@ -232,35 +208,21 @@ class Ordnergrenze:
         text = str(pfad)
         return any(r.search(text) for r in _GEHEIMNIS_REGEX)
 
-    def _ist_arbeitsordner(self, pfad: Path) -> bool:
-        """Wahr, wenn der Pfad im Arbeitsordner von Claude Code liegt."""
-        if ARBEITSORDNER_CLAUDE is None:
-            return False
-        try:
-            pfad.relative_to(ARBEITSORDNER_CLAUDE)
-        except ValueError:
-            return False
-        return True
-
-    def _ist_skillordner(self, pfad: Path) -> bool:
-        """Wahr, wenn der Pfad im Skill-Ordner des Benutzers liegt."""
-        if SKILL_ORDNER is None:
-            return False
-        try:
-            pfad.relative_to(SKILL_ORDNER)
-        except ValueError:
-            return False
-        return True
-
-    def _ist_werkzeugordner(self, pfad: Path) -> bool:
-        """Wahr, wenn der Pfad im gemeinsamen Werkzeugordner liegt."""
-        if WERKZEUG_ORDNER is None:
-            return False
-        try:
-            pfad.relative_to(WERKZEUG_ORDNER)
-        except ValueError:
-            return False
-        return True
+    def _freigabe_treffer(self, pfad: Path) -> str | None:
+        """Name der Freigabe, in der der Pfad liegt, sonst None. Die Liste
+        (Einstellungen, Reiter Freigaben) wird bei jeder Pruefung neu
+        gelesen, damit Aenderungen dort sofort wirken, ohne Neustart."""
+        for eintrag in freigaben_lesen():
+            try:
+                basis = Path(eintrag["pfad"]).resolve()
+            except (OSError, ValueError):
+                continue
+            try:
+                pfad.relative_to(basis)
+            except ValueError:
+                continue
+            return eintrag["name"]
+        return None
 
     def pruefe(self, pfad: str | Path) -> Urteil:
         """Prueft einen Datei- oder Ordnerpfad gegen Grenze und Sperrliste."""
@@ -286,24 +248,11 @@ class Ordnergrenze:
                 str(kandidat),
             )
 
-        if self._ist_arbeitsordner(kandidat):
+        freigabe = self._freigabe_treffer(kandidat)
+        if freigabe:
             return Urteil(
                 Stufe.FREI,
-                "Pfad liegt im Arbeitsordner von Claude Code",
-                str(kandidat),
-            )
-
-        if self._ist_skillordner(kandidat):
-            return Urteil(
-                Stufe.FREI,
-                "Pfad liegt im Skill-Ordner des Benutzers",
-                str(kandidat),
-            )
-
-        if self._ist_werkzeugordner(kandidat):
-            return Urteil(
-                Stufe.FREI,
-                "Pfad liegt im gemeinsamen Werkzeugordner",
+                f"Pfad liegt in der Freigabe {freigabe}",
                 str(kandidat),
             )
 
@@ -789,9 +738,9 @@ def _selbsttest() -> None:
 
         print("\nPfadpruefung:")
         pfade = ["unterordner/datei.py", r"..\anderes_projekt\x.py", ".env"]
-        if SKILL_ORDNER is not None:
-            pfade.append(str(SKILL_ORDNER / "oberflaeche" / "SKILL.md"))
-            pfade.append(str(SKILL_ORDNER.parent / "einstellungen.json"))
+        freigaben_beispiel = freigaben_lesen()
+        if freigaben_beispiel:
+            pfade.append(str(Path(freigaben_beispiel[0]["pfad"]) / "SKILL.md"))
         for pfad in pfade:
             urteil = grenze_test.pruefe(pfad)
             print(f"  {pfad:32} -> {urteil.ansage()}")

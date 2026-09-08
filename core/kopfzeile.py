@@ -5,13 +5,14 @@ Kopfzeile des Ausgabefelds.
 Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
 Arbeit gehoert: die Zugriffsplakette mit dem geltenden Schreibrecht
 ("Nur lesen" oder "Lesen und Schreiben"), das Zeichen fuer aktive Rueckfrage-
-Ausnahmen (Internet, Loeschen im Projekt, Installieren), die Warteanzeige mit
-der Zahl der vorgemerkten Auftraege (leer, solange keiner wartet), die
-Modellwahl, die drei Tokenzaehler und die Schaltflaeche zum Kopieren. Die
-Zaehler stehen unmittelbar nebeneinander in der Reihenfolge "Auftrag",
-"Sitzung", "Heute" - gleiche Breite, gleiche Gestalt, ohne Zwischenraum. Ein
-eigenes Feld fuer die Statusmeldung gibt es nicht mehr; die Meldung wird
-gesprochen und steht als Beschreibung an der Kopfzeile selbst.
+Ausnahmen (Internet, Loeschen im Projekt, Installieren), die Zahl der aktiven
+Freigaben (Einstellungen, Reiter Freigaben), die Warteanzeige mit der Zahl der
+vorgemerkten Auftraege (leer, solange keiner wartet), die Modellwahl, die drei
+Tokenzaehler und die Schaltflaeche zum Kopieren. Die Zaehler stehen
+unmittelbar nebeneinander in der Reihenfolge "Auftrag", "Sitzung", "Heute" -
+gleiche Breite, gleiche Gestalt, ohne Zwischenraum. Ein eigenes Feld fuer die
+Statusmeldung gibt es nicht mehr; die Meldung wird gesprochen und steht als
+Beschreibung an der Kopfzeile selbst.
 
 Taetigkeit und bearbeitete Datei stehen nicht mehr hier, sondern gross und
 fett direkt im Aktivitaetsbalken oben (core/fenster.py, Aktivitaetsbalken).
@@ -82,6 +83,10 @@ WARTE_BEISPIELE = ("Warten 99",)
 # Verhalten). Bleibt leer, solange keine der drei an ist - die Breite wird
 # am laengsten moeglichen Text gemessen, damit nichts in der Reihe springt.
 SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen · Installieren",)
+
+# Zahl der aktiven Freigaben (Einstellungen, Reiter Freigaben). Die Breite
+# wird an einer zweistelligen Zahl gemessen und aendert sich nie.
+FREIGABEN_BEISPIELE = ("Freigaben 99",)
 
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
@@ -243,6 +248,16 @@ class Ausgabekopf(QWidget):
         self.sicherheitshinweis.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.sicherheitshinweis)
 
+        # Zahl der Ordner, die ausserhalb des Projekts ohne Rueckfrage
+        # gelesen und geschrieben werden duerfen (Einstellungen, Reiter
+        # Freigaben). Bei keiner Freigabe bleibt das Feld leer.
+        self.freigabenanzeige = Schrumpffeld("")
+        self.freigabenanzeige.setObjectName("freigabenanzeige")
+        self.freigabenanzeige.setAccessibleName("Aktive Freigaben")
+        self.freigabenanzeige.setAlignment(Qt.AlignCenter)
+        self.freigabenanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.freigabenanzeige)
+
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
         # Normalfall ruhig bleibt. Geleert wird die Warteschlange mit F4.
@@ -359,6 +374,7 @@ class Ausgabekopf(QWidget):
             felder = (
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
                 (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
+                (self.freigabenanzeige, FREIGABEN_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
@@ -476,6 +492,22 @@ class Ausgabekopf(QWidget):
             self.sicherheitshinweis.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Sicherheitshinweis nicht gesetzt: %s", fehler)
+
+    def freigaben_zeigen(self, namen: list) -> None:
+        """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage
+        freigegeben sind (Einstellungen, Reiter Freigaben). Bei keiner
+        Freigabe bleibt das Feld leer."""
+        try:
+            anzahl = len(namen)
+            self.freigabenanzeige.setText(f"Freigaben {anzahl}" if anzahl else "")
+            if anzahl == 0:
+                satz = "Keine Freigabe aktiv."
+            else:
+                satz = f"{anzahl} Freigaben aktiv: " + ", ".join(namen) + "."
+            self.freigabenanzeige.setToolTip(satz)
+            self.freigabenanzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Freigabenanzeige nicht gesetzt: %s", fehler)
 
     def status_zeichnen(self) -> None:
         """Legt die gemerkte Meldung samt Nur-Lesen-Zustand als Beschreibung

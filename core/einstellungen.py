@@ -2,7 +2,7 @@
 CWB - Code Workbench
 Einstellungsseite (F12, Kachel "Einstellungen").
 
-Sechs Reiter; passt der Inhalt eines Reiters nicht auf die Seite, wird
+Sieben Reiter; passt der Inhalt eines Reiters nicht auf die Seite, wird
 dort gerollt statt abgeschnitten:
 
 - Sprache   Sprachausgabe in drei Stufen, Ausgabeweg, Stimme, Tempo,
@@ -18,6 +18,13 @@ dort gerollt statt abgeschnitten:
             bei der Ersteinrichtung, jederzeit aenderbar
 - Projekte  gepflegte Zusatzliste: Projekte ausserhalb des Projektordners,
             mit Ordnerdialog hinzugefuegt, frei benannt, entfernbar
+- Freigaben gepflegte Liste von Ordnern ausserhalb des Projekts, in denen
+            core/sicherheit.py (Ordnergrenze) ohne Rueckfrage liest und
+            schreibt - mit Ordnerdialog hinzugefuegt, entfernbar. Skill-
+            Ordner, Claude-Temp-Ordner und cwb-werkzeuge stehen darin nur
+            noch als Voreintraege. Die Sperrliste fuer Zugangsdaten und
+            die verbotenen Befehle gelten in jeder Freigabe unveraendert
+            weiter. core/kopfzeile.py zeigt die Anzahl aktiver Freigaben.
 
 Gewechselt wird mit Strg+Tabulator (vorwaerts), Strg+Umschalt+Tabulator
 (rueckwaerts) und mit den Pfeiltasten, sobald die Reiterleiste den Fokus hat.
@@ -71,6 +78,9 @@ try:
     from .grundlagen import TAGE_AUFBEWAHRT, heutiger_tag, tagesverbrauch_lesen
     from .kopfzeile import zahl_lang
     from .pfade import (
+        freigabe_entfernen,
+        freigabe_hinzufuegen,
+        freigaben_lesen,
         hub_datenbank,
         hub_datenbank_merken,
         log_einrichten,
@@ -95,6 +105,9 @@ except ImportError:
     from grundlagen import TAGE_AUFBEWAHRT, heutiger_tag, tagesverbrauch_lesen
     from kopfzeile import zahl_lang
     from pfade import (
+        freigabe_entfernen,
+        freigabe_hinzufuegen,
+        freigaben_lesen,
         hub_datenbank,
         hub_datenbank_merken,
         log_einrichten,
@@ -319,13 +332,14 @@ class EinstellungenFenster(QDialog):
         self._skills: list[dict] = []
         self._verbrauchstage: list[tuple[str, int]] = []
         self._zusatzprojekte: list[dict] = []
+        self._freigaben: list[dict] = []
 
         self.setObjectName("einstellungen")
         self.setWindowTitle("CWB — Einstellungen")
         self.setAccessibleName("Einstellungen")
         self.setAccessibleDescription(
-            "Sechs Reiter: Sprache, Töne, Verhalten, Skills, Pfade, Projekte. "
-            "Strg und Tabulator wechselt den Reiter, Escape schließt."
+            "Sieben Reiter: Sprache, Töne, Verhalten, Skills, Pfade, Projekte, "
+            "Freigaben. Strg und Tabulator wechselt den Reiter, Escape schließt."
         )
 
         self._aufbauen()
@@ -398,6 +412,7 @@ class EinstellungenFenster(QDialog):
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
         self.reiter.addTab(self._reiterseite(self._gruppe_pfade()), "Pfade")
         self.reiter.addTab(self._reiterseite(self._gruppe_projekte()), "Projekte")
+        self.reiter.addTab(self._reiterseite(self._gruppe_freigaben()), "Freigaben")
         self.reiter.currentChanged.connect(self._reiter_gewechselt)
         aufbau.addWidget(self.reiter, 1)
 
@@ -1121,6 +1136,142 @@ class EinstellungenFenster(QDialog):
         self._projektliste_fuellen()
         log.info("Zusatzprojekt entfernt: %s", projekt["name"])
         self.sprecher.sprich(f"{projekt['name']} entfernt.")
+
+    # -- Bereich Freigaben ----------------------------------------------------
+
+    def _gruppe_freigaben(self) -> Gruppe:
+        """Gepflegte Liste von Ordnern ausserhalb des Projekts, in denen
+        core/sicherheit.py (Ordnergrenze) ohne Rueckfrage liest und schreibt.
+        Skill-Ordner, Claude-Temp-Ordner und cwb-werkzeuge stehen als
+        Voreintraege darin (core/pfade.py, `freigaben_vorgaben`) und lassen
+        sich wie jeder andere Eintrag entfernen. Die Sperrliste fuer
+        Zugangsdaten und die verbotenen Befehle gelten in jeder Freigabe
+        unveraendert weiter."""
+        gruppe = Gruppe(
+            "Freigaben",
+            "Ordner außerhalb des Projekts, in denen Claude Code ohne "
+            "Rückfrage lesen und schreiben darf. Ordner wählen, hinzufügen — "
+            "die Sperrliste für Zugangsdaten und die verbotenen Befehle "
+            "gelten dort unverändert weiter.",
+        )
+
+        self._freigaben = freigaben_lesen()
+
+        self.freigaben_liste = QListWidget()
+        self.freigaben_liste.setObjectName("freigabenliste")
+        self.freigaben_liste.setAccessibleName("Freigegebene Ordner")
+        self.freigaben_liste.setAccessibleDescription(
+            "Mit Pfeiltasten durchgehen; jeder Eintrag nennt Namen und Pfad"
+        )
+        self._freigabenliste_fuellen()
+        self.freigaben_liste.currentRowChanged.connect(self._freigabe_ansagen)
+        gruppe.feld(self.freigaben_liste)
+
+        self.freigabe_pfad_feld = QLineEdit()
+        self.freigabe_pfad_feld.setObjectName("pfadfeld")
+        self.freigabe_pfad_feld.setAccessibleName("Ordner der neuen Freigabe")
+        self.freigabe_pfad_feld.setAccessibleDescription(
+            "Wird über die Schaltfläche Ordner wählen gefüllt"
+        )
+        self.freigabe_pfad_feld.setReadOnly(True)
+        gruppe.zeile("Ordner", self.freigabe_pfad_feld)
+
+        ordner_waehlen = QPushButton("Ordner wählen …")
+        ordner_waehlen.setObjectName("probe")
+        ordner_waehlen.setAccessibleName("Ordner der Freigabe wählen")
+        ordner_waehlen.setAccessibleDescription(
+            "Öffnet die Ordnerauswahl für die neue Freigabe"
+        )
+        ordner_waehlen.clicked.connect(self._freigabeordner_waehlen)
+        gruppe.feld(ordner_waehlen)
+
+        hinzufuegen = QPushButton("Hinzufügen")
+        hinzufuegen.setObjectName("probe")
+        hinzufuegen.setAccessibleName("Freigabe hinzufügen")
+        hinzufuegen.setAccessibleDescription(
+            "Nimmt den gewählten Ordner in die Freigabenliste auf"
+        )
+        hinzufuegen.clicked.connect(self._freigabe_hinzufuegen)
+        gruppe.feld(hinzufuegen)
+
+        entfernen = QPushButton("Entfernen")
+        entfernen.setObjectName("probe")
+        entfernen.setAccessibleName("Freigabe entfernen")
+        entfernen.setAccessibleDescription(
+            "Entfernt die in der Liste gewählte Freigabe"
+        )
+        entfernen.clicked.connect(self._freigabe_entfernen)
+        gruppe.feld(entfernen)
+        return gruppe
+
+    def _freigabenliste_fuellen(self) -> None:
+        self.freigaben_liste.clear()
+        if not self._freigaben:
+            eintrag = QListWidgetItem("Keine Freigaben eingetragen")
+            eintrag.setFlags(Qt.ItemIsEnabled)
+            self.freigaben_liste.addItem(eintrag)
+            return
+        for freigabe in self._freigaben:
+            self.freigaben_liste.addItem(
+                QListWidgetItem(f"{freigabe['name']} — {freigabe['pfad']}")
+            )
+
+    def _freigabe_ansagen(self, zeile: int) -> None:
+        if 0 <= zeile < len(self._freigaben):
+            freigabe = self._freigaben[zeile]
+            self.sprecher.sprich(f"{freigabe['name']}, {freigabe['pfad']}.")
+
+    def _freigabeordner_waehlen(self) -> None:
+        start = self.freigabe_pfad_feld.text().strip() or str(Path.home())
+        try:
+            gewaehlt = QFileDialog.getExistingDirectory(self, "Ordner für Freigabe wählen", start)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Ordnerauswahl gescheitert: %s", fehler)
+            self.sprecher.sprich("Die Auswahl ließ sich nicht öffnen.")
+            return
+        if not gewaehlt:
+            self.sprecher.sprich("Nichts gewählt.")
+            return
+        self.freigabe_pfad_feld.setText(str(Path(gewaehlt)))
+        self.sprecher.sprich(f"Ordner {Path(gewaehlt).name} gewählt.")
+
+    def _freigabe_hinzufuegen(self) -> None:
+        pfad = self.freigabe_pfad_feld.text().strip()
+        if not pfad:
+            self.sprecher.sprich("Erst einen Ordner wählen.")
+            return
+        if not Path(pfad).is_dir():
+            log.warning("Zu übernehmender Freigabeordner gibt es nicht: %s", pfad)
+            self.sprecher.sprich("Diesen Ordner gibt es nicht.")
+            return
+        try:
+            freigabe_hinzufuegen(pfad)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Freigabe nicht zu merken: %s", fehler)
+            self.sprecher.sprich("Die Freigabe ließ sich nicht speichern.")
+            return
+        self._freigaben = freigaben_lesen()
+        self._freigabenliste_fuellen()
+        self.freigabe_pfad_feld.clear()
+        log.info("Freigabe hinzugefügt: %s", pfad)
+        self.sprecher.sprich(f"{Path(pfad).name} als Freigabe hinzugefügt.")
+
+    def _freigabe_entfernen(self) -> None:
+        zeile = self.freigaben_liste.currentRow()
+        if not (0 <= zeile < len(self._freigaben)):
+            self.sprecher.sprich("Keine Freigabe gewählt.")
+            return
+        freigabe = self._freigaben[zeile]
+        try:
+            freigabe_entfernen(freigabe["pfad"])
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Freigabe nicht zu entfernen: %s", fehler)
+            self.sprecher.sprich("Die Freigabe ließ sich nicht entfernen.")
+            return
+        self._freigaben = freigaben_lesen()
+        self._freigabenliste_fuellen()
+        log.info("Freigabe entfernt: %s", freigabe["pfad"])
+        self.sprecher.sprich(f"{freigabe['name']} entfernt.")
 
     # -- Einstellungen lesen und schreiben ----------------------------------
 

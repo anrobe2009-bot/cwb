@@ -90,7 +90,7 @@ try:
         modell_lesen,
         modell_merken,
     )
-    from .pfade import pfade_vollstaendig
+    from .pfade import freigaben_lesen, pfade_vollstaendig
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
@@ -139,7 +139,7 @@ except ImportError:
         modell_lesen,
         modell_merken,
     )
-    from pfade import pfade_vollstaendig
+    from pfade import freigaben_lesen, pfade_vollstaendig
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
@@ -731,9 +731,9 @@ class Werkbank(QMainWindow):
         self.ausgabekopf.nur_lesen_setzen(self.nur_lesen)
 
     def _sicherheitshinweis_aktualisieren(self) -> None:
-        """Liest die beiden Rueckfrage-Schalter aus den Einstellungen (Reiter
-        Verhalten) und zeigt in der Kopfzeile ein Zeichen, solange mindestens
-        einer an ist. Wird beim Start und nach jedem Schliessen der
+        """Liest die drei Rueckfrage-Schalter aus den Einstellungen (Reiter
+        Verhalten) und die Freigabenliste (Reiter Freigaben) und zeigt beides
+        in der Kopfzeile an. Wird beim Start und nach jedem Schliessen der
         Einstellungsseite aufgerufen."""
         werte = einstellungen_lesen()
         self.ausgabekopf.sicherheitshinweis_setzen(
@@ -741,6 +741,12 @@ class Werkbank(QMainWindow):
             bool(werte.get("loeschen_ohne_rueckfrage", False)),
             bool(werte.get("installieren_ohne_rueckfrage", False)),
         )
+        try:
+            freigaben = [eintrag["name"] for eintrag in freigaben_lesen()]
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Freigabenliste nicht lesbar: %s", fehler)
+            freigaben = []
+        self.ausgabekopf.freigaben_zeigen(freigaben)
 
     def _nur_lesen_umschalten(self) -> None:
         """Schaltet den Nur-Lesen-Modus um: Schreiben und Loeschen wird

@@ -22,6 +22,7 @@ Normalfall und bricht nichts. Fehlt ein Schluessel ganz, gilt der Vorschlag.
 
 import json
 import logging
+import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -67,6 +68,7 @@ PROJEKTWURZEL = "projektwurzel"
 SKILLS = "skills"
 MEMORY_HUB = "memory_hub"
 ZUSATZPROJEKTE_SCHLUESSEL = "zusatzprojekte"
+FREIGABEN_SCHLUESSEL = "freigaben"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +242,87 @@ def zusatzprojekt_entfernen(name: str) -> None:
     liste = [e for e in zusatzprojekte_lesen() if e["name"] != name]
     zusatzprojekte_schreiben(liste)
     log.info("Zusatzprojekt entfernt: %s", name)
+
+
+# -- Freigaben ----------------------------------------------------------------
+# Ordner ausserhalb des Projekts, in denen core/sicherheit.py (Ordnergrenze)
+# ohne Rueckfrage liest und schreibt. Gepflegt im Reiter "Freigaben" der
+# Einstellungen, mit Ordnerdialog hinzugefuegt und wieder entfernbar. Die
+# Sperrliste fuer Zugangsdaten und die verbotenen Befehle gelten in jeder
+# Freigabe unveraendert weiter (core/sicherheit.py).
+#
+#   "freigaben": [
+#     {"name": "Skill-Ordner", "pfad": "C:/Users/Name/.claude/skills"}
+#   ]
+#
+# Fehlt der Schluessel ganz - beim allerersten Aufruf - wird er mit den drei
+# bisher fest eingebauten Ausnahmen gefuellt und gleich gesichert. Ist er
+# vorhanden, auch als leere Liste, gilt er unveraendert: nur so lassen sich
+# die Voreintraege dauerhaft entfernen.
+
+def freigaben_vorgaben() -> list[dict]:
+    """Die bisher fest eingebauten Ausnahmen, als Voreintraege der Liste."""
+    return [
+        {"name": "Skill-Ordner", "pfad": str(Path.home() / ".claude" / "skills")},
+        {"name": "Claude-Temp-Ordner", "pfad": str(Path(tempfile.gettempdir()) / "claude")},
+        {"name": "cwb-werkzeuge", "pfad": str(Path.home() / ".cwb-werkzeuge")},
+    ]
+
+
+def freigaben_lesen() -> list[dict]:
+    """Die gepflegte Freigabenliste. Fehlt der Schluessel ganz, wird er mit
+    den Voreintraegen gefuellt; ungueltige Eintraege (ohne Pfad) werden
+    stillschweigend uebergangen."""
+    werte = einstellungen_lesen()
+    liste = werte.get(FREIGABEN_SCHLUESSEL)
+    if liste is None:
+        vorgaben = freigaben_vorgaben()
+        freigaben_schreiben(vorgaben)
+        return vorgaben
+    if not isinstance(liste, list):
+        return []
+    ergebnis = []
+    for eintrag in liste:
+        if not isinstance(eintrag, dict):
+            continue
+        name = str(eintrag.get("name", "")).strip()
+        pfad = str(eintrag.get("pfad", "")).strip()
+        if pfad:
+            ergebnis.append({"name": name or Path(pfad).name or pfad, "pfad": pfad})
+    return ergebnis
+
+
+def freigaben_schreiben(liste: list[dict]) -> None:
+    werte = einstellungen_lesen()
+    werte[FREIGABEN_SCHLUESSEL] = liste
+    einstellungen_schreiben(werte)
+
+
+def _freigabe_vereinheitlicht(pfad: str) -> str:
+    """Vergleichsform eines Freigabepfads, robust gegen Gross-/Kleinschreibung
+    und Schreibweise. Loest sich der Pfad nicht auf, bleibt der Text stehen."""
+    try:
+        return str(Path(pfad).resolve()).lower()
+    except (OSError, ValueError):
+        return str(pfad).strip().lower()
+
+
+def freigabe_hinzufuegen(pfad: Path | str) -> None:
+    """Nimmt einen Ordner in die Freigabenliste auf. Liegt er schon drin,
+    wird der alte Eintrag ersetzt."""
+    pfad = str(Path(pfad))
+    ziel = _freigabe_vereinheitlicht(pfad)
+    liste = [e for e in freigaben_lesen() if _freigabe_vereinheitlicht(e["pfad"]) != ziel]
+    liste.append({"name": Path(pfad).name or pfad, "pfad": pfad})
+    freigaben_schreiben(liste)
+    log.info("Freigabe hinzugefügt: %s", pfad)
+
+
+def freigabe_entfernen(pfad: Path | str) -> None:
+    ziel = _freigabe_vereinheitlicht(str(pfad))
+    liste = [e for e in freigaben_lesen() if _freigabe_vereinheitlicht(e["pfad"]) != ziel]
+    freigaben_schreiben(liste)
+    log.info("Freigabe entfernt: %s", pfad)
 
 
 # -- Zustand ----------------------------------------------------------------
