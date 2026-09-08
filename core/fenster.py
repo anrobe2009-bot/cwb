@@ -24,6 +24,7 @@ import html
 import logging
 import os
 import re
+import struct
 import subprocess
 import sys
 import threading
@@ -302,6 +303,34 @@ def platzwort(platz: int) -> str:
     return PLATZWOERTER.get(int(platz), str(platz))
 
 
+def datei_in_zwischenablage(pfad: Path) -> bool:
+    """Legt eine Datei als Dateiverweis in die Windows-Zwischenablage
+    (CF_HDROP) - so, wie beim Kopieren einer Datei im Explorer. Andere
+    Programme (etwa ein Chat-Fenster) fuegen sie damit ueber Strg+V als
+    echten Anhang ein, nicht als Text."""
+    try:
+        import win32clipboard
+        import win32con
+    except ImportError as fehler:
+        log.error("pywin32 fehlt, Datei nicht in Zwischenablage legbar: %s", fehler)
+        return False
+    dateiliste = (str(pfad) + "\0\0").encode("utf-16le")
+    # DROPFILES-Kopf (20 Byte): Offset zur Dateiliste, Bildpunkt (ungenutzt),
+    # kein Nicht-Client-Modus, Dateiliste in UTF-16 (fWide=1).
+    kopf = struct.pack("<Iiiii", 20, 0, 0, 0, 1)
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_HDROP, kopf + dateiliste)
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Datei nicht in die Zwischenablage gelegt (%s): %s", pfad, fehler)
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Aktivitätsbalken: Farbe zeigt den Zustand, ein wandernder Streifen zeigt,
 # dass gerade gearbeitet wird
@@ -404,6 +433,10 @@ class Werkbank(QMainWindow):
         # Bericht des zuletzt beendeten Auftrags. Er wird gemerkt, damit F6 ihn
         # jederzeit erneut in die Zwischenablage legen kann.
         self._letzter_bericht = ""
+        # Pfad der zuletzt gespeicherten Berichtdatei unter .cwb/bericht/ -
+        # damit sich die Datei erneut als Dateiverweis in die Zwischenablage
+        # legen laesst (Strg+F7), ohne den Bericht neu zu bauen.
+        self._letzter_bericht_pfad: Path | None = None
         # Wahr, solange ein fertiger Bericht darauf wartet, kopiert zu werden:
         # war das Fenster beim Ende des Auftrags nicht im Vordergrund, wuerde
         # das Kopieren fremdes Kopiergut ueberschreiben.
@@ -539,8 +572,9 @@ class Werkbank(QMainWindow):
             ("Strg+B", "Bild anhängen", self._bild_waehlen),
             ("F5", "Zum Eingabefeld, nach Projektwarnung: trotzdem hier ausführen",
              self._f5),
-            ("F6", "Bericht erneut kopieren", self._bericht_erneut_kopieren),
+            ("F6", "Bericht-Text kopieren", self._bericht_erneut_kopieren),
             ("Strg+F6", "Berichtordner öffnen", self._berichtordner_oeffnen),
+            ("Strg+F7", "Bericht-Datei kopieren", self._berichtdatei_kopieren),
             ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F1", "Hilfe vorlesen", self._hilfe),
             ("F9", "Projekt wechseln", self._projekt_wechseln),
@@ -569,6 +603,8 @@ class Werkbank(QMainWindow):
             # ausgeblendet (_vormerkung_zeigen).
             (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
              self._trotzdem_hier),
+            ("⧉", "Bericht-Text kopieren", "F6", "2", self._bericht_erneut_kopieren),
+            ("📎", "Bericht-Datei kopieren", "Strg+F7", "3", self._berichtdatei_kopieren),
             ("📁", "Berichtordner öffnen", "Strg+F6", "1", self._berichtordner_oeffnen),
             ("⏏", "Warteschlange leeren", "F4", "8", self._warteschlange_leeren),
             ("⟳", "Neu starten", "Strg+F4", "5", self._neustart),
@@ -684,6 +720,7 @@ class Werkbank(QMainWindow):
             ("F5", self._f5),
             ("F6", self._bericht_erneut_kopieren),
             ("Ctrl+F6", self._berichtordner_oeffnen),
+            ("Ctrl+F7", self._berichtdatei_kopieren),
             ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
             ("F4", self._warteschlange_leeren),
@@ -1141,19 +1178,19 @@ class Werkbank(QMainWindow):
             log.exception("Bericht nicht gebaut: %s", fehler)
             self._letzter_bericht = ""
 
-        bericht_pfad = self._bericht_datei_speichern() if self._letzter_bericht else None
-        if bericht_pfad:
-            hinweis += f" Bericht auch gespeichert unter {bericht_pfad}."
+        self._letzter_bericht_pfad = (
+            self._bericht_datei_speichern() if self._letzter_bericht else None
+        )
+        if self._letzter_bericht_pfad:
+            hinweis += f" Bericht auch gespeichert unter {self._letzter_bericht_pfad}."
 
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
         # Gesprochen wird nur der kurze Ergebnissatz. Der Inhalt des
         # Ausgabefelds wird nie von allein vorgelesen - dafuer gibt es F3.
-        zusatz = self._bericht_kopieren()
-        if bericht_pfad:
-            zusatz += " Auch als Datei gespeichert."
-        self.sprecher.sprich((ansage + zusatz).strip(), art="meldung")
+        self.sprecher.sprich(
+            (ansage + self._bericht_ablegen_nach_auftrag()).strip(), art="meldung")
 
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
@@ -1229,19 +1266,35 @@ class Werkbank(QMainWindow):
         log.info("Berichtordner geöffnet: %s", ordner)
         self.sprecher.sprich("Berichtordner geöffnet.", art="meldung")
 
-    def _bericht_kopieren(self) -> str:
-        """Legt den zuletzt gebauten Bericht (self._letzter_bericht) nach jedem
-        Auftrag in die Zwischenablage, sofern in den Einstellungen nicht
-        abgeschaltet.
+    def _bericht_ablegen(self) -> str:
+        """Legt den Bericht in die Zwischenablage: vorzugsweise als
+        Dateiverweis auf die gespeicherte Berichtdatei (self.
+        _letzter_bericht_pfad), sonst als Text. So laesst er sich mit Strg+V
+        andernorts als echter Anhang einfuegen statt als leerer Text.
 
-        Kopiert wird nur, wenn das CWB-Fenster im Vordergrund ist. Sonst wuerde
-        der Bericht ueberschreiben, was der Nutzer inzwischen anderswo kopiert
-        hat; er wird dann gemerkt und beim naechsten Wechsel ins Fenster
-        nachgelegt.
+        Rückgabe nennt, welche der beiden Formen jetzt dort liegt - haengt
+        sich an den Ergebnissatz an, damit Bilanz und Zwischenablage-Hinweis
+        in einer einzigen Ansage zusammenkommen statt in zwei kurz
+        hintereinander."""
+        if self._letzter_bericht_pfad and datei_in_zwischenablage(self._letzter_bericht_pfad):
+            return " Bericht-Datei liegt in der Zwischenablage."
+        if self._letzter_bericht:
+            try:
+                QGuiApplication.clipboard().setText(self._letzter_bericht)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
+                return " Bericht konnte nicht kopiert werden."
+            return " Bericht-Text liegt in der Zwischenablage."
+        return " Bericht konnte nicht erstellt werden."
 
-        Rückgabe: haengt sich an den Ergebnissatz an, damit Bilanz und
-        Zwischenablage-Hinweis in einer einzigen Ansage zusammenkommen statt
-        in zwei kurz hintereinander."""
+    def _bericht_ablegen_nach_auftrag(self) -> str:
+        """Legt den Bericht nach jedem Auftrag in die Zwischenablage (siehe
+        _bericht_ablegen), sofern in den Einstellungen nicht abgeschaltet.
+
+        Abgelegt wird nur, wenn das CWB-Fenster im Vordergrund ist. Sonst
+        wuerde das ueberschreiben, was der Nutzer inzwischen anderswo kopiert
+        hat; es wird dann gemerkt und beim naechsten Wechsel ins Fenster
+        nachgelegt."""
         if not self._letzter_bericht:
             return " Bericht konnte nicht erstellt werden."
         if not einstellungen_lesen().get("bericht_kopieren", True):
@@ -1250,12 +1303,7 @@ class Werkbank(QMainWindow):
             self._bericht_wartet = True
             log.info("Bericht vorgemerkt, Fenster ist nicht im Vordergrund")
             return ""
-        try:
-            QGuiApplication.clipboard().setText(self._letzter_bericht)
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
-            return " Bericht konnte nicht kopiert werden."
-        return " Bericht liegt in der Zwischenablage."
+        return self._bericht_ablegen()
 
     def _bericht_nachlegen(self) -> None:
         """Legt einen vorgemerkten Bericht in die Zwischenablage, sobald das
@@ -1263,20 +1311,17 @@ class Werkbank(QMainWindow):
         if not self._bericht_wartet or not self._letzter_bericht:
             return
         self._bericht_wartet = False
-        try:
-            QGuiApplication.clipboard().setText(self._letzter_bericht)
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Vorgemerkter Bericht nicht kopiert: %s", fehler)
-            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
+        zusatz = self._bericht_ablegen().strip()
+        if not zusatz:
             return
-        log.info("Vorgemerkter Bericht in die Zwischenablage gelegt")
-        self.sprecher.sprich("Bericht liegt jetzt in der Zwischenablage.",
-                             art="meldung")
+        log.info("Vorgemerkter Bericht abgelegt: %s", zusatz)
+        self.sprecher.sprich(zusatz, art="meldung")
 
     @slot_geschuetzt
     def _bericht_erneut_kopieren(self) -> None:
-        """F6: legt den Bericht des letzten Auftrags noch einmal in die
-        Zwischenablage, egal was inzwischen dort lag."""
+        """F6: legt den Bericht des letzten Auftrags noch einmal als Text in
+        die Zwischenablage, egal was inzwischen dort lag. Fuer die Datei gibt
+        es die eigene Taste Strg+F7 (_berichtdatei_kopieren)."""
         if not self._letzter_bericht:
             self.sprecher.sprich("Es gibt noch keinen Bericht.", art="meldung")
             return
@@ -1287,8 +1332,27 @@ class Werkbank(QMainWindow):
             log.exception("Bericht nicht erneut kopiert: %s", fehler)
             self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
             return
-        log.info("Bericht erneut in die Zwischenablage gelegt (F6)")
-        self.sprecher.sprich("Bericht liegt jetzt in der Zwischenablage.",
+        log.info("Bericht-Text erneut in die Zwischenablage gelegt (F6)")
+        self.sprecher.sprich("Bericht-Text liegt jetzt in der Zwischenablage.",
+                             art="meldung")
+
+    @slot_geschuetzt
+    def _berichtdatei_kopieren(self) -> None:
+        """Strg+F7: legt die zuletzt gespeicherte Berichtdatei noch einmal als
+        Dateiverweis in die Zwischenablage, egal was inzwischen dort lag - so
+        laesst sie sich mit Strg+V direkt als Anhang einfuegen."""
+        if not self._letzter_bericht_pfad or not self._letzter_bericht_pfad.exists():
+            self.sprecher.sprich("Es gibt noch keine gespeicherte Berichtdatei.",
+                                 art="meldung")
+            return
+        self._bericht_wartet = False
+        if not datei_in_zwischenablage(self._letzter_bericht_pfad):
+            self.sprecher.sprich("Bericht-Datei konnte nicht kopiert werden.",
+                                 art="meldung")
+            return
+        log.info("Berichtdatei erneut in die Zwischenablage gelegt: %s",
+                 self._letzter_bericht_pfad)
+        self.sprecher.sprich("Bericht-Datei liegt jetzt in der Zwischenablage.",
                              art="meldung")
 
     # -- Bedienung ----------------------------------------------------------
