@@ -266,7 +266,21 @@ VERLAUF_ARTEN = {
     "fehler": "✖  FEHLER: ",
     "hinweis": "—  ",
     "terminal": "▸  TERMINAL: ",
+    # Werkzeugaufrufe waehrend des Auftrags: kein Vorsatzzeichen, der Satz
+    # beginnt schon mit der Taetigkeit ("liest fenster.py"). Wird nicht
+    # gesprochen, nur farblich passend zum Aktivitaetsbalken mitgefuehrt.
+    "liest": "",
+    "sucht": "",
+    "schreibt": "",
+    "fuehrt_aus": "",
+    "netz": "",
+    "denkt": "",
 }
+
+# Zustaende, die einen echten Werkzeugaufruf markieren (siehe
+# sitzung.WERKZEUG_ZUSTAND) - fuer diese, und nur wenn eine Taetigkeit
+# mitkommt, entsteht eine eigene Zeile im Ausgabefeld.
+WERKZEUG_ZUSTAENDE = {"liest", "sucht", "schreibt", "fuehrt_aus", "netz", "denkt"}
 
 
 # Platzwoerter fuer die Ansage der Warteschlange. Gesprochen klingt "Platz
@@ -1020,11 +1034,25 @@ class Werkbank(QMainWindow):
         elif zustand == "fehler":
             self._status_zeigen(ansage)
             self._verlauf_anhaengen(ansage, "fehler")
+        elif zustand in WERKZEUG_ZUSTAENDE and taetigkeit:
+            self._verlauf_anhaengen(
+                self._werkzeug_zeile(taetigkeit, pfad, ansage), zustand
+            )
         # Waehrend der Arbeit wird nichts gesprochen, nur der Ton wechselt.
         # Fehler und Ablehnungen werden gesprochen, aber auf zwei Saetze gekuerzt.
         gesprochen = kurzfassen(ansage) if (zustand == "fehler" or ablehnung) else ""
         self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen),
                             art="meldung")
+
+    def _werkzeug_zeile(self, taetigkeit: str, pfad: str, ansage: str) -> str:
+        """Baut die Zeile fuer einen Werkzeugaufruf im Ausgabefeld: bei einer
+        betroffenen Datei Taetigkeit und Dateiname ('liest fenster.py'),
+        sonst Taetigkeit und das Ziel aus der Ansage ('fuehrt aus: git
+        status') - dieselbe Kurzform, die auch im Aktivitaetsbalken steht."""
+        if pfad:
+            return f"{taetigkeit} {Path(pfad).name}"
+        ziel = ansage.split(": ", 1)[1] if ": " in ansage else ""
+        return f"{taetigkeit}: {ziel}" if ziel else taetigkeit
 
     def _verlauf_anhaengen(self, text: str, art: str = "antwort") -> None:
         """Haengt einen Absatz an das Ausgabefeld. Die Art bestimmt die Klasse

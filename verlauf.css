@@ -43,3 +43,31 @@
     background-color: #10241a;
     font-family: Consolas, "Cascadia Mono", monospace;
 }
+
+/* Werkzeugaufrufe waehrend des Auftrags: eine Zeile je Aufruf, still
+   mitgefuehrt (nicht gesprochen). Die Farben sind dieselben wie die des
+   Aktivitaetsbalkens fuer denselben Zustand (siehe stil.qss, #balken), damit
+   Zeile im Verlauf und Balken oben immer zusammenpassen. */
+.liest {
+    color: #4dd964;
+}
+
+.sucht {
+    color: #b5e61d;
+}
+
+.schreibt {
+    color: #ffcc33;
+}
+
+.fuehrt_aus {
+    color: #ff8a1f;
+}
+
+.netz {
+    color: #00d0ff;
+}
+
+.denkt {
+    color: #00c2b2;
+}
