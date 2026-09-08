@@ -23,6 +23,7 @@ try:
         einstellungen_lesen,
         freigabe_hinzufuegen,
         freigaben_lesen,
+        freigaben_mit_zusatz,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -32,6 +33,7 @@ except ImportError:
         einstellungen_lesen,
         freigabe_hinzufuegen,
         freigaben_lesen,
+        freigaben_mit_zusatz,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -218,10 +220,7 @@ class Ordnergrenze:
         Freigabe - alle anderen Zusatzprojekte bleiben gegeneinander
         isoliert. Die Geheimnis-Sperre in pruefe() wird vorher geprueft und
         greift auch innerhalb von memory_hub unveraendert weiter."""
-        memory_hub_eintraege = [
-            e for e in zusatzprojekte_lesen() if e.get("name") == "memory_hub"
-        ]
-        for eintrag in freigaben_lesen() + memory_hub_eintraege:
+        for eintrag in freigaben_mit_zusatz():
             try:
                 basis = Path(eintrag["pfad"]).resolve()
             except (OSError, ValueError):

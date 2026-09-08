@@ -292,6 +292,19 @@ def freigaben_lesen() -> list[dict]:
     return ergebnis
 
 
+def freigaben_mit_zusatz() -> list[dict]:
+    """Freigaben-Liste, ergaenzt um den memory_hub-Sondereintrag aus den
+    Zusatzprojekten. memory_hub zaehlt zusaetzlich als Freigabe, alle
+    anderen Zusatzprojekte bleiben gegeneinander isoliert. Einzige Quelle
+    fuer diese Zusammenfuehrung - sowohl die Ordnergrenze-Pruefung als auch
+    add_dirs der Sitzung nutzen dieselbe Liste, damit beide nicht
+    auseinanderlaufen."""
+    memory_hub_eintraege = [
+        e for e in zusatzprojekte_lesen() if e.get("name") == "memory_hub"
+    ]
+    return freigaben_lesen() + memory_hub_eintraege
+
+
 def freigaben_schreiben(liste: list[dict]) -> None:
     werte = einstellungen_lesen()
     werte[FREIGABEN_SCHLUESSEL] = liste
