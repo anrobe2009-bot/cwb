@@ -84,14 +84,27 @@ class Ergebnis:
 
 def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN) -> Ergebnis:
     """Fuehrt einen Befehl als PowerShell-Aufruf im Projektordner aus, ohne
-    erhoehte Rechte. Stdout und Stderr kommen gemeinsam zurueck."""
+    erhoehte Rechte. Der Befehl wird zuerst in eine temporaere .ps1-Datei
+    geschrieben und ueber -File aufgerufen (statt -Command), damit
+    Mehrzeiler und verschachtelte Anfuehrungszeichen zuverlaessig ankommen.
+    Stdout und Stderr kommen gemeinsam zurueck."""
     vollbefehl = (
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "$OutputEncoding = [System.Text.Encoding]::UTF8; " + befehl
     )
     try:
+        skript_datei = Path(tempfile.mktemp(suffix=".ps1", prefix="cwb_run_"))
+        skript_datei.write_text(vollbefehl, encoding="utf-8")
+    except OSError as fehler:
+        log.error("Vorbereitung des Terminalbefehls gescheitert: %s (%s)", befehl, fehler)
+        return Ergebnis(False, "", -1, str(fehler))
+
+    try:
         prozess = subprocess.run(
-            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", vollbefehl],
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(skript_datei),
+            ],
             cwd=str(ordner),
             capture_output=True,
             text=True,
@@ -105,6 +118,11 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN)
     except OSError as fehler:
         log.error("Terminalbefehl nicht startbar: %s (%s)", befehl, fehler)
         return Ergebnis(False, "", -1, str(fehler))
+    finally:
+        try:
+            skript_datei.unlink(missing_ok=True)
+        except OSError as fehler:
+            log.error("Temporaere Datei nicht loeschbar: %s (%s)", skript_datei, fehler)
 
     ausgabe = ((prozess.stdout or "") + (prozess.stderr or "")).strip()
     log.info("Terminalbefehl beendet, Code %d: %s", prozess.returncode, befehl)
