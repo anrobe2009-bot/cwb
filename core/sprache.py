@@ -257,9 +257,19 @@ class Abspieler:
     def stopp(self) -> None:
         with self._sperre:
             alias, self._laufend = self._laufend, None
-        if alias:
-            self._befehl(f"stop {alias}")
-            self._befehl(f"close {alias}")
+        if not alias:
+            return
+        self._befehl(f"stop {alias}")
+        # Auf die Bestaetigung warten, statt sofort zu schliessen: "stop"
+        # kehrt bei komprimiertem Ton (mp3) manchmal zurueck, bevor die
+        # Hardware wirklich still ist. Wird direkt danach ein neues Stueck
+        # geoeffnet und gespielt, ueberlagern sich beide kurz - zwei Stimmen
+        # gleichzeitig. Die Wartezeit ist eng begrenzt, damit eine haengende
+        # Abfrage nicht die naechste Ansage blockiert.
+        ende = time.monotonic() + 0.5
+        while self._status(alias) == "playing" and time.monotonic() < ende:
+            time.sleep(0.01)
+        self._befehl(f"close {alias}")
 
     def spiele(self, datei: Path, warten: bool = True) -> None:
         self.stopp()

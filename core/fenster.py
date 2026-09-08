@@ -1149,10 +1149,9 @@ class Werkbank(QMainWindow):
         hat; er wird dann gemerkt und beim naechsten Wechsel ins Fenster
         nachgelegt.
 
-        Rückgabe: leer, wenn es geklappt hat - der gelungene Fall wird nicht
-        angesagt, damit nach einem Auftrag nur der Ergebnissatz kommt. Nur das
-        Scheitern wird gemeldet, sonst wartet man auf einen Bericht, der nicht
-        in der Zwischenablage liegt."""
+        Rückgabe: haengt sich an den Ergebnissatz an, damit Bilanz und
+        Zwischenablage-Hinweis in einer einzigen Ansage zusammenkommen statt
+        in zwei kurz hintereinander."""
         try:
             self._letzter_bericht = self._bericht_bauen(bilanz)
         except Exception as fehler:  # noqa: BLE001
@@ -1169,7 +1168,7 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
             return " Bericht konnte nicht kopiert werden."
-        return ""
+        return " Bericht liegt in der Zwischenablage."
 
     def _bericht_nachlegen(self) -> None:
         """Legt einen vorgemerkten Bericht in die Zwischenablage, sobald das
@@ -1248,8 +1247,7 @@ class Werkbank(QMainWindow):
         ansage = (
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
-        self.sprecher.sprich(f"Aus Zwischenablage. {ansage}", art="meldung")
-        self._absenden(bereits_angesagt=True)
+        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}")
 
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
@@ -1263,15 +1261,20 @@ class Werkbank(QMainWindow):
             self._terminal_markierung(art, inhalt)
             return
         self.eingabe.setPlainText(inhalt)
-        self.sprecher.sprich("Auftrag übernommen, Zwischenablage geleert.", art="meldung")
         self._aus_ablage = True
         try:
-            self._absenden(bereits_angesagt=True)
+            self._absenden(vorspann="Auftrag angenommen.")
         finally:
             self._aus_ablage = False
 
     @slot_geschuetzt
-    def _absenden(self, bereits_angesagt: bool = False) -> None:
+    def _absenden(self, vorspann: str = "") -> None:
+        """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
+        schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
+        Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
+        eine zweite Ansage kurz danach auszuloesen. Leer heisst: normaler
+        Weg, die Ansage entsteht ganz in dieser Methode und in
+        `_auftrag_starten`."""
         roh = self.eingabe.toPlainText()
         art, text = markierung_erkennen(roh)
         if art in ("run", "admin"):
@@ -1316,8 +1319,8 @@ class Werkbank(QMainWindow):
             # ist, wird das geoeffnete kurz angesagt - sonst faellt eine
             # Verwechslung erst am Ergebnis auf.
             if not hinweis_auf_projekt(text, self.projekt):
-                self.sprecher.sprich(f"Läuft in {self.projekt.name}.",
-                                     art="meldung")
+                hinweis = f"Läuft in {self.projekt.name}."
+                vorspann = f"{vorspann} {hinweis}".strip() if vorspann else hinweis
         bilder = list(self.bilder)
         self.bilder.clear()
         self.eingabe.clear()
@@ -1329,6 +1332,8 @@ class Werkbank(QMainWindow):
             self._warteschlange.append((text, bilder))
             self._warteschlange_zeigen()
             satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
+            if vorspann:
+                satz = f"{vorspann} {satz}"
             log.info("Auftrag in die Warteschlange auf Platz %d: %s",
                      len(self._warteschlange) + 1, text[:120])
             self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
@@ -1336,18 +1341,19 @@ class Werkbank(QMainWindow):
             self.sprecher.sprich(satz, art="meldung")
             return
 
-        self._auftrag_starten(text, bilder, bereits_angesagt=bereits_angesagt)
+        self._auftrag_starten(text, bilder, vorspann=vorspann)
 
     def _auftrag_starten(self, text: str, bilder: list[Path],
-                          bereits_angesagt: bool = False) -> None:
+                          vorspann: str = "", ansagen: bool = True) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
 
-        `bereits_angesagt` ist gesetzt, wenn der Aufrufer den Auftrag schon
-        mit einer eigenen Ansage angenommen hat (Zwischenablage, Wächter,
-        Warteschlange, Vormerkung) - dann spricht diese Methode nicht noch
-        einmal "Auftrag angenommen", sonst waere es doppelt."""
+        `vorspann` ersetzt die Standardansage "Auftrag angenommen", wenn der
+        Aufrufer schon einen eigenen Anfangssatz gebaut hat. `ansagen=False`
+        schweigt hier ganz, weil `_naechsten_starten` die Ansage zur
+        Warteschlange schon selbst gesprochen hat - so laeuft nie mehr als
+        eine Ansage pro Auftragsstart los."""
         self._auftrag_laeuft = True
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
@@ -1367,19 +1373,19 @@ class Werkbank(QMainWindow):
             self._wartende_auftraege.append((text, bilder))
             self._taetigkeit_zeigen("wartet")
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
-            if not bereits_angesagt:
-                self.sprecher.sprich("Auftrag angenommen, Verbindung wird noch aufgebaut.",
-                                     art="meldung")
+            if ansagen:
+                satz = f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut."
+                self.sprecher.sprich(satz, art="meldung")
             return
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
             faden.auftrag_geben(text, bilder)
-            if not bereits_angesagt:
-                self.sprecher.sprich("Auftrag angenommen, Verbindung wird noch aufgebaut.",
-                                     art="meldung")
+            if ansagen:
+                satz = f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut."
+                self.sprecher.sprich(satz, art="meldung")
             return
-        if not bereits_angesagt:
-            self.sprecher.sprich("Auftrag angenommen.", art="meldung")
+        if ansagen:
+            self.sprecher.sprich(vorspann or "Auftrag angenommen.", art="meldung")
         faden.auftrag_geben(text, bilder)
 
     def _warteschlange_zeigen(self) -> None:
@@ -1405,7 +1411,7 @@ class Werkbank(QMainWindow):
         # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
         # nicht abgeschnitten werden.
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
-        self._auftrag_starten(text, bilder, bereits_angesagt=True)
+        self._auftrag_starten(text, bilder, ansagen=False)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
@@ -1460,14 +1466,13 @@ class Werkbank(QMainWindow):
         log.info("%s %s", satz, roh[:120])
         self._verlauf_anhaengen(satz, "hinweis")
         self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="meldung")
         self.eingabe.setPlainText(roh)
         # Wie beim Nachholen im richtigen Projekt: die Zuordnungspruefung wird
         # uebergangen, sonst hielte dieselbe Warnung den Auftrag sofort wieder
         # auf.
         self._holt_vorgemerkten = True
         try:
-            self._absenden(bereits_angesagt=True)
+            self._absenden(vorspann=satz)
         finally:
             self._holt_vorgemerkten = False
 
@@ -1483,11 +1488,10 @@ class Werkbank(QMainWindow):
         log.info("%s %s", satz, roh[:120])
         self._verlauf_anhaengen(satz, "hinweis")
         self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="meldung")
         self.eingabe.setPlainText(roh)
         self._holt_vorgemerkten = True
         try:
-            self._absenden(bereits_angesagt=True)
+            self._absenden(vorspann=satz)
         finally:
             self._holt_vorgemerkten = False
 
