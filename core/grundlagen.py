@@ -9,7 +9,6 @@ zweites Mal im Speicher - mit einer zweiten Fensterliste und zweiten Klassen.
 
 Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 """
-# Testkommentar fuer Push-Probe, wird gleich wieder entfernt.
 
 import functools
 import logging
