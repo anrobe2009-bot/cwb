@@ -3,8 +3,8 @@ CWB - Code Workbench
 Waechter ueber der Zwischenablage.
 
 Sieht alle zwei Sekunden nach, ob in der Zwischenablage ein Text steht,
-dessen erste Zeile die Code-Markierung ist. Nur dann wird der Text
-uebernommen und abgeschickt.
+dessen erste Zeile eine der drei Markierungen ist (#code#, #run#, #admin#).
+Nur dann wird der Text uebernommen und abgeschickt.
 
 Sobald ein markierter Auftrag uebernommen ist, leert der Waechter die
 Zwischenablage. Damit kann derselbe Text nie zweimal auslösen - es gibt
@@ -39,7 +39,8 @@ class Zwischenablagewaechter(QObject):
 
     `markierung_erkennen` zerlegt einen Text in (Art, Inhalt),
     `aktiv` sagt vor jedem Blick, ob der Waechter eingeschaltet ist,
-    `ausfuehren` bekommt den Inhalt eines erkannten Code-Auftrags.
+    `ausfuehren` bekommt Art und Inhalt eines erkannten Auftrags
+    ("code", "run" oder "admin").
     """
 
     def __init__(self, markierung_erkennen, aktiv, ausfuehren, eltern=None):
@@ -90,11 +91,11 @@ class Zwischenablagewaechter(QObject):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Markierung nicht prüfbar: %s", fehler)
             return
-        if art != "code" or not inhalt:
+        if art not in ("code", "run", "admin") or not inhalt:
             # Kein markierter Auftrag. Hier endet jede Beruehrung mit dem
             # Text: nichts wird behalten und nichts ins Log geschrieben.
             return
-        log.info("Wächter: markierter Auftrag erkannt, %d Zeichen", len(inhalt))
+        log.info("Wächter: markierter Auftrag erkannt (%s), %d Zeichen", art, len(inhalt))
         # Erst die Zwischenablage leeren, dann ausfuehren: so kann derselbe
         # Text nicht ein zweites Mal auslösen, auch wenn der Auftrag laenger
         # braucht als der naechste Blick des Timers.
@@ -103,6 +104,6 @@ class Zwischenablagewaechter(QObject):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zwischenablage nicht leerbar: %s", fehler)
         try:
-            self._ausfuehren(inhalt)
+            self._ausfuehren(art, inhalt)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Auftrag aus der Zwischenablage gescheitert: %s", fehler)

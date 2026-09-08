@@ -33,3 +33,13 @@
 .hinweis {
     color: #98a3b4;
 }
+
+/* Terminalausgabe von #run# und #admin#: laeuft direkt im Terminal, nie
+   ueber Claude Code. Eigene Farbe und eigene Schrift, damit sie sich nie mit
+   einer Antwort verwechseln laesst - das Vorsatzwort "TERMINAL" traegt die
+   Unterscheidung zusaetzlich fuer den Screenreader. */
+.terminal {
+    color: #7ee2a8;
+    background-color: #10241a;
+    font-family: Consolas, "Cascadia Mono", monospace;
+}

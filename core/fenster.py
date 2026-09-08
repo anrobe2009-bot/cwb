@@ -92,9 +92,10 @@ try:
     )
     from .pfade import pfade_vollstaendig
     from .projektwahl import Start
-    from .sicherheit import Projekt
+    from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
     from .tastenleiste import Kachelreihe
+    from .terminal import TerminalFaden
     from .zeigeransage import zeigeransage_einrichten
     from .zuordnung import (
         auftrag_vormerken,
@@ -140,9 +141,10 @@ except ImportError:
     )
     from pfade import pfade_vollstaendig
     from projektwahl import Start
-    from sicherheit import Projekt
+    from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
     from tastenleiste import Kachelreihe
+    from terminal import TerminalFaden
     from zeigeransage import zeigeransage_einrichten
     from zuordnung import (
         auftrag_vormerken,
@@ -182,10 +184,24 @@ TROTZDEM_KENNUNG = "Trotzdem hier ausführen"
 TROTZDEM_SYMBOL = "⤓"
 TROTZDEM_FARBE = "1"
 
-# Einzige Markierung am Anfang des Eingabefelds. Steht sie in der ersten
+# Markierungen am Anfang des Eingabefelds. Steht eine davon in der ersten
 # Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
 # nicht mit uebergeben. Gross- und Kleinschreibung ist egal.
+#
+# #CODE# geht wie ein gewoehnlicher Auftrag an Claude Code.
+# #RUN# und #ADMIN# laufen dagegen nie ueber Claude Code, sondern direkt als
+# PowerShell-Befehl im Projektordner - ohne Modellaufruf, ohne
+# Tokenverbrauch. #ADMIN# fragt dafuer immer erst mit dem vollen Befehl
+# zurueck und laeuft danach mit erhoehten Rechten (siehe core/terminal.py).
 MARKIERUNG_CODE = "#CODE#"
+MARKIERUNG_RUN = "#RUN#"
+MARKIERUNG_ADMIN = "#ADMIN#"
+
+_MARKIERUNGEN = {
+    MARKIERUNG_CODE: "code",
+    MARKIERUNG_RUN: "run",
+    MARKIERUNG_ADMIN: "admin",
+}
 
 # Leerraum, der vor der Markierung stehen darf. Neben den ueblichen
 # Leerzeichen und Zeilenumbruechen auch die unsichtbaren Zeichen, die beim
@@ -196,14 +212,15 @@ RANDZEICHEN = " \t\r\n\v\f\u00a0\u200b\u200e\u200f\ufeff"
 def markierung_erkennen(text: str) -> tuple[str, str]:
     """Zerlegt eine Eingabe in Markierung und Inhalt.
 
-    Rueckgabe: ("code" | "", Inhalt ohne Markierungszeile). Leerraum und
-    Leerzeilen vor der Markierung werden uebergangen. Ohne Markierung bleibt
-    der Text unveraendert und die Art ist leer - er gilt dann als gewoehnlicher
-    Auftrag und wird nie verworfen."""
+    Rueckgabe: ("code" | "run" | "admin" | "", Inhalt ohne Markierungszeile).
+    Leerraum und Leerzeilen vor der Markierung werden uebergangen. Ohne
+    Markierung bleibt der Text unveraendert und die Art ist leer - er gilt
+    dann als gewoehnlicher Auftrag und wird nie verworfen."""
     ohne_rand = text.lstrip(RANDZEICHEN)
     kopf, _, rest = ohne_rand.partition("\n")
-    if kopf.strip(RANDZEICHEN).upper() == MARKIERUNG_CODE:
-        return "code", rest.strip(RANDZEICHEN)
+    art = _MARKIERUNGEN.get(kopf.strip(RANDZEICHEN).upper())
+    if art:
+        return art, rest.strip(RANDZEICHEN)
     return "", text.strip(RANDZEICHEN)
 
 
@@ -246,6 +263,7 @@ VERLAUF_ARTEN = {
     "frage": "❓  FRAGE: ",
     "fehler": "✖  FEHLER: ",
     "hinweis": "—  ",
+    "terminal": "▸  TERMINAL: ",
 }
 
 
@@ -369,6 +387,13 @@ class Werkbank(QMainWindow):
         # das Kopieren fremdes Kopiergut ueberschreiben.
         self._bericht_wartet = False
         self.frage_offen = False
+        # Steht ein #run#- oder #admin#-Befehl auf eine Rueckfrage-Antwort,
+        # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
+        # selbst, die ueber den Arbeitsfaden laufen.
+        self._pending_terminal: dict | None = None
+        # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
+        # Collector eingesammelt wird, bevor er fertig ist.
+        self._terminal_faden: TerminalFaden | None = None
         # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
         # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
         # einlaufenden Absatz der Antwort mit vor.
@@ -859,7 +884,68 @@ class Werkbank(QMainWindow):
         self._verlauf_anhaengen("Freigegeben." if ja else "Abgelehnt.", "hinweis")
         self._status_zeigen("Freigegeben." if ja else "Abgelehnt.")
         self.sprecher.sprich("Ja." if ja else "Nein.")
+        if self._pending_terminal is not None:
+            wartend, self._pending_terminal = self._pending_terminal, None
+            if ja:
+                self._terminal_starten(wartend["befehl"], wartend["admin"])
+            return
         self.faden.frage_beantworten(ja)
+
+    # -- Terminal (#run# und #admin#) ---------------------------------------
+
+    def _terminal_markierung(self, art: str, befehl: str) -> None:
+        """Verarbeitet einen #run#- oder #admin#-Auftrag. Laeuft nie ueber
+        Claude Code: kein Modellaufruf, kein Tokenverbrauch. Ordnergrenze,
+        verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
+        unveraendert; #admin# fragt zusaetzlich immer mit dem vollen Befehl
+        zurueck, bevor er mit erhoehten Rechten laeuft."""
+        befehl = befehl.strip()
+        if not befehl:
+            self.sprecher.sprich("Nach der Markierung steht kein Befehl.", art="meldung")
+            return
+        admin = art == "admin"
+        wache = Wache(self.projekt)
+        wache.nur_lesen = self.nur_lesen
+        urteil = wache.darf_befehl(befehl)
+        if urteil.verboten:
+            satz = urteil.ansage()
+            log.warning("Terminalbefehl abgelehnt: %s", befehl)
+            self._verlauf_anhaengen(satz, "terminal")
+            self._status_zeigen(satz)
+            self.sprecher.sprich(kurzfassen(satz), art="meldung")
+            return
+        if admin or urteil.stufe is Stufe.RUECKFRAGE:
+            grund = "Admin-Befehl mit erhöhten Rechten" if admin else urteil.begruendung
+            satz = f"{grund}: {befehl}. Fortfahren?"
+            kurz_satz = f"{grund}. Fortfahren?"
+            self._pending_terminal = {"befehl": befehl, "admin": admin}
+            self._frage(satz, kurz_satz)
+            return
+        self._terminal_starten(befehl, admin)
+
+    def _terminal_starten(self, befehl: str, admin: bool) -> None:
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="meldung")
+            return
+        art = "admin" if admin else "run"
+        satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
+        log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
+        self._verlauf_anhaengen(befehl, "terminal")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")
+        self._terminal_faden = TerminalFaden(art, befehl, self.projekt.pfad, self)
+        self._terminal_faden.fertig_da.connect(self._terminal_fertig)
+        self._terminal_faden.start()
+
+    @slot_geschuetzt
+    def _terminal_fertig(self, ergebnis) -> None:
+        text = ergebnis.ausgabe or ergebnis.fehler or "(keine Ausgabe)"
+        kopf = "Terminalausgabe" if ergebnis.erfolg else f"Terminalausgabe (Fehler, Code {ergebnis.code})"
+        log.info("Terminalbefehl beendet, Erfolg=%s, Code=%s", ergebnis.erfolg, ergebnis.code)
+        self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
+        satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")
 
     # -- Modellwahl ---------------------------------------------------------
 
@@ -1141,6 +1227,12 @@ class Werkbank(QMainWindow):
             "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
             len(text), art or "ohne Markierung", len(inhalt),
         )
+        if art in ("run", "admin"):
+            # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
+            # im Terminal, ohne Claude Code.
+            self.sprecher.sprich("Aus Zwischenablage.", art="meldung")
+            self._terminal_markierung(art, inhalt)
+            return
         if not inhalt:
             # Nur die Markierung, kein Auftrag darunter: dann gilt der ganze
             # Text als Auftrag, damit nichts stillschweigend verlorengeht.
@@ -1154,10 +1246,16 @@ class Werkbank(QMainWindow):
         self._absenden(bereits_angesagt=True)
 
     @slot_geschuetzt
-    def _ablage_auftrag(self, inhalt: str) -> None:
-        """Der Wächter hat einen markierten Auftrag gefunden: ins Eingabefeld,
-        kurze Ansage, abschicken. Die Zwischenablage ist zu diesem Zeitpunkt
-        schon geleert (siehe ablagewaechter.py)."""
+    def _ablage_auftrag(self, art: str, inhalt: str) -> None:
+        """Der Wächter hat einen markierten Auftrag gefunden. #run# und
+        #admin# laufen direkt im Terminal, ohne Eingabefeld und ohne Claude
+        Code. #code# geht wie bisher ueber das Eingabefeld und _absenden.
+        Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
+        ablagewaechter.py)."""
+        if art in ("run", "admin"):
+            self.sprecher.sprich("Auftrag aus der Zwischenablage übernommen.", art="meldung")
+            self._terminal_markierung(art, inhalt)
+            return
         self.eingabe.setPlainText(inhalt)
         self.sprecher.sprich("Auftrag übernommen, Zwischenablage geleert.", art="meldung")
         self._aus_ablage = True
@@ -1170,6 +1268,12 @@ class Werkbank(QMainWindow):
     def _absenden(self, bereits_angesagt: bool = False) -> None:
         roh = self.eingabe.toPlainText()
         art, text = markierung_erkennen(roh)
+        if art in ("run", "admin"):
+            # #run# und #admin# laufen nie ueber Claude Code: kein
+            # Modellaufruf, kein Tokenverbrauch, direkt im Terminal.
+            self.eingabe.clear()
+            self._terminal_markierung(art, text)
+            return
         if not text:
             self.sprecher.sprich(
                 "Nach der Markierung steht nichts." if art else "Nichts eingegeben.",
