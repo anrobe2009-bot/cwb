@@ -113,6 +113,7 @@ class HubLeser:
         self.spalte_projekt: str | None = None
         self.spalte_text: str | None = None
         self.spalte_datum: str | None = None
+        self.spalte_aktualisiert: str | None = None
         if self.datenbank is None:
             log.info("Kein Memory Hub eingestellt, es wird keiner gelesen")
         elif self.datenbank.exists():
@@ -151,9 +152,14 @@ class HubLeser:
                             (klein[k] for k in ("datum", "date", "zeit", "created", "erstellt",
                                                 "timestamp", "zeitstempel") if k in klein), None
                         )
+                        self.spalte_aktualisiert = next(
+                            (klein[k] for k in ("updated", "aktualisiert", "geaendert")
+                             if k in klein), None
+                        )
                         log.info(
-                            "Hub erkannt: Tabelle %s, Projekt %s, Text %s, Datum %s",
-                            tabelle, projekt, text, self.spalte_datum,
+                            "Hub erkannt: Tabelle %s, Projekt %s, Text %s, Datum %s, "
+                            "Aktualisiert %s",
+                            tabelle, projekt, text, self.spalte_datum, self.spalte_aktualisiert,
                         )
                         return
             log.warning("Keine passende Tabelle im Hub gefunden: %s", tabellen)
@@ -222,9 +228,13 @@ class HubLeser:
             return False
         spalten = [self.spalte_projekt, self.spalte_text]
         werte = [projekt, text]
+        wert_datum = datum or date.today().isoformat()
         if self.spalte_datum:
             spalten.append(self.spalte_datum)
-            werte.append(datum or date.today().isoformat())
+            werte.append(wert_datum)
+        if self.spalte_aktualisiert:
+            spalten.append(self.spalte_aktualisiert)
+            werte.append(wert_datum)
         platzhalter = ", ".join("?" for _ in werte)
         befehl = (
             f"INSERT INTO {self.tabelle} ({', '.join(spalten)}) "
