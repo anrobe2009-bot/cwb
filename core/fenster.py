@@ -971,8 +971,9 @@ class Werkbank(QMainWindow):
         """Verarbeitet einen #run#- oder #admin#-Auftrag. Laeuft nie ueber
         Claude Code: kein Modellaufruf, kein Tokenverbrauch. Ordnergrenze,
         verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
-        unveraendert; #admin# fragt zusaetzlich immer mit dem vollen Befehl
-        zurueck, bevor er mit erhoehten Rechten laeuft."""
+        unveraendert; #admin# fragt mit dem vollen Befehl zurueck, bevor er
+        mit erhoehten Rechten laeuft - aber nur, wenn der Schalter
+        rueckfrage_bei_befehl an ist."""
         # Das fremde Fenster, aus dem der Auftrag kam (Zwischenablage,
         # Waechter oder das Fenster, aus dem gerade zu CWB gewechselt wurde),
         # steht jetzt fest - CWB selbst ist zu diesem Zeitpunkt im
@@ -993,7 +994,8 @@ class Werkbank(QMainWindow):
             self._status_zeigen(satz)
             self.sprecher.sprich(kurzfassen(satz), art="meldung")
             return
-        if admin or urteil.stufe is Stufe.RUECKFRAGE:
+        rueckfrage_an = einstellungen_lesen().get("rueckfrage_bei_befehl", False)
+        if (admin or urteil.stufe is Stufe.RUECKFRAGE) and rueckfrage_an:
             grund = "Admin-Befehl mit erhöhten Rechten" if admin else urteil.begruendung
             satz = f"{grund}: {befehl}. Fortfahren?"
             kurz_satz = f"{grund}. Fortfahren?"
