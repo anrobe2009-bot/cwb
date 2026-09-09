@@ -457,6 +457,12 @@ class Werkbank(QMainWindow):
         # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
         # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
         self._terminal_ziel: tuple | None = None
+        # Wahr, solange das Ausgabefeld einem laufenden #run#/#admin#-Befehl
+        # gehoert. Ein gleichzeitig laufender Claude-Auftrag schreibt so lange
+        # nicht mit hinein, sondern wartet in `_verlauf_puffer` - sonst waere
+        # das eben geleerte Feld sofort wieder voll fremdem Text.
+        self._terminal_anzeige_belegt = False
+        self._verlauf_puffer: list[tuple[str, str]] = []
         # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
         # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
         # einlaufenden Absatz der Antwort mit vor.
@@ -1059,10 +1065,12 @@ class Werkbank(QMainWindow):
         art = "admin" if admin else "run"
         satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
         log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
-        # Das Ausgabefeld wird bei jedem neuen #run#/#admin#-Befehl geleert,
-        # damit am Ende nur der zuletzt bearbeitete Befehl sichtbar ist -
-        # nicht die Historie mehrerer Befehle.
-        self.verlauf.clear()
+        # Diese Methode ist der einzige Weg, auf dem ein Terminalbefehl
+        # losgeht - egal ob #run# oder #admin#, aus dem Eingabefeld, aus der
+        # Zwischenablage, vom Waechter, nach einer Rueckfrage oder aus einer
+        # Vormerkung. Darum steht das Leeren genau hier und nirgends sonst.
+        self._ausgabe_leeren(f"Terminalbefehl ({art})")
+        self._terminal_anzeige_belegt = True
         self._verlauf_anhaengen(befehl, "terminal")
         self._status_zeigen(satz)
         self.sprecher.sprich(satz, art="meldung")  # stumm: Zwischenmeldung
@@ -1091,6 +1099,10 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _terminal_fertig(self, ergebnis) -> None:
+        # Das Ausgabefeld ist ab hier wieder frei: der Befehl ist fertig, das
+        # Ergebnis kommt gleich hinein - danach darf auch Zurueckgehaltenes
+        # aus einem parallel laufenden Auftrag nachruecken.
+        self._terminal_anzeige_belegt = False
         text = ergebnis.ausgabe or ergebnis.fehler or "(keine Ausgabe)"
         kopf = "Terminalausgabe" if ergebnis.erfolg else f"Terminalausgabe (Fehler, Code {ergebnis.code})"
         log.info("Terminalbefehl beendet, Erfolg=%s, Code=%s", ergebnis.erfolg, ergebnis.code)
@@ -1109,6 +1121,7 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         # Abschluss eines #run#/#admin#-Auftrags - die eine Ansage am Ende.
         self.sprecher.sprich(satz, art="fertig" if ergebnis.erfolg else "fehler")
+        self._verlauf_nachtragen()
 
     # -- Modellwahl ---------------------------------------------------------
 
@@ -1194,12 +1207,60 @@ class Werkbank(QMainWindow):
         ziel = ansage.split(": ", 1)[1] if ": " in ansage else ""
         return f"{taetigkeit}: {ziel}" if ziel else taetigkeit
 
+    def _ausgabe_leeren(self, grund: str) -> None:
+        """Leert das Ausgabefeld. Einzige Stelle, an der das geschieht - der
+        Logeintrag macht hinterher nachweisbar, ob und wofuer geleert wurde,
+        statt es beim naechsten Zweifel wieder raten zu muessen."""
+        try:
+            self.verlauf.clear()
+            self._verlauf_puffer.clear()
+            log.info("Ausgabefeld geleert: %s", grund)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Ausgabefeld nicht geleert (%s): %s", grund, fehler)
+
+    def _terminal_belegt(self) -> bool:
+        """Gehoert das Ausgabefeld gerade einem laufenden Terminalbefehl? Der
+        Merker allein genuegt nicht: bliebe er nach einem Absturz des Fadens
+        haengen, verschwaende jede weitere Ausgabe im Puffer. Darum zaehlt
+        zusaetzlich, ob der Faden ueberhaupt noch laeuft."""
+        if not self._terminal_anzeige_belegt:
+            return False
+        faden = self._terminal_faden
+        if faden is None or not faden.isRunning():
+            self._terminal_anzeige_belegt = False
+            return False
+        return True
+
+    def _verlauf_nachtragen(self) -> None:
+        """Traegt nach, was waehrend eines Terminalbefehls zurueckgehalten
+        wurde - nichts geht verloren, es kommt nur spaeter."""
+        if not self._verlauf_puffer:
+            return
+        wartend, self._verlauf_puffer = self._verlauf_puffer, []
+        log.info("Zurueckgehaltene Absaetze nachgetragen: %d", len(wartend))
+        for text, art in wartend:
+            self._absatz_schreiben(text, art)
+
     def _verlauf_anhaengen(self, text: str, art: str = "antwort") -> None:
         """Haengt einen Absatz an das Ausgabefeld. Die Art bestimmt die Klasse
         (Farbe aus verlauf.css) und das Vorsatzzeichen; unbekannte Arten
-        gelten als gewoehnliche Antwort."""
+        gelten als gewoehnliche Antwort.
+
+        Laeuft gerade ein #run#/#admin#-Befehl, wird alles zurueckgehalten,
+        was nicht zu ihm gehoert - nur so bleibt wirklich nur der aktuelle
+        Befehl sichtbar. Rueckfragen und Fehler gehen immer sofort durch, die
+        darf niemand uebersehen."""
         if art not in VERLAUF_ARTEN:
             art = "antwort"
+        if art not in ("terminal", "frage", "fehler") and self._terminal_belegt():
+            self._verlauf_puffer.append((text, art))
+            return
+        self._absatz_schreiben(text, art)
+
+    def _absatz_schreiben(self, text: str, art: str) -> None:
+        """Schreibt einen Absatz wirklich ins Feld - ohne die Rueckhaltung aus
+        `_verlauf_anhaengen`, damit das Nachtragen nicht wieder im Puffer
+        landet."""
         inhalt = f"{VERLAUF_ARTEN[art]}{text}".strip()
         if not inhalt:
             return
