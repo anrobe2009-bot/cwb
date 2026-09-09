@@ -50,6 +50,34 @@ log = logging.getLogger("cwb.tastenleiste")
 # Fenster und steht in core/zeigeransage.py. Jede Kachel traegt dafuer nur
 # ihren Vorlesetext im barrierefreien Namen.
 
+# Kacheln, deren Sichtbarkeit sich in den Einstellungen (Reiter "Kacheln")
+# einzeln abschalten laesst - erkannt an der urspruenglichen Beschriftung,
+# die als Kennung erhalten bleibt (core/fenster.py, `_kachel_eintraege`).
+# Not-Aus und die Zugriffsplakette (Nur lesen / Lesen und Schreiben) stehen
+# bewusst nicht darin: beide bleiben immer sichtbar. "Trotzdem hier
+# ausfuehren" ebenfalls nicht: die blendet sich von selbst ein und aus,
+# je nachdem ob ein Auftrag vorgemerkt ist (core/fenster.py, `_vormerkung_zeigen`).
+KACHELN_SCHALTBAR = [
+    "Ansage abbrechen",
+    "Letzte Antwort",
+    "Bericht-Text kopieren",
+    "Bericht-Datei kopieren",
+    "Berichtordner öffnen",
+    "Warteschlange leeren",
+    "Neu starten",
+    "Projekt wechseln",
+    "Einstellungen",
+]
+
+# Vorbelegung, solange einstellungen.json noch keinen Wert unter
+# "sichtbare_kacheln" hat.
+KACHELN_VOREINSTELLUNG = [
+    "Neu starten",
+    "Projekt wechseln",
+    "Einstellungen",
+    "Bericht-Text kopieren",
+]
+
 
 class Kachel(QPushButton):
     """Eine flache Kachel: Symbol oben, kleiner Text darunter.

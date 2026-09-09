@@ -690,6 +690,7 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background-color: #ffcc33;
     border: 3px solid #ffffff;
+    image: url(bilder/haken.svg);
 }
 
 QCheckBox:focus {

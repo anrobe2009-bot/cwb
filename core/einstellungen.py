@@ -13,6 +13,10 @@ dort gerollt statt abgeschnitten:
   Loeschen im Projektordner, Installieren - alle drei ab Werk aus,
   core/sicherheit.py wertet sie aus, core/kopfzeile.py zeigt sie an),
   Tokenverbrauch je Tag
+- Kacheln   je eine Checkbox fuer jede abschaltbare Kachel der Kachelreihe
+            (core/tastenleiste.py). Not-Aus und die Zugriffsplakette bleiben
+            immer sichtbar und stehen deshalb nicht hier. Tastenkuerzel
+            wirken unabhaengig von der Sichtbarkeit immer.
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
 - Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
             bei der Ersteinrichtung, jederzeit aenderbar
@@ -76,7 +80,12 @@ from PySide6.QtWidgets import (
 
 try:
     from .ersteinrichtung import Pfadzeile
-    from .grundlagen import TAGE_AUFBEWAHRT, heutiger_tag, tagesverbrauch_lesen
+    from .grundlagen import (
+        TAGE_AUFBEWAHRT,
+        heutiger_tag,
+        stil_verzoegert,
+        tagesverbrauch_lesen,
+    )
     from .kopfzeile import zahl_lang
     from .pfade import (
         freigabe_entfernen,
@@ -94,6 +103,7 @@ try:
         zusatzprojekt_hinzufuegen,
         zusatzprojekte_lesen,
     )
+    from .tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG
     from .sprache import (
         STUFEN,
         TON_GRUPPEN_PROBE,
@@ -103,7 +113,12 @@ try:
     )
 except ImportError:
     from ersteinrichtung import Pfadzeile
-    from grundlagen import TAGE_AUFBEWAHRT, heutiger_tag, tagesverbrauch_lesen
+    from grundlagen import (
+        TAGE_AUFBEWAHRT,
+        heutiger_tag,
+        stil_verzoegert,
+        tagesverbrauch_lesen,
+    )
     from kopfzeile import zahl_lang
     from pfade import (
         freigabe_entfernen,
@@ -121,6 +136,7 @@ except ImportError:
         zusatzprojekt_hinzufuegen,
         zusatzprojekte_lesen,
     )
+    from tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG
     from sprache import (
         STUFEN,
         TON_GRUPPEN_PROBE,
@@ -276,6 +292,7 @@ class Gruppe(QFrame):
 
         ueberschrift = QLabel(titel)
         ueberschrift.setObjectName("gruppentitel")
+        ueberschrift.setWordWrap(True)
         self.aufbau.addWidget(ueberschrift)
 
         if hinweis:
@@ -521,8 +538,9 @@ class EinstellungenFenster(QDialog):
         self.setWindowTitle("CWB — Einstellungen")
         self.setAccessibleName("Einstellungen")
         self.setAccessibleDescription(
-            "Sieben Reiter: Sprache, Töne, Verhalten, Skills, Pfade, Projekte, "
-            "Freigaben. Strg und Tabulator wechselt den Reiter, Escape schließt."
+            "Acht Reiter: Sprache, Töne, Verhalten, Kacheln, Skills, Pfade, "
+            "Projekte, Freigaben. Strg und Tabulator wechselt den Reiter, "
+            "Escape schließt."
         )
 
         self._aufbauen()
@@ -560,6 +578,13 @@ class EinstellungenFenster(QDialog):
         except Exception as fehler:  # noqa: BLE001
             log.warning("Fenstergröße nicht setzbar: %s", fehler)
 
+    def resizeEvent(self, ereignis) -> None:
+        """Skaliert das Stilblatt wie das Hauptfenster: schrumpft diese
+        Seite, wird auch hier Schrift und Abstand kleiner, statt dass Text
+        abgeschnitten wird (siehe zusätzlich `setWordWrap` am Gruppentitel)."""
+        super().resizeEvent(ereignis)
+        stil_verzoegert(self.width(), self.height())
+
     def _aufbauen(self) -> None:
         aufbau = QVBoxLayout(self)
 
@@ -591,6 +616,7 @@ class EinstellungenFenster(QDialog):
         )
         self.reiter.addTab(self._reiterseite(self._gruppe_toene()), "Töne")
         self.reiter.addTab(self._reiterseite(self._gruppe_verhalten()), "Verhalten")
+        self.reiter.addTab(self._reiterseite(self._gruppe_kacheln()), "Kacheln")
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
         self.reiter.addTab(self._reiterseite(self._gruppe_pfade()), "Pfade")
         self.reiter.addTab(self._reiterseite(self._gruppe_projekte()), "Projekte")
@@ -1038,6 +1064,52 @@ class EinstellungenFenster(QDialog):
         werte[schluessel] = bool(an)
         self._sichern(werte)
         self.sprecher.sprich(f"{titel}: {'an' if an else 'aus'}.")
+
+    # -- Bereich Kacheln ------------------------------------------------------
+
+    def _gruppe_kacheln(self) -> Gruppe:
+        """Je eine Checkbox fuer jede abschaltbare Kachel der Kachelreihe
+        unter dem Balken (core/tastenleiste.py, `KACHELN_SCHALTBAR`). Not-Aus
+        und die Zugriffsplakette (Nur lesen / Lesen und Schreiben) stehen
+        nicht darin: beide bleiben immer sichtbar. Tastenkuerzel wirken
+        unabhaengig von der Sichtbarkeit immer weiter."""
+        gruppe = Gruppe(
+            "Kacheln",
+            "Welche Befehle als Kachel unter dem Balken erscheinen. Not-Aus "
+            "und die Zugriffsplakette bleiben immer sichtbar. Tastenkürzel "
+            "wirken immer, auch bei ausgeblendeter Kachel.",
+        )
+        sichtbare = self._kacheln_lesen()
+        self.kachel_schalter: dict[str, QCheckBox] = {}
+        for name in KACHELN_SCHALTBAR:
+            schalter = QCheckBox(name)
+            schalter.setObjectName("verhaltensschalter")
+            schalter.setAccessibleName(f"Kachel {name}")
+            schalter.setAccessibleDescription(
+                f"Zeigt die Kachel {name} unter dem Balken, wenn angehakt"
+            )
+            schalter.setChecked(name in sichtbare)
+            schalter.toggled.connect(partial(self._kachel_geschaltet, name))
+            gruppe.feld(schalter)
+            self.kachel_schalter[name] = schalter
+        return gruppe
+
+    def _kacheln_lesen(self) -> list:
+        werte = self._werte_lesen().get("sichtbare_kacheln")
+        return werte if isinstance(werte, list) else list(KACHELN_VOREINSTELLUNG)
+
+    def _kachel_geschaltet(self, name: str, an: bool) -> None:
+        werte = self._werte_lesen()
+        sichtbare = werte.get("sichtbare_kacheln")
+        if not isinstance(sichtbare, list):
+            sichtbare = list(KACHELN_VOREINSTELLUNG)
+        if an and name not in sichtbare:
+            sichtbare.append(name)
+        elif not an and name in sichtbare:
+            sichtbare.remove(name)
+        werte["sichtbare_kacheln"] = sichtbare
+        self._sichern(werte)
+        self.sprecher.sprich(f"Kachel {name}: {'an' if an else 'aus'}.")
 
     # -- Bereich Skills -----------------------------------------------------
 

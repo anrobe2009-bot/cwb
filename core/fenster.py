@@ -98,7 +98,7 @@ try:
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
-    from .tastenleiste import Kachelreihe
+    from .tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG, Kachelreihe
     from .terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
     from .zeigeransage import zeigeransage_einrichten
     from . import zielfenster
@@ -149,7 +149,7 @@ except ImportError:
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
-    from tastenleiste import Kachelreihe
+    from tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG, Kachelreihe
     from terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
     from zeigeransage import zeigeransage_einrichten
     import zielfenster
@@ -618,6 +618,20 @@ class Werkbank(QMainWindow):
             ("⚙", "Einstellungen", "F12", "7", self._einstellungen_zeigen),
         ]
 
+    def _kacheln_sichtbarkeit_anwenden(self) -> None:
+        """Blendet die abschaltbaren Kacheln nach der gemerkten Auswahl ein
+        oder aus (Einstellungen, Reiter Kacheln, Schlüssel "sichtbare_kacheln"
+        in einstellungen.json). Not-Aus, Zugriffsplakette und "Trotzdem hier
+        ausführen" bleiben davon unberührt, ebenso jedes Tastenkürzel."""
+        sichtbare = einstellungen_lesen().get("sichtbare_kacheln")
+        if not isinstance(sichtbare, list):
+            sichtbare = KACHELN_VOREINSTELLUNG
+        for name in KACHELN_SCHALTBAR:
+            try:
+                self.kacheln.kachel_zeigen(name, name in sichtbare)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Kachel-Sichtbarkeit nicht angewendet (%s): %s", name, fehler)
+
     def _aufbauen(self) -> None:
         mitte = QWidget()
         mitte.setObjectName("arbeitsflaeche")
@@ -646,6 +660,7 @@ class Werkbank(QMainWindow):
         # gleichmaessig unter den Kacheln auf und waechst mit dem Fenster.
         self.kacheln = Kachelreihe(self._kachel_eintraege())
         aufbau.addWidget(self.kacheln)
+        self._kacheln_sichtbarkeit_anwenden()
 
         self._auftrags_beginn: datetime | None = None
         self._auftrags_uhr = QTimer(self)
@@ -869,6 +884,7 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich("Einstellungen.")
         fenster.exec()
         self._sicherheitshinweis_aktualisieren()
+        self._kacheln_sichtbarkeit_anwenden()
 
     def _wo_stehen_wir(self) -> None:
         if self.faden.sitzung:

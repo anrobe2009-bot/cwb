@@ -24,10 +24,10 @@ Claude Code selbst - die Kopfzeile stellt nur dar, was ihr gereicht wird.
 Alle Felder werden an gleichbleibenden Beispieltexten gemessen und halten
 dieses Mass, solange das Fenster breit genug ist: kein Inhalt kann die Groesse
 aendern, darum rutscht das Ausgabefeld darunter nie auf und ab und in der Reihe
-verschiebt sich nichts. Wird das Fenster schmaler als die ganze Reihe, geben
-die Felder nach und kuerzen ihren Text mit Auslassungspunkten, statt das
-Fenster breit zu halten. Der volle Wortlaut bleibt als Vorlesetext und
-Kurzhinweis erhalten.
+verschiebt sich nichts. Kein Feld kuerzt seinen Text: Passt die ganze Reihe
+nicht mehr nebeneinander, wandern zuerst die Zaehlerreihe, dann der
+Kopieren-Knopf in eine zweite Zeile (siehe `Ausgabekopf._zeilen_anordnen`) -
+das Fenster zwingt so nie zum Abschneiden von Text.
 
 Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 """
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -116,12 +117,13 @@ def zahl_kurz(anzahl: int) -> str:
 
 
 class Schrumpffeld(QLabel):
-    """Ein Feld der Kopfzeile, das nachgibt statt abzuschneiden.
+    """Ein Feld der Kopfzeile mit fester Wunschbreite, das aber immer den
+    vollen Text zeigt - nichts wird mit Auslassungspunkten gekuerzt.
 
     Solange Platz ist, haelt es die gemessene Wunschbreite - dadurch springt
-    in der Reihe nichts, wenn sich der Inhalt aendert. Wird das Fenster
-    schmaler, schrumpft es mit und kuerzt den Text mit Auslassungspunkten.
-    Der volle Wortlaut bleibt im Kurzhinweis und fuer den Screenreader.
+    in der Reihe nichts, wenn sich der Inhalt aendert. Passt die ganze Reihe
+    nicht mehr nebeneinander, weichen stattdessen die hinteren Felder in eine
+    zweite Zeile aus (siehe `Ausgabekopf._zeilen_anordnen`).
 
     Vor dem Messen steht die Wunschbreite auf null: dann meldet das Feld
     seine echte Textbreite, und `masse_festlegen` misst nicht sich selbst.
@@ -137,11 +139,10 @@ class Schrumpffeld(QLabel):
         self._wunschbreite = max(0, int(breite))
         self.setMinimumWidth(0)
         self.setMaximumWidth(self._wunschbreite or 16777215)
-        self._darstellen()
         self.updateGeometry()
 
     def masse_zuruecksetzen(self) -> None:
-        """Gibt das Feld zum Messen frei: keine Grenze, kein Kuerzen."""
+        """Gibt das Feld zum Messen frei: keine Grenze mehr."""
         self._wunschbreite = 0
         self.setMinimumWidth(0)
         self.setMaximumWidth(16777215)
@@ -152,41 +153,13 @@ class Schrumpffeld(QLabel):
 
     def setText(self, text: str) -> None:
         self._voller_text = text
-        self._darstellen()
-
-    def _darstellen(self) -> None:
-        try:
-            platz = self.contentsRect().width()
-            if self._wunschbreite <= 0 or platz <= 0:
-                super().setText(self._voller_text)
-                return
-            mass = self.fontMetrics()
-            if mass.horizontalAdvance(self._voller_text) <= platz:
-                super().setText(self._voller_text)
-            else:
-                super().setText(
-                    mass.elidedText(self._voller_text, Qt.ElideRight, platz)
-                )
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Feld nicht dargestellt (%s): %s", self._voller_text, fehler)
+        super().setText(text)
 
     def sizeHint(self) -> QSize:
         masse = super().sizeHint()
         if self._wunschbreite <= 0:
             return masse
         return QSize(self._wunschbreite, masse.height())
-
-    def minimumSizeHint(self) -> QSize:
-        """Schmalste Form: ein paar Zeichen und die Auslassungspunkte."""
-        masse = super().minimumSizeHint()
-        if self._wunschbreite <= 0:
-            return masse
-        schmal = self.fontMetrics().averageCharWidth() * 4
-        return QSize(min(schmal, self._wunschbreite), masse.height())
-
-    def resizeEvent(self, ereignis) -> None:
-        super().resizeEvent(ereignis)
-        self._darstellen()
 
 
 class Schrumpfwahl(QComboBox):
@@ -219,9 +192,28 @@ class Ausgabekopf(QWidget):
         self._modell_name = ""
         self._modell_eintraege: list[dict] = []
         self._modell_wert = ""
+        # Wandern erst die Zaehlerreihe, dann der Kopieren-Knopf in die
+        # zweite Zeile - siehe `_zeilen_anordnen`.
+        self._zaehler_unten = False
+        self._kopieren_unten = False
 
-        quer = QHBoxLayout(self)
+        hoch = QVBoxLayout(self)
+        hoch.setContentsMargins(0, 0, 0, 0)
+        hoch.setSpacing(0)
+
+        erste_zeile = QWidget()
+        erste_zeile.setObjectName("ausgabekopfzeile")
+        quer = QHBoxLayout(erste_zeile)
         quer.setContentsMargins(0, 0, 0, 0)
+        hoch.addWidget(erste_zeile)
+        self._zeile1 = quer
+
+        self._zeile2_leiste = QWidget()
+        self._zeile2_leiste.setObjectName("ausgabekopfzeile")
+        self._zeile2 = QHBoxLayout(self._zeile2_leiste)
+        self._zeile2.setContentsMargins(0, 0, 0, 0)
+        hoch.addWidget(self._zeile2_leiste)
+        self._zeile2_leiste.setVisible(False)
 
         # Die Zeile beginnt unmittelbar mit der Zugriffsplakette. Taetigkeit
         # und bearbeitete Datei stehen seitdem gross im Aktivitaetsbalken
@@ -329,6 +321,10 @@ class Ausgabekopf(QWidget):
         self.kopieren.clicked.connect(self.kopieren_gedrueckt)
         quer.addWidget(self.kopieren)
 
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        self._zeilen_anordnen()
+
     # -- Masse --------------------------------------------------------------
 
     def _breite_messen(self, teil: QLabel, beispiele) -> tuple[int, int]:
@@ -366,10 +362,10 @@ class Ausgabekopf(QWidget):
         Inhalt kann die Groesse aendern - weder ein langer Dateiname noch eine
         grosse Zahl noch ein langer Modellname.
 
-        Die Breite ist Wunsch und Obergrenze zugleich, keine Untergrenze: wird
-        das Fenster schmaler als die ganze Reihe, geben die Felder nach und
-        kuerzen ihren Text. Sonst liesse sich das Fenster nie schmaler ziehen
-        als die Kopfzeile breit ist."""
+        Die Breite ist Wunsch und Obergrenze zugleich, keine Untergrenze: passt
+        die ganze Reihe nicht mehr nebeneinander, weichen die hinteren Felder
+        in eine zweite Zeile aus (siehe `_zeilen_anordnen`), statt dass ein
+        Feld seinen Text kuerzt."""
         try:
             felder = (
                 (self.zugriffsplakette, ZUGRIFF_BEISPIELE),
@@ -408,6 +404,48 @@ class Ausgabekopf(QWidget):
             self.modellwahl.setFixedHeight(hoehe)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Maße der Kopfzeile nicht festgelegt: %s", fehler)
+        self._zeilen_anordnen()
+
+    def _zeilen_anordnen(self) -> None:
+        """Kein Feld kuerzt mehr seinen Text (siehe `Schrumpffeld`); reicht die
+        Breite trotzdem nicht fuer eine Zeile, weichen die hinteren Felder in
+        eine zweite Zeile aus - zuerst die Zaehlerreihe, dann der Kopieren-
+        Knopf. Das Modellfeld kuerzt seinen Namen weiterhin selbst (siehe
+        `Schrumpfwahl`) und bleibt darum immer in der ersten Zeile."""
+        try:
+            abstand = max(self._zeile1.spacing(), 0)
+            feste = (
+                self.zugriffsplakette, self.sicherheitshinweis,
+                self.freigabenanzeige, self.warteanzeige, self.modellwahl,
+            )
+            breite_fest = sum(feld.sizeHint().width() for feld in feste)
+            breite_fest += abstand * len(feste)
+            breite_zaehler = self.zaehlerreihe.sizeHint().width() + abstand
+            breite_kopieren = self.kopieren.sizeHint().width() + abstand
+            verfuegbar = self.width()
+
+            zaehler_unten = breite_fest + breite_zaehler + breite_kopieren > verfuegbar
+            kopieren_unten = zaehler_unten and breite_fest + breite_kopieren > verfuegbar
+
+            if zaehler_unten != self._zaehler_unten:
+                self._feld_versetzen(self.zaehlerreihe, zaehler_unten)
+                self._zaehler_unten = zaehler_unten
+            if kopieren_unten != self._kopieren_unten:
+                self._feld_versetzen(self.kopieren, kopieren_unten)
+                self._kopieren_unten = kopieren_unten
+            self._zeile2_leiste.setVisible(self._zaehler_unten or self._kopieren_unten)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kopfzeile nicht in Zeilen aufgeteilt: %s", fehler)
+
+    def _feld_versetzen(self, feld: QWidget, nach_unten: bool) -> None:
+        """Verschiebt ein Feld zwischen erster und zweiter Zeile, ohne seinen
+        Zustand zu verlieren - beide Zeilen sind Layouts desselben Widgets."""
+        if nach_unten:
+            self._zeile1.removeWidget(feld)
+            self._zeile2.addWidget(feld)
+        else:
+            self._zeile2.removeWidget(feld)
+            self._zeile1.addWidget(feld)
 
     # -- Warteschlange ------------------------------------------------------
 
