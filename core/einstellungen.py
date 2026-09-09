@@ -963,6 +963,16 @@ class EinstellungenFenster(QDialog):
             "In der Kopfzeile erscheint dafür ein Zeichen.",
             bool(werte.get("installieren_ohne_rueckfrage", False)),
         )
+        self.rueckfrage_bei_befehl = self._schalter(
+            gruppe,
+            "rueckfrage_bei_befehl",
+            "Sicherheitsrückfrage bei Befehlen",
+            "Steht dieser Schalter an, wird vor jedem rückfragepflichtigen "
+            "Befehl wie bisher nachgefragt. Steht er aus, laufen solche "
+            "Befehle ohne Rückfrage durch - verbotene Befehle bleiben immer "
+            "gesperrt.",
+            bool(werte.get("rueckfrage_bei_befehl", False)),
+        )
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe
