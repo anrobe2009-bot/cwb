@@ -1886,7 +1886,7 @@ class Werkbank(QMainWindow):
 
     def resizeEvent(self, ereignis) -> None:
         super().resizeEvent(ereignis)
-        log.debug(
+        log.info(
             "resizeEvent %s: %dx%d (vorher %dx%d)",
             datetime.now().strftime("%H:%M:%S.%f")[:-3],
             self.width(),
