@@ -549,6 +549,12 @@ class Werkbank(QMainWindow):
         )
         self.ablage_waechter.starten()
 
+        # Der Fensterbeobachter laeuft ab jetzt mit, nicht erst ab dem ersten
+        # #run#/#admin#-Auftrag: sonst haette genau der erste Auftrag einer
+        # Sitzung noch kein Zielfenster und das Ergebnis laege nur in der
+        # Zwischenablage (siehe zielfenster.py).
+        zielfenster.beobachter_starten()
+
         # Wartet ein Auftrag auf genau dieses Projekt, laeuft er jetzt los.
         # Gehoert die Vormerkung zu einem anderen, verfaellt sie hier.
         QTimer.singleShot(0, self._vorgemerkten_holen)
@@ -1091,8 +1097,10 @@ class Werkbank(QMainWindow):
         self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
         satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
         # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
-        # Auftrag kam (siehe zielfenster.py) - klappt das nicht, bleibt es
-        # wie bisher in der Zwischenablage liegen.
+        # Auftrag kam (siehe zielfenster.py). Ist beim Auftragsstart keins
+        # gemerkt worden, nimmt zielfenster.einfuegen() das zuletzt bekannte
+        # Ziel. Nur wenn noch nie eins bekannt war, bleibt das Ergebnis in
+        # der Zwischenablage liegen.
         if zielfenster.einfuegen(self._terminal_ziel, text):
             satz += " Ergebnis eingefügt."
         else:
