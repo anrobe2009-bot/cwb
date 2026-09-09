@@ -1400,10 +1400,7 @@ class Werkbank(QMainWindow):
             self.sprecher.sprich("Es gibt noch keinen Bericht.", art="meldung")
             return
         self._bericht_wartet = False
-        try:
-            QGuiApplication.clipboard().setText(self._letzter_bericht)
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Bericht nicht erneut kopiert: %s", fehler)
+        if not zielfenster._in_zwischenablage_legen(self._letzter_bericht):
             self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
             return
         log.info("Bericht-Text erneut in die Zwischenablage gelegt (F6)")
