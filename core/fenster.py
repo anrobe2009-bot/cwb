@@ -19,6 +19,7 @@ core/grundlagen.py.
 Aussehen kommt vollständig aus stil.qss. Im Python steht keine Gestaltung.
 """
 
+import atexit
 import functools
 import html
 import logging
@@ -98,8 +99,9 @@ try:
     from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
     from .tastenleiste import Kachelreihe
-    from .terminal import TerminalFaden
+    from .terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
     from .zeigeransage import zeigeransage_einrichten
+    from . import zielfenster
     from .zuordnung import (
         auftrag_vormerken,
         fremdes_projekt_erkennen,
@@ -148,8 +150,9 @@ except ImportError:
     from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
     from tastenleiste import Kachelreihe
-    from terminal import TerminalFaden
+    from terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
     from zeigeransage import zeigeransage_einrichten
+    import zielfenster
     from zuordnung import (
         auftrag_vormerken,
         fremdes_projekt_erkennen,
@@ -449,6 +452,9 @@ class Werkbank(QMainWindow):
         # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
         # Collector eingesammelt wird, bevor er fertig ist.
         self._terminal_faden: TerminalFaden | None = None
+        # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
+        # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
+        self._terminal_ziel: tuple | None = None
         # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
         # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
         # einlaufenden Absatz der Antwort mit vor.
@@ -967,6 +973,11 @@ class Werkbank(QMainWindow):
         verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
         unveraendert; #admin# fragt zusaetzlich immer mit dem vollen Befehl
         zurueck, bevor er mit erhoehten Rechten laeuft."""
+        # Das fremde Fenster, aus dem der Auftrag kam (Zwischenablage,
+        # Waechter oder das Fenster, aus dem gerade zu CWB gewechselt wurde),
+        # steht jetzt fest - CWB selbst ist zu diesem Zeitpunkt im
+        # Vordergrund und darf hier nicht mit gemerkt werden.
+        self._terminal_ziel = zielfenster.fenster_merken()
         befehl = befehl.strip()
         if not befehl:
             self.sprecher.sprich("Nach der Markierung steht kein Befehl.", art="meldung")
@@ -1003,7 +1014,17 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich(satz, art="meldung")
         self._terminal_faden = TerminalFaden(art, befehl, self.projekt.pfad, self)
         self._terminal_faden.fertig_da.connect(self._terminal_fertig)
+        self._terminal_faden.teil_da.connect(self._terminal_teil)
         self._terminal_faden.start()
+
+    @slot_geschuetzt
+    def _terminal_teil(self, zeile: str) -> None:
+        """Nur bei #run#: eine Ausgabezeile, waehrend der Befehl noch laeuft.
+        #admin# laeuft im erhoehten Worker-Prozess ohne verbundene Rohre und
+        meldet sich erst am Ende ueber _terminal_fertig."""
+        zeile = zeile.rstrip("\n")
+        if zeile:
+            self._verlauf_anhaengen(zeile, "terminal")
 
     @slot_geschuetzt
     def _terminal_fertig(self, ergebnis) -> None:
@@ -1012,6 +1033,14 @@ class Werkbank(QMainWindow):
         log.info("Terminalbefehl beendet, Erfolg=%s, Code=%s", ergebnis.erfolg, ergebnis.code)
         self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
         satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
+        # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
+        # Auftrag kam (siehe zielfenster.py) - klappt das nicht, bleibt es
+        # wie bisher in der Zwischenablage liegen.
+        if zielfenster.einfuegen(self._terminal_ziel, text):
+            satz += " Ergebnis eingefügt."
+        else:
+            satz += " Ergebnis liegt in der Zwischenablage."
+        self._terminal_ziel = None
         self._status_zeigen(satz)
         self.sprecher.sprich(satz, art="meldung")
 
@@ -1807,10 +1836,33 @@ class Werkbank(QMainWindow):
 # Programmstart
 # ---------------------------------------------------------------------------
 
+def _admin_worker_starten_und_beenden() -> None:
+    """Nimmt CWB als erhoehten Worker-Prozess: gestartet mit --admin-worker
+    und --admin-schluessel, ohne jede Oberflaeche. Kehrt erst zurueck, wenn
+    sich der Worker von selbst beendet (siehe admin_worker_schleife)."""
+    schluessel = ""
+    if "--admin-schluessel" in sys.argv:
+        index = sys.argv.index("--admin-schluessel")
+        if index + 1 < len(sys.argv):
+            schluessel = sys.argv[index + 1]
+    admin_worker_schleife(schluessel)
+
+
 def main() -> None:
     # Muss vor allem anderen stehen: ab hier landet jeder Absturz im Log
     # statt auf dem unsichtbaren stderr von pythonw.
     sys.excepthook = unbehandelte_ausnahme
+
+    # Der erhoehte Admin-Worker ist derselbe Prozess, nur mit anderem
+    # Kommandozeilenschalter neu gestartet (siehe
+    # AdminWorkerVerwaltung._sicherstellen in core/terminal.py) - er braucht
+    # keine Oberflaeche und darf gar nicht erst ein QApplication aufbauen.
+    if "--admin-worker" in sys.argv:
+        _admin_worker_starten_und_beenden()
+        return
+
+    ADMIN_WORKER.sperre_schreiben()
+    atexit.register(ADMIN_WORKER.sperre_entfernen)
 
     anwendung = QApplication(sys.argv)
     stil_laden(anwendung)
