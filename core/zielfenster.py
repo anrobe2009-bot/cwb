@@ -149,6 +149,47 @@ def _strg_v() -> None:
     _u32.keybd_event(VK_STRG, 0, TASTE_LOS, 0)
 
 
+# Anzahl Versuche und Basis-Wartezeit fuer das Zwischenablage-Schreiben.
+# Direkt nach einem UAC-Wechsel (sicherer Desktop) kann der Windows-Aufruf
+# hinter QClipboard.setText() stillschweigend fehlschlagen, ohne dass Qt das
+# als Python-Ausnahme meldet - das setText() tut dann einfach nichts. Darum
+# wird nach jedem Versuch zurueckgelesen und bei Abweichung mit steigender
+# Wartezeit erneut versucht.
+ZWISCHENABLAGE_VERSUCHE = 5
+ZWISCHENABLAGE_WARTE_BASIS_S = 0.15
+
+
+def _in_zwischenablage_legen(text: str) -> bool:
+    """Schreibt `text` in die Zwischenablage und liest ihn sofort zurueck -
+    das prueft echten Erfolg, statt nur das Fehlen einer Python-Ausnahme zu
+    werten (die es bei einem stillen Win32-Fehlschlag ohnehin nicht gibt).
+    Stimmt der zurueckgelesene Text nicht, wird bis zu ZWISCHENABLAGE_VERSUCHE
+    mal erneut versucht, mit steigender Wartezeit dazwischen."""
+    for versuch in range(1, ZWISCHENABLAGE_VERSUCHE + 1):
+        try:
+            QGuiApplication.clipboard().setText(text)
+            zurueckgelesen = QGuiApplication.clipboard().text()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage-Versuch %d fehlgeschlagen: %s", versuch, fehler)
+            zurueckgelesen = None
+        if zurueckgelesen == text:
+            if versuch > 1:
+                log.info("Zwischenablage erst im %d. Versuch angekommen", versuch)
+            return True
+        if versuch < ZWISCHENABLAGE_VERSUCHE:
+            wartezeit = ZWISCHENABLAGE_WARTE_BASIS_S * versuch
+            log.warning(
+                "Zwischenablage-Versuch %d: Text kam nicht an, warte %.2fs", versuch, wartezeit
+            )
+            time.sleep(wartezeit)
+    log.error(
+        "Ergebnis nach %d Versuchen nicht in die Zwischenablage gelegt - "
+        "vermutlich Zugriffskonflikt rund um eine Rechteanforderung (UAC)",
+        ZWISCHENABLAGE_VERSUCHE,
+    )
+    return False
+
+
 def einfuegen(ziel: tuple | None, text: str) -> bool:
     """Legt `text` in die Zwischenablage und fuegt ihn per Strg+V in das
     gemerkte Fenster `ziel` (aus fenster_merken()) ein. Ohne Ziel oder ist
@@ -156,10 +197,7 @@ def einfuegen(ziel: tuple | None, text: str) -> bool:
     nur in der Zwischenablage. Rueckgabe sagt, ob das Einfuegen geklappt hat."""
     if not text:
         return False
-    try:
-        QGuiApplication.clipboard().setText(text)
-    except Exception as fehler:  # noqa: BLE001
-        log.exception("Ergebnis nicht in die Zwischenablage gelegt: %s", fehler)
+    if not _in_zwischenablage_legen(text):
         return False
     if not ziel:
         return False
