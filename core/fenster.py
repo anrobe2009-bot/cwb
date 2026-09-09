@@ -905,7 +905,7 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Einstellungen nicht geöffnet: %s", fehler)
             self.sprecher.sprich("Einstellungen konnten nicht geöffnet werden.",
-                                 art="meldung")
+                                 art="fehler")
             return
         self.sprecher.sprich("Einstellungen.")
         fenster.exec()
@@ -943,7 +943,7 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Schriftgröße nicht zurückgesetzt: %s", fehler)
             self.sprecher.sprich("Schriftgröße konnte nicht zurückgesetzt werden.",
-                                 art="meldung")
+                                 art="fehler")
             return
         self.sprecher.sprich("Schriftgröße zurückgesetzt.")
 
@@ -993,7 +993,7 @@ class Werkbank(QMainWindow):
         # Gesprochen wird ausschliesslich der fertig gekuerzte kurz_satz aus
         # sitzung.py (Anlass ohne Befehl oder Pfad, hoechstens ein kurzer
         # Satz). Der volle Wortlaut steht in Statuszeile und Ausgabefeld.
-        self.sprecher.melde("wartet", kurz_satz, sprechen=True, art="meldung")
+        self.sprecher.melde("wartet", kurz_satz, sprechen=True, art="frage")
 
     def _frage_beantworten(self, ja: bool) -> None:
         self.frage_offen = False
@@ -1023,7 +1023,7 @@ class Werkbank(QMainWindow):
         self._terminal_ziel = zielfenster.fenster_merken()
         befehl = befehl.strip()
         if not befehl:
-            self.sprecher.sprich("Nach der Markierung steht kein Befehl.", art="meldung")
+            self.sprecher.sprich("Nach der Markierung steht kein Befehl.", art="fehler")
             return
         admin = art == "admin"
         wache = Wache(self.projekt)
@@ -1034,7 +1034,7 @@ class Werkbank(QMainWindow):
             log.warning("Terminalbefehl abgelehnt: %s", befehl)
             self._verlauf_anhaengen(satz, "terminal")
             self._status_zeigen(satz)
-            self.sprecher.sprich(kurzfassen(satz), art="meldung")
+            self.sprecher.sprich(kurzfassen(satz), art="fehler")
             return
         rueckfrage_an = einstellungen_lesen().get("rueckfrage_bei_befehl", False)
         if (admin or urteil.stufe is Stufe.RUECKFRAGE) and rueckfrage_an:
@@ -1048,7 +1048,7 @@ class Werkbank(QMainWindow):
 
     def _terminal_starten(self, befehl: str, admin: bool) -> None:
         if self._terminal_faden is not None and self._terminal_faden.isRunning():
-            self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="meldung")
+            self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="fehler")
             return
         art = "admin" if admin else "run"
         satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
@@ -1059,7 +1059,7 @@ class Werkbank(QMainWindow):
         self.verlauf.clear()
         self._verlauf_anhaengen(befehl, "terminal")
         self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="meldung")
+        self.sprecher.sprich(satz, art="meldung")  # stumm: Zwischenmeldung
         self._terminal_faden = TerminalFaden(art, befehl, self.projekt.pfad, self)
         self._terminal_faden.fertig_da.connect(self._terminal_fertig)
         self._terminal_faden.teil_da.connect(self._terminal_teil)
@@ -1099,7 +1099,8 @@ class Werkbank(QMainWindow):
             satz += " Ergebnis liegt in der Zwischenablage."
         self._terminal_ziel = None
         self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="meldung")
+        # Abschluss eines #run#/#admin#-Auftrags - die eine Ansage am Ende.
+        self.sprecher.sprich(satz, art="fertig" if ergebnis.erfolg else "fehler")
 
     # -- Modellwahl ---------------------------------------------------------
 
@@ -1173,7 +1174,7 @@ class Werkbank(QMainWindow):
         # Fehler und Ablehnungen werden gesprochen, aber auf zwei Saetze gekuerzt.
         gesprochen = kurzfassen(ansage) if (zustand == "fehler" or ablehnung) else ""
         self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen),
-                            art="meldung")
+                            art="fehler")
 
     def _werkzeug_zeile(self, taetigkeit: str, pfad: str, ansage: str) -> str:
         """Baut die Zeile fuer einen Werkzeugaufruf im Ausgabefeld: bei einer
@@ -1235,11 +1236,15 @@ class Werkbank(QMainWindow):
         # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
         # `ansage` ist das Einzige, was durch die Stimme geht.
         hinweis = ""
+        # `satzart` entscheidet, ob der Satz ueberhaupt gesprochen wird
+        # (siehe sprache.ERLAUBTE_ARTEN): nur Abschluss und Fehler.
+        satzart = "fertig"
         if bilanz.get("fehler"):
             self._zustand_zeigen("fehler")
             satz = "Fehler."
             hinweis = f" {bilanz['fehler']}"
             ansage = kurzfassen(f"Fehler. {bilanz['fehler']}")
+            satzart = "fehler"
         elif bilanz.get("abgebrochen"):
             self._zustand_zeigen("abgebrochen")
             satz = "Abgebrochen."
@@ -1255,7 +1260,9 @@ class Werkbank(QMainWindow):
             else:
                 satz = f"Fertig, {anzahl} Dateien geändert."
             hinweis = " Antwort vorlesen mit F3, zurücknehmen mit Strg Z."
-            ansage = satz
+            # Gesprochen wird nur "Fertig" - die Bilanz (wie viele Dateien
+            # geaendert) steht in Statuszeile und Ausgabefeld.
+            ansage = "Fertig."
 
         try:
             self._letzter_bericht = self._bericht_bauen(bilanz)
@@ -1272,10 +1279,11 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
                                 "fehler" if bilanz.get("fehler") else "hinweis")
-        # Gesprochen wird nur der kurze Ergebnissatz. Der Inhalt des
-        # Ausgabefelds wird nie von allein vorgelesen - dafuer gibt es F3.
+        # Die einzige Ansage nach einem Auftrag: "Fertig" (oder der Fehler)
+        # samt Hinweis, dass der Bericht in der Zwischenablage liegt. Der
+        # Inhalt des Ausgabefelds wird nie von allein vorgelesen - dafuer F3.
         self.sprecher.sprich(
-            (ansage + self._bericht_ablegen_nach_auftrag()).strip(), art="meldung")
+            (ansage + self._bericht_ablegen_nach_auftrag()).strip(), art=satzart)
 
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
@@ -1340,13 +1348,13 @@ class Werkbank(QMainWindow):
         if not ordner.is_dir():
             log.warning("Berichtordner fehlt: %s", ordner)
             self.sprecher.sprich("Es gibt noch keinen gespeicherten Bericht.",
-                                 art="meldung")
+                                 art="fehler")
             return
         try:
             os.startfile(str(ordner))  # noqa: S606
         except OSError as fehler:
             log.exception("Explorer nicht zu öffnen (%s): %s", ordner, fehler)
-            self.sprecher.sprich("Der Ordner ließ sich nicht öffnen.", art="meldung")
+            self.sprecher.sprich("Der Ordner ließ sich nicht öffnen.", art="fehler")
             return
         log.info("Berichtordner geöffnet: %s", ordner)
         self.sprecher.sprich("Berichtordner geöffnet.", art="meldung")
@@ -1400,7 +1408,9 @@ class Werkbank(QMainWindow):
         if not zusatz:
             return
         log.info("Vorgemerkter Bericht abgelegt: %s", zusatz)
-        self.sprecher.sprich(zusatz, art="meldung")
+        # Gehoert zur Abschlussmeldung: beim Fertigwerden war das Fenster nicht
+        # im Vordergrund, der Hinweis auf die Zwischenablage kommt erst jetzt.
+        self.sprecher.sprich(zusatz, art="fertig")
 
     @slot_geschuetzt
     def _bericht_erneut_kopieren(self) -> None:
@@ -1408,11 +1418,11 @@ class Werkbank(QMainWindow):
         die Zwischenablage, egal was inzwischen dort lag. Fuer die Datei gibt
         es die eigene Taste Strg+F7 (_berichtdatei_kopieren)."""
         if not self._letzter_bericht:
-            self.sprecher.sprich("Es gibt noch keinen Bericht.", art="meldung")
+            self.sprecher.sprich("Es gibt noch keinen Bericht.", art="fehler")
             return
         self._bericht_wartet = False
         if not zielfenster._in_zwischenablage_legen(self._letzter_bericht):
-            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="meldung")
+            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="fehler")
             return
         log.info("Bericht-Text erneut in die Zwischenablage gelegt (F6)")
         self.sprecher.sprich("Bericht-Text liegt jetzt in der Zwischenablage.",
@@ -1425,12 +1435,12 @@ class Werkbank(QMainWindow):
         laesst sie sich mit Strg+V direkt als Anhang einfuegen."""
         if not self._letzter_bericht_pfad or not self._letzter_bericht_pfad.exists():
             self.sprecher.sprich("Es gibt noch keine gespeicherte Berichtdatei.",
-                                 art="meldung")
+                                 art="fehler")
             return
         self._bericht_wartet = False
         if not datei_in_zwischenablage(self._letzter_bericht_pfad):
             self.sprecher.sprich("Bericht-Datei konnte nicht kopiert werden.",
-                                 art="meldung")
+                                 art="fehler")
             return
         log.info("Berichtdatei erneut in die Zwischenablage gelegt: %s",
                  self._letzter_bericht_pfad)
@@ -1454,11 +1464,11 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zwischenablage nicht lesbar: %s", fehler)
             self.sprecher.sprich("Zwischenablage konnte nicht gelesen werden.",
-                                 art="meldung")
+                                 art="fehler")
             return
         if not text.strip(RANDZEICHEN):
             log.info("Zwischenablage leer")
-            self.sprecher.sprich("Zwischenablage ist leer.", art="meldung")
+            self.sprecher.sprich("Zwischenablage ist leer.", art="fehler")
             return
         art, inhalt = markierung_erkennen(text)
         log.info(
@@ -1468,7 +1478,7 @@ class Werkbank(QMainWindow):
         if art in ("run", "admin"):
             # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
             # im Terminal, ohne Claude Code.
-            self.sprecher.sprich("Aus Zwischenablage.", art="meldung")
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
             return
         if not inhalt:
@@ -1490,7 +1500,7 @@ class Werkbank(QMainWindow):
         Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
         ablagewaechter.py)."""
         if art in ("run", "admin"):
-            self.sprecher.sprich("Auftrag aus der Zwischenablage übernommen.", art="meldung")
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
             return
         self.eingabe.setPlainText(inhalt)
@@ -1519,7 +1529,7 @@ class Werkbank(QMainWindow):
         if not text:
             self.sprecher.sprich(
                 "Nach der Markierung steht nichts." if art else "Nichts eingegeben.",
-                art="meldung",
+                art="fehler",
             )
             return
         if not self._holt_vorgemerkten:
@@ -1543,7 +1553,11 @@ class Werkbank(QMainWindow):
                 self._vormerkung_zeigen(True)
                 self._verlauf_anhaengen(satz, "hinweis")
                 self._status_zeigen(satz)
-                self.sprecher.sprich(satz, art="meldung")
+                # Gesprochen nur der Kern ohne Tastenhinweise - der volle
+                # Wortlaut steht in Statuszeile und Ausgabefeld.
+                self.sprecher.sprich(
+                    f"Auftrag gehört vermutlich zu Projekt {fremd}, "
+                    f"hier nicht ausgeführt.", art="fehler")
                 return
             # Ein neuer Auftrag hier hebt eine aeltere Vormerkung auf.
             vormerkung_verwerfen()
@@ -1571,7 +1585,9 @@ class Werkbank(QMainWindow):
                      len(self._warteschlange) + 1, text[:120])
             self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
             self._status_zeigen(satz)
-            self.sprecher.sprich(satz, art="meldung")
+            # Auch ein wartender Auftrag wird einmal kurz bestaetigt, sonst
+            # bliebe das Abschicken voellig ohne hoerbare Antwort.
+            self.sprecher.sprich("Auftrag erhalten, er wartet noch.", art="auftrag")
             return
 
         self._auftrag_starten(text, bilder, vorspann=vorspann)
@@ -1582,11 +1598,12 @@ class Werkbank(QMainWindow):
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
 
-        `vorspann` ersetzt die Standardansage "Auftrag angenommen", wenn der
-        Aufrufer schon einen eigenen Anfangssatz gebaut hat. `ansagen=False`
-        schweigt hier ganz, weil `_naechsten_starten` die Ansage zur
-        Warteschlange schon selbst gesprochen hat - so laeuft nie mehr als
-        eine Ansage pro Auftragsstart los."""
+        Gesprochen wird hier genau ein kurzer Satz: "Auftrag erhalten." Der
+        `vorspann` und der Verbindungshinweis stehen nur noch im Ausgabefeld
+        und in der Statuszeile - gesprochen wuerden sie sich mit der naechsten
+        Ansage ueberlagern. `ansagen=False` schweigt hier ganz, weil
+        `_naechsten_starten` den Auftrag aus der Warteschlange holt, dessen
+        Annahme beim Abschicken schon bestaetigt wurde."""
         self._auftrag_laeuft = True
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
@@ -1606,19 +1623,21 @@ class Werkbank(QMainWindow):
             self._wartende_auftraege.append((text, bilder))
             self._taetigkeit_zeigen("wartet")
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
+            self._status_zeigen(
+                f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
             if ansagen:
-                satz = f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut."
-                self.sprecher.sprich(satz, art="meldung")
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             return
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
             faden.auftrag_geben(text, bilder)
+            self._status_zeigen(
+                f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
             if ansagen:
-                satz = f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut."
-                self.sprecher.sprich(satz, art="meldung")
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             return
         if ansagen:
-            self.sprecher.sprich(vorspann or "Auftrag angenommen.", art="meldung")
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
         faden.auftrag_geben(text, bilder)
 
     def _warteschlange_zeigen(self) -> None:
@@ -1810,7 +1829,7 @@ class Werkbank(QMainWindow):
             subprocess.Popen([sys.executable] + sys.argv, cwd=str(CWB_WURZEL))
         except OSError as fehler:
             log.error("Neustart gescheitert: %s", fehler)
-            self.sprecher.sprich("Neustart gescheitert.", art="meldung")
+            self.sprecher.sprich("Neustart gescheitert.", art="fehler")
             return
         self.close()
         QApplication.instance().quit()

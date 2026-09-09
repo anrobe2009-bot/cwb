@@ -11,9 +11,11 @@ Ausgabewege:
 Wiederkehrende Sätze werden zwischengespeichert und beim zweiten Mal
 ohne Verzögerung abgespielt. Fällt das Internet aus, springt SAPI ein.
 
-Wie viel gesprochen wird, regelt die Stufe (Einstellungen, Reiter "Sprache"):
-1 nur Meldungen, 2 zusätzlich Berührtes. Der Inhalt des Ausgabefelds wird nie
-von allein vorgelesen, dafür gibt es F3 (letzte Antwort) und Strg+L (Markiertes).
+Gesprochen wird bewusst wenig: nur die Annahme eines Auftrags, sein Abschluss,
+Fehlermeldungen, Rückfragen und was der Nutzer selbst abruft (F3, Strg+L,
+Probehören). Welche Satzart durchkommt, steht in ERLAUBTE_ARTEN; alles andere
+bleibt stumm, damit sich nie zwei Ansagen überlagern. Die Stufe (Einstellungen,
+Reiter "Sprache") wirkt zusätzlich, kann die Sperre aber nicht aufheben.
 Jeder Aufruf von `sprich` nennt dazu die Art seines Satzes.
 """
 
@@ -90,10 +92,31 @@ STUFEN = [
 # damit in Stufe eins.
 SATZARTEN = {
     "immer": 0,
+    "auftrag": 0,
+    "fertig": 0,
+    "fehler": 0,
+    "frage": 0,
     "meldung": STUFE_MELDUNGEN,
     "beruehrt": STUFE_BERUEHRT,
 }
 SATZART_STANDARD = "beruehrt"
+
+# Ueber der Stufe steht seit der Reduzierung der Sprachausgabe eine harte
+# Sperre: gesprochen wird nur noch, was hier steht. Alles andere - laufende
+# Werkzeugaufrufe, Statusansagen, Ergebnisbilanzen, Bestaetigungen einzelner
+# Schritte, Hinweise auf Tastenkuerzel - bleibt stumm, damit sich waehrend
+# eines Auftrags nie mehrere Ansagen ueberlagern.
+#   "auftrag"  eine kurze Bestaetigung beim Annehmen eines Auftrags
+#   "fertig"   eine kurze Meldung nach Abschluss
+#   "fehler"   alle Fehlermeldungen, vollstaendig erhalten
+#   "frage"    Rueckfragen, die eine Antwort erwarten (sonst wartet CWB stumm)
+#   "immer"    was der Nutzer selbst abruft (F3, Strg+L, Probehoeren, Ersteinrichtung)
+# Soll eine Gruppe wieder sprechen, genuegt es, ihre Art hier einzutragen.
+ERLAUBTE_ARTEN = {"immer", "auftrag", "fertig", "fehler", "frage"}
+
+# Derselbe Satz zweimal kurz hintereinander (zwei Wege, die beide melden)
+# wird nur einmal gesprochen.
+DOPPEL_SPERRE_SEKUNDEN = 2.0
 
 
 def stufe_pruefen(wert) -> int:
@@ -348,6 +371,9 @@ class Sprecher:
         # Fertigwerden verworfen statt verspaetet und ueberlappend zu klingen.
         self._sprech_generation = 0
         self._generation_sperre = threading.Lock()
+        # Fuer die Doppelsperre: welcher Satz wann zuletzt eingereiht wurde.
+        self._letzter_satz = ""
+        self._letzter_satz_zeit = 0.0
 
         if self.weg == "edge" and not self._edge_vorhanden():
             log.warning("Edge-TTS nicht vorhanden, weiche auf SAPI aus")
@@ -603,12 +629,27 @@ class Sprecher:
         """Reiht Text zum Sprechen ein. Kehrt sofort zurück.
 
         `art` ordnet den Satz einer Stufe zu (siehe SATZARTEN). Was ueber der
-        eingestellten Stufe liegt, wird gar nicht erst eingereiht."""
+        eingestellten Stufe liegt, wird gar nicht erst eingereiht. Vor der
+        Stufe greift die harte Sperre ERLAUBTE_ARTEN: nur Auftragsannahme,
+        Abschluss, Fehler, Rueckfragen und ausdruecklich Abgerufenes werden
+        ueberhaupt gesprochen."""
         if not self.sprechen_an or not text:
+            return
+        if art not in ERLAUBTE_ARTEN:
+            log.debug("Stumm geschaltet (Art %s): %s", art, text[:80])
             return
         if not self.art_erlaubt(art):
             return
         text = " ".join(text.split())
+        jetzt = time.monotonic()
+        with self._generation_sperre:
+            doppelt = (text == self._letzter_satz
+                       and jetzt - self._letzter_satz_zeit < DOPPEL_SPERRE_SEKUNDEN)
+            self._letzter_satz = text
+            self._letzter_satz_zeit = jetzt
+        if doppelt:
+            log.debug("Doppelte Ansage verworfen: %s", text[:80])
+            return
         if unterbrechen:
             self.schweig()
         with self._generation_sperre:

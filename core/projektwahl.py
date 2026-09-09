@@ -124,7 +124,7 @@ class Start(QMainWindow):
 
         if not projekte:
             aufbau.addWidget(QLabel("Keine Projekte gefunden."))
-            self.sprecher.sprich("Keine Projekte gefunden.", art="meldung")
+            self.sprecher.sprich("Keine Projekte gefunden.", art="fehler")
         else:
             self.liste = ProjektListe(projekte, sprecher)
             self.liste.gewaehlt.connect(self._oeffnen)

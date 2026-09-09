@@ -348,7 +348,7 @@ def slot_geschuetzt(funktion):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Fehler in %s: %s", funktion.__name__, fehler)
             try:
-                self.sprecher.sprich(SLOT_FEHLER_ANSAGE, art="meldung")
+                self.sprecher.sprich(SLOT_FEHLER_ANSAGE, art="fehler")
             except Exception:  # noqa: BLE001
                 log.exception("Fehleransage nach Slot-Fehler nicht möglich")
             return None
