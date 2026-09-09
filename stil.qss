@@ -98,13 +98,12 @@ QToolTip {
 
 /* --------------------------------------------------------------------
    Kopfzeile des Ausgabefeldes: Sicherheitshinweis, Freigabenanzeige,
-   Warteanzeige, dann der freie Platz, danach die drei Zaehler (Auftrag,
-   Sitzung, Heute) und ganz rechts der kleine Kopieren-Knopf. Ein Feld fuer
-   die Statusmeldung gibt es nicht mehr, das Schreibrecht steht einzig an
-   der Kachel (F10). Genau eine Zeile hoch, alle Breiten legt das Python
-   fest. Eigene, hellere Flaeche als der Grund, dadurch bilden Kopf und
-   Ausgabefeld sichtbar einen Bereich. Kein Akzentton, damit das Gelb dem
-   Fokus bleibt.
+   Warteanzeige (nur sichtbar, solange etwas wartet), dann der freie Platz,
+   danach die drei Zaehler (Auftrag, Sitzung, Heute). Ein Feld fuer die
+   Statusmeldung gibt es nicht mehr, das Schreibrecht steht einzig an der
+   Kachel (F10). Genau eine Zeile hoch, alle Breiten legt das Python fest.
+   Eigene, hellere Flaeche als der Grund, dadurch bilden Kopf und Ausgabefeld
+   sichtbar einen Bereich. Kein Akzentton, damit das Gelb dem Fokus bleibt.
    -------------------------------------------------------------------- */
 
 /* Token dieses Auftrags, der ganzen Sitzung und des heutigen Tages: gleiche
@@ -161,10 +160,16 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* Kopieren-Knopf: klein und unauffaellig in der oberen rechten Ecke der
-   Kopfzeile, in der Groesse den kleinen Zaehlerfeldern daneben angeglichen -
-   keine grosse Schaltflaeche wie #probe oder #schliessen in den
-   Einstellungen. */
+/* Schmale Zeile unmittelbar ueber dem Ausgabefeld, nur als Traeger fuer den
+   Kopieren-Knopf am rechten Rand - keine eigene Flaeche, kein Rahmen. */
+#kopierzeile {
+    background-color: transparent;
+}
+
+/* Kopieren-Knopf: klein und unauffaellig am rechten Rand direkt ueber dem
+   Ausgabefeld, in der Groesse den kleinen Zaehlerfeldern der Kopfzeile
+   angeglichen - keine grosse Schaltflaeche wie #probe oder #schliessen in
+   den Einstellungen. */
 QPushButton#kopieren {
     background-color: #262c36;
     color: #e6ecf5;

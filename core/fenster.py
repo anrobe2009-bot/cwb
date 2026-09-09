@@ -670,12 +670,28 @@ class Werkbank(QMainWindow):
         # Eine einzige Kopfzeile ueber dem Ausgabefeld traegt alles, was zum
         # Stand der Arbeit gehoert (core/kopfzeile.py).
         self.ausgabekopf = Ausgabekopf()
-        self.ausgabekopf.kopieren_gedrueckt.connect(self._verlauf_kopieren)
         aufbau.addWidget(self.ausgabekopf)
         self.ausgabekopf.masse_festlegen()
         # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
         # einstellungen.json und faengt nicht mit jedem Neustart neu an.
         self.ausgabekopf.tag_zeigen(tagesverbrauch_heute())
+
+        # Schmale Zeile unmittelbar ueber dem Ausgabefeld, nur fuer den
+        # Kopieren-Knopf am rechten Rand - er gehoert zum Ausgabefeld, nicht
+        # zur Kopfzeile mit den Zaehlern.
+        kopierzeile = QWidget()
+        kopierzeile.setObjectName("kopierzeile")
+        kopierquer = QHBoxLayout(kopierzeile)
+        kopierquer.setContentsMargins(0, 0, 0, 0)
+        kopierquer.addStretch(1)
+        self.kopieren = QPushButton("⧉ Kopieren")
+        self.kopieren.setObjectName("kopieren")
+        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
+        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
+        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.kopieren.clicked.connect(self._verlauf_kopieren)
+        kopierquer.addWidget(self.kopieren)
+        aufbau.addWidget(kopierzeile)
 
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen

@@ -29,16 +29,19 @@ verschiebt sich nichts. Die Zeile bleibt einzeilig; die Skalierung des ganzen
 Stilblatts (core/grundlagen.py, `stil_anwenden`) haelt Schrift und Abstaende
 schmaler Fenster klein genug, dass nichts umbricht.
 
+Die Schaltflaeche zum Kopieren steht nicht mehr hier, sondern in einer eigenen
+schmalen Zeile direkt ueber dem Ausgabefeld (core/fenster.py) - dort gehoert
+sie hin, nicht in die Kopfzeile mit den Zaehlern.
+
 Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 """
 
 import logging
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QWidget,
 )
@@ -159,8 +162,6 @@ class Ausgabekopf(QWidget):
     """Die Kopfzeile ueber dem Ausgabefeld. Sie zeigt nur an; entschieden wird
     nichts hier. Das Fenster setzt die Werte, die Kopfzeile stellt sie dar."""
 
-    kopieren_gedrueckt = Signal()
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ausgabekopf")
@@ -207,6 +208,10 @@ class Ausgabekopf(QWidget):
         self.warteanzeige.setAccessibleName("Warteschlange")
         self.warteanzeige.setAlignment(Qt.AlignCenter)
         self.warteanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Verborgen, solange keiner wartet: die feste Breite aus
+        # masse_festlegen wuerde sonst als leere Box zwischen Freigaben- und
+        # Zaehlerreihe stehen bleiben.
+        self.warteanzeige.setVisible(False)
         quer.addWidget(self.warteanzeige)
 
         # Der freie Platz liegt in der Mitte: dadurch stehen Hinweis, Freigaben
@@ -248,16 +253,6 @@ class Ausgabekopf(QWidget):
             reihe.addWidget(zaehler)
 
         quer.addWidget(self.zaehlerreihe)
-
-        # Klein und unauffaellig in der oberen rechten Ecke der Kopfzeile -
-        # die Groesse legt allein #kopieren in stil.qss fest.
-        self.kopieren = QPushButton("⧉ Kopieren")
-        self.kopieren.setObjectName("kopieren")
-        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
-        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
-        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.kopieren.clicked.connect(self.kopieren_gedrueckt)
-        quer.addWidget(self.kopieren)
 
     # -- Masse --------------------------------------------------------------
 
@@ -320,6 +315,7 @@ class Ausgabekopf(QWidget):
         try:
             anzahl = max(0, int(anzahl))
             self.warteanzeige.setText(f"Warten {anzahl}" if anzahl else "")
+            self.warteanzeige.setVisible(anzahl > 0)
             if anzahl == 0:
                 satz = "Warteschlange leer, es wartet kein Auftrag."
             elif anzahl == 1:
