@@ -267,12 +267,22 @@ def fenster_geometrie_anwenden(fenster) -> None:
     """Stellt die gemerkte Position und Größe wieder her. Fehlt sie, oder
     liegt sie außerhalb jedes sichtbaren Bildschirms, erscheint das Fenster
     stattdessen mittig in Vorschlagsgröße."""
+    bildschirme = [
+        (b.name(), b.availableGeometry()) for b in QApplication.screens()
+    ]
     try:
         rechteck = _fenster_geometrie_gelesen()
-        if rechteck is not None and any(
-            bildschirm.availableGeometry().intersects(rechteck)
-            for bildschirm in QApplication.screens()
-        ):
+        treffer = rechteck is not None and any(
+            geo.intersects(rechteck) for _, geo in bildschirme
+        )
+        log.info(
+            "Fenstergeometrie: gemerkt=%s, Bildschirme=%s, Treffer=%s, Fallback=%s",
+            rechteck.getRect() if rechteck is not None else None,
+            [(name, geo.getRect()) for name, geo in bildschirme],
+            treffer,
+            not treffer,
+        )
+        if treffer:
             fenster.setGeometry(rechteck)
             return
     except Exception as fehler:  # noqa: BLE001
