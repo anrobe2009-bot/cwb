@@ -626,11 +626,17 @@ class Werkbank(QMainWindow):
         sichtbare = einstellungen_lesen().get("sichtbare_kacheln")
         if not isinstance(sichtbare, list):
             sichtbare = KACHELN_VOREINSTELLUNG
+        groesse_vorher = self.size()
         for name in KACHELN_SCHALTBAR:
             try:
                 self.kacheln.kachel_zeigen(name, name in sichtbare)
             except Exception as fehler:  # noqa: BLE001
                 log.exception("Kachel-Sichtbarkeit nicht angewendet (%s): %s", name, fehler)
+        # Das Ein-/Ausblenden von Kacheln raeumt nur die Kachelreihe neu ein
+        # und darf die tatsaechliche Fenstergroesse nie eigenmaechtig
+        # veraendern - nur aktives Ziehen am Rahmen durch den Nutzer darf das.
+        if self.size() != groesse_vorher:
+            self.resize(groesse_vorher)
 
     def _aufbauen(self) -> None:
         mitte = QWidget()
@@ -671,6 +677,10 @@ class Werkbank(QMainWindow):
         # Stand der Arbeit gehoert (core/kopfzeile.py).
         self.ausgabekopf = Ausgabekopf()
         aufbau.addWidget(self.ausgabekopf)
+        # Merkt sich Schriftart und -groesse, mit der die Kopfzeile zuletzt
+        # ausgemessen wurde (siehe changeEvent): so wird bei Stil-Ereignissen
+        # ohne echte Schriftaenderung nicht unnoetig neu gemessen.
+        self._kopf_schrift_merker = None
         self.ausgabekopf.masse_festlegen()
         # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
         # einstellungen.json und faengt nicht mit jedem Neustart neu an.
@@ -1854,11 +1864,24 @@ class Werkbank(QMainWindow):
         if ereignis.type() == QEvent.ActivationChange and self.isActiveWindow():
             self._bericht_nachlegen()
         # Ein neues Stilblatt bringt eine neue Schriftgroesse mit: die eine
-        # Zeile wird dann neu ausgemessen und der Text passend gekuerzt.
+        # Zeile wird dann neu ausgemessen und der Text passend gekuerzt. Neu
+        # gemessen wird nur bei echtem Schriftwechsel - sonst wuerde jede
+        # Groessenaenderung des Fensters (ueber stil_verzoegert) hier immer
+        # wieder unnoetig die Kopfzeilen-Maße anfassen.
         if ereignis.type() in (QEvent.StyleChange, QEvent.FontChange) and hasattr(
             self, "ausgabekopf"
         ):
-            self.ausgabekopf.masse_festlegen()
+            schrift = self.font()
+            schluessel = (schrift.family(), round(schrift.pointSizeF(), 1))
+            if schluessel != self._kopf_schrift_merker:
+                self._kopf_schrift_merker = schluessel
+                groesse_vorher = self.size()
+                self.ausgabekopf.masse_festlegen()
+                # Das Ausmessen der Kopfzeile darf die tatsaechliche
+                # Fenstergroesse nie eigenmaechtig veraendern - nur aktives
+                # Ziehen am Rahmen durch den Nutzer darf das.
+                if self.size() != groesse_vorher:
+                    self.resize(groesse_vorher)
             self.ausgabekopf.status_zeichnen()
 
     def resizeEvent(self, ereignis) -> None:

@@ -1,0 +1,6 @@
+C:\Users\Entwickler\Desktop\start\CWB\core\grundlagen.py:116: RuntimeWarning: libpyside: Failed to disconnect (None) from signal "timeout()".
+  _stil_zeitgeber.timeout.disconnect()
+Start-Groesse: 1300 900
+Nach Kachel-Toggles: 1300 900
+Nach Resize/StyleChange-Zyklen: 1300 900
+Zurueckgesetzt: 1300 900
