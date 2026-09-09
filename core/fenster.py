@@ -1674,6 +1674,13 @@ class Werkbank(QMainWindow):
         `_naechsten_starten` den Auftrag aus der Warteschlange holt, dessen
         Annahme beim Abschicken schon bestaetigt wurde."""
         self._auftrag_laeuft = True
+        # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
+        # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
+        # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
+        # Ausgabe stehen, waere ueber die Sprachausgabe nicht zu
+        # unterscheiden, was zum neuen Auftrag gehoert und was vom vorigen
+        # uebrig ist.
+        self._ausgabe_leeren("Auftrag an Claude Code")
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
         self.letzter_verbrauch = {}
