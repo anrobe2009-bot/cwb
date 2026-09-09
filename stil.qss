@@ -97,11 +97,12 @@ QToolTip {
 }
 
 /* --------------------------------------------------------------------
-   Kopfzeile des Ausgabefeldes: "Ausgabe", Taetigkeitsplakette, Dateifeld,
-   dann der freie Platz, danach die Modellwahl, die drei Zaehler (Auftrag,
-   Sitzung, Heute) und der Kopieren-Knopf. Ein Feld fuer die Statusmeldung gibt es
-   nicht mehr. Genau eine Zeile hoch, alle Breiten legt das Python fest.
-   Eigene, hellere Flaeche als der Grund, dadurch bilden Kopf und
+   Kopfzeile des Ausgabefeldes: Sicherheitshinweis, Freigabenanzeige,
+   Warteanzeige, dann der freie Platz, danach die drei Zaehler (Auftrag,
+   Sitzung, Heute) und ganz rechts der kleine Kopieren-Knopf. Ein Feld fuer
+   die Statusmeldung gibt es nicht mehr, das Schreibrecht steht einzig an
+   der Kachel (F10). Genau eine Zeile hoch, alle Breiten legt das Python
+   fest. Eigene, hellere Flaeche als der Grund, dadurch bilden Kopf und
    Ausgabefeld sichtbar einen Bereich. Kein Akzentton, damit das Gelb dem
    Fokus bleibt.
    -------------------------------------------------------------------- */
@@ -147,31 +148,6 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* Zugriffsplakette: nennt dauerhaft das geltende Schreibrecht. Zwei klar
-   verschiedene Farben, damit der Zustand schon am Farbfleck erkennbar ist -
-   ruhiges Gruen fuer "Lesen und Schreiben", warnendes Bernstein mit
-   kraeftigem Rand fuer "Nur lesen". Dunkle Schrift auf beiden hellen
-   Flaechen. */
-#zugriffsplakette {
-    color: #101216;
-    background-color: #4dd964;
-    font-size: 13pt;
-    font-weight: bold;
-    padding: 0.25em 0.5em;
-    border: 2px solid #0b0d11;
-    border-radius: 6px;
-}
-
-#zugriffsplakette[modus="schreiben"] {
-    background-color: #4dd964;
-    border: 2px solid #0b0d11;
-}
-
-#zugriffsplakette[modus="nur_lesen"] {
-    background-color: #ffb020;
-    border: 3px solid #7a4600;
-}
-
 /* Warteanzeige: wie viele Auftraege hinter dem laufenden stehen. Sie faellt
    durch warme Schrift auf, ohne zu schreien, und ist leer, solange keiner
    wartet. Breite und Hoehe legt das Python fest. */
@@ -185,38 +161,15 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* Modellwahl in der Kopfzeile: kein festes Schild, sondern ein Auswahlfeld.
-   Es sieht aus wie die Felder daneben, gibt sich aber durch Rahmen und Pfeil
-   als bedienbar zu erkennen. Breite und Hoehe legt das Python fest. */
-QComboBox#ausgabemodell {
-    background-color: #171b22;
-    color: #d8e2f0;
-    font-size: 13pt;
-    padding: 0.25em 0.8em;
-    border: 2px solid #4a5160;
-    border-radius: 6px;
-}
-
-QComboBox#ausgabemodell:hover {
-    background-color: #33506e;
-    color: #ffffff;
-}
-
-QComboBox#ausgabemodell:focus {
-    border: 4px solid #ffcc33;
-    color: #ffffff;
-}
-
-QComboBox#ausgabemodell::drop-down {
-    border: none;
-    width: 1.6em;
-}
-
+/* Kopieren-Knopf: klein und unauffaellig in der oberen rechten Ecke der
+   Kopfzeile, in der Groesse den kleinen Zaehlerfeldern daneben angeglichen -
+   keine grosse Schaltflaeche wie #probe oder #schliessen in den
+   Einstellungen. */
 QPushButton#kopieren {
     background-color: #262c36;
     color: #e6ecf5;
-    font-size: 14pt;
-    padding: 0.4em 1em;
+    font-size: 12pt;
+    padding: 0.3em 0.7em;
     border: 2px solid #4a5160;
     border-radius: 6px;
 }
@@ -640,9 +593,9 @@ QPushButton#schliessen:focus {
     border: 4px solid #ffcc33;
 }
 
-/* Auswahllisten und Zahlenfeld der Sprachgruppe */
+/* Auswahllisten und Zahlenfeld der Sprachgruppe, Modellwahl der Verhaltensgruppe */
 
-QComboBox#wegwahl, QComboBox#stimmenwahl, QSpinBox#tempowahl {
+QComboBox#wegwahl, QComboBox#stimmenwahl, QSpinBox#tempowahl, QComboBox#modellwahl {
     background-color: #0b0d10;
     color: #ffffff;
     font-size: 16pt;
@@ -652,7 +605,8 @@ QComboBox#wegwahl, QComboBox#stimmenwahl, QSpinBox#tempowahl {
     border-radius: 6px;
 }
 
-QComboBox#wegwahl:focus, QComboBox#stimmenwahl:focus, QSpinBox#tempowahl:focus {
+QComboBox#wegwahl:focus, QComboBox#stimmenwahl:focus, QSpinBox#tempowahl:focus,
+QComboBox#modellwahl:focus {
     border: 4px solid #ffcc33;
 }
 

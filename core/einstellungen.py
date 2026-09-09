@@ -12,7 +12,8 @@ dort gerollt statt abgeschnitten:
   Fenster (core/zeigeransage.py), drei Rueckfrage-Ausnahmen (Internet,
   Loeschen im Projektordner, Installieren - alle drei ab Werk aus,
   core/sicherheit.py wertet sie aus, core/kopfzeile.py zeigt sie an),
-  Tokenverbrauch je Tag
+  Tokenverbrauch je Tag, Modellwahl (welches Modell Claude Code fuer
+  Auftraege benutzt - die Liste kommt von Claude Code selbst)
 - Kacheln   je eine Checkbox fuer jede abschaltbare Kachel der Kachelreihe
             (core/tastenleiste.py). Not-Aus und die Zugriffsplakette bleiben
             immer sichtbar und stehen deshalb nicht hier. Tastenkuerzel
@@ -523,7 +524,8 @@ class EinstellungenFenster(QDialog):
     """Einstellungsseite. Liest und schreibt ueber die uebergebenen
     Funktionen, damit dieses Modul nichts von fenster.py wissen muss."""
 
-    def __init__(self, eltern, sprecher, lesen, schreiben, projekt_pfad=None):
+    def __init__(self, eltern, sprecher, lesen, schreiben, projekt_pfad=None,
+                 modelle=None, modell_aktuell="", modell_waehlen=None):
         super().__init__(eltern)
         self.sprecher = sprecher
         self._lesen = lesen
@@ -533,6 +535,12 @@ class EinstellungenFenster(QDialog):
         self._verbrauchstage: list[tuple[str, int]] = []
         self._zusatzprojekte: list[dict] = []
         self._freigaben: list[dict] = []
+        # Welche Modelle das Abo hergibt und welches gerade laeuft, weiss nur
+        # fenster.py; hier steht nur, was uebergeben wurde. Ein Wechsel wird
+        # ueber den Aufruf zurueckgereicht, nicht selbst verarbeitet.
+        self._modelle = list(modelle or [])
+        self._modell_aktuell = modell_aktuell
+        self._modell_waehlen = modell_waehlen
 
         self.setObjectName("einstellungen")
         self.setWindowTitle("CWB — Einstellungen")
@@ -615,7 +623,10 @@ class EinstellungenFenster(QDialog):
             self._reiterseite(self._gruppe_stufe(), self._gruppe_sprache()), "Sprache"
         )
         self.reiter.addTab(self._reiterseite(self._gruppe_toene()), "Töne")
-        self.reiter.addTab(self._reiterseite(self._gruppe_verhalten()), "Verhalten")
+        self.reiter.addTab(
+            self._reiterseite(self._gruppe_verhalten(), self._gruppe_modell()),
+            "Verhalten",
+        )
         self.reiter.addTab(self._reiterseite(self._gruppe_kacheln()), "Kacheln")
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
         self.reiter.addTab(self._reiterseite(self._gruppe_pfade()), "Pfade")
@@ -1064,6 +1075,51 @@ class EinstellungenFenster(QDialog):
         werte[schluessel] = bool(an)
         self._sichern(werte)
         self.sprecher.sprich(f"{titel}: {'an' if an else 'aus'}.")
+
+    # -- Bereich Modell -------------------------------------------------------
+
+    def _gruppe_modell(self) -> Gruppe:
+        """Welches Modell Claude Code fuer Auftraege in diesem Projekt
+        benutzt. Die Liste kommt von Claude Code selbst (core/modelle.py);
+        vor der ersten Verbindung steht hier nur die Rueckfallliste."""
+        gruppe = Gruppe(
+            "Modell", "Wirkt sofort, die laufende Sitzung wird neu verbunden."
+        )
+
+        self.modell_wahl = QComboBox()
+        self.modell_wahl.setObjectName("modellwahl")
+        self.modell_wahl.setAccessibleName("Modell")
+        self.modell_wahl.setAccessibleDescription(
+            "Welches Modell Claude Code für Aufträge in diesem Projekt verwendet"
+        )
+        for eintrag in self._modelle:
+            name = eintrag.get("name") or eintrag.get("wert", "")
+            hinweis = eintrag.get("hinweis", "")
+            self.modell_wahl.addItem(name, eintrag.get("wert", ""))
+            stelle = self.modell_wahl.count() - 1
+            self.modell_wahl.setItemData(stelle, hinweis, Qt.ToolTipRole)
+            self.modell_wahl.setItemData(
+                stelle, f"{name}. {hinweis}", Qt.AccessibleDescriptionRole
+            )
+        stelle = (
+            self.modell_wahl.findData(self._modell_aktuell)
+            if self._modell_aktuell else -1
+        )
+        self.modell_wahl.setCurrentIndex(max(0, stelle))
+        self.modell_wahl.currentIndexChanged.connect(self._modell_gewechselt)
+        gruppe.zeile("Modell", self.modell_wahl)
+        return gruppe
+
+    def _modell_gewechselt(self, stelle: int) -> None:
+        wert = self.modell_wahl.itemData(stelle)
+        if not wert or wert == self._modell_aktuell:
+            return
+        self._modell_aktuell = str(wert)
+        if callable(self._modell_waehlen):
+            try:
+                self._modell_waehlen(self._modell_aktuell)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Modellwechsel nicht weitergereicht: %s", fehler)
 
     # -- Bereich Kacheln ------------------------------------------------------
 

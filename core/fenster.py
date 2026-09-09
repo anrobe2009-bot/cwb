@@ -671,8 +671,6 @@ class Werkbank(QMainWindow):
         # Stand der Arbeit gehoert (core/kopfzeile.py).
         self.ausgabekopf = Ausgabekopf()
         self.ausgabekopf.kopieren_gedrueckt.connect(self._verlauf_kopieren)
-        self.ausgabekopf.modell_gewaehlt.connect(self._modell_waehlen)
-        self.ausgabekopf.modelle_setzen(self.modelle, self.modell)
         aufbau.addWidget(self.ausgabekopf)
         self.ausgabekopf.masse_festlegen()
         # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
@@ -800,7 +798,8 @@ class Werkbank(QMainWindow):
 
     def _zugriff_zeigen(self) -> None:
         """Bringt Kachel und Kopfzeile auf den geltenden Zustand. Die Kachel
-        nennt und faerbt ihn, die Kopfzeile zeigt ihn dauerhaft an."""
+        nennt und faerbt ihn als einzige dauerhafte Anzeige; die Kopfzeile
+        haengt den Zustand nur an die gesprochene Statusmeldung."""
         if self.nur_lesen:
             text, symbol, farbe = (
                 ZUGRIFF_NUR_LESEN, ZUGRIFF_SYMBOL_NUR_LESEN, ZUGRIFF_FARBE_NUR_LESEN
@@ -875,6 +874,9 @@ class Werkbank(QMainWindow):
                 einstellungen_lesen,
                 einstellungen_schreiben,
                 self.projekt.pfad,
+                modelle=self.modelle,
+                modell_aktuell=self.modell,
+                modell_waehlen=self._modell_waehlen,
             )
         except Exception as fehler:  # noqa: BLE001
             log.exception("Einstellungen nicht geöffnet: %s", fehler)
@@ -1080,8 +1082,9 @@ class Werkbank(QMainWindow):
     @slot_geschuetzt
     def _modelle_anbieten(self, eintraege: list) -> None:
         """Uebernimmt die Liste, die Claude Code selbst gemeldet hat. Nur was
-        das vorhandene Abo hergibt, steht danach im Auswahlfeld. Steht die
-        gemerkte Wahl nicht mehr darin, faellt sie auf den ersten Eintrag."""
+        das vorhandene Abo hergibt, steht danach im Auswahlfeld der
+        Einstellungen (F12, Reiter Verhalten). Steht die gemerkte Wahl nicht
+        mehr darin, faellt sie auf den ersten Eintrag."""
         if not eintraege:
             return
         self.modelle = list(eintraege)
@@ -1089,11 +1092,10 @@ class Werkbank(QMainWindow):
             log.warning("Gemerktes Modell %s wird nicht angeboten", self.modell)
             self.modell = self.modelle[0].get("wert", "")
             modell_merken(self.modell)
-        self.ausgabekopf.modelle_setzen(self.modelle, self.modell)
 
     @slot_geschuetzt
     def _modell_waehlen(self, wert: str) -> None:
-        """Der Nutzer hat im Kopf der Ausgabe ein anderes Modell gewaehlt: die
+        """Die Einstellungsseite meldet ein anderes gewaehltes Modell: die
         Wahl wird gesichert, angesagt und die Sitzung sofort neu verbunden,
         damit sie schon beim naechsten Auftrag greift."""
         if not wert or wert == self.modell:
@@ -1114,7 +1116,6 @@ class Werkbank(QMainWindow):
         self._zustand_zeigen("bereit")
         modell = self.faden.sitzung.modell_name if self.faden.sitzung else ""
         zusatz = f", Modell {modell}" if modell else ""
-        self.ausgabekopf.modell_zeigen(modell)
         self._status_zeigen(f"Bereit — Projekt {self.projekt.name}{zusatz}")
         self.sprecher.melde("bereit", "Bereit.", sprechen=True)
 
