@@ -1009,6 +1009,10 @@ class Werkbank(QMainWindow):
         art = "admin" if admin else "run"
         satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
         log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
+        # Das Ausgabefeld wird bei jedem neuen #run#/#admin#-Befehl geleert,
+        # damit am Ende nur der zuletzt bearbeitete Befehl sichtbar ist -
+        # nicht die Historie mehrerer Befehle.
+        self.verlauf.clear()
         self._verlauf_anhaengen(befehl, "terminal")
         self._status_zeigen(satz)
         self.sprecher.sprich(satz, art="meldung")
