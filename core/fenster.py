@@ -676,23 +676,6 @@ class Werkbank(QMainWindow):
         # einstellungen.json und faengt nicht mit jedem Neustart neu an.
         self.ausgabekopf.tag_zeigen(tagesverbrauch_heute())
 
-        # Schmale Zeile unmittelbar ueber dem Ausgabefeld, nur fuer den
-        # Kopieren-Knopf am rechten Rand - er gehoert zum Ausgabefeld, nicht
-        # zur Kopfzeile mit den Zaehlern.
-        kopierzeile = QWidget()
-        kopierzeile.setObjectName("kopierzeile")
-        kopierquer = QHBoxLayout(kopierzeile)
-        kopierquer.setContentsMargins(0, 0, 0, 0)
-        kopierquer.addStretch(1)
-        self.kopieren = QPushButton("⧉ Kopieren")
-        self.kopieren.setObjectName("kopieren")
-        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
-        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
-        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.kopieren.clicked.connect(self._verlauf_kopieren)
-        kopierquer.addWidget(self.kopieren)
-        aufbau.addWidget(kopierzeile)
-
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
         # aus verlauf.css, nicht aus dem Python.
@@ -703,6 +686,20 @@ class Werkbank(QMainWindow):
         self.verlauf.document().setDefaultStyleSheet(verlauf_stil_lesen())
         self.verlauf.cursorPositionChanged.connect(self._absatz_ansagen)
         aufbau.addWidget(self.verlauf, 12)
+
+        # Der Kopieren-Knopf ist kein eigenes Layout-Element, sondern ein Kind
+        # von self.verlauf selbst: so schwebt er oben rechts UEBER dem Text,
+        # ohne eine eigene Zeile zu belegen, und bleibt beim Scrollen sichtbar.
+        # Die Position wird ueber den eventFilter (QEvent.Resize auf verlauf)
+        # bei jeder Groessenaenderung neu berechnet.
+        self.kopieren = QPushButton("⧉ Kopieren", self.verlauf)
+        self.kopieren.setObjectName("kopieren")
+        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
+        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
+        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.kopieren.clicked.connect(self._verlauf_kopieren)
+        self.kopieren.raise_()
+        self._kopieren_positionieren()
 
         eingabezeile = QWidget()
         eingabezeile.setObjectName("eingabezeile")
@@ -1828,11 +1825,25 @@ class Werkbank(QMainWindow):
 
     def eventFilter(self, gegenstand, ereignis) -> bool:
         """Haelt Strg+Mausrad von den Textfeldern fern: Qt wuerde damit zoomen
-        und die Schriftgroesse aus stil.qss ueberschreiben."""
+        und die Schriftgroesse aus stil.qss ueberschreiben. Haelt ausserdem den
+        schwebenden Kopieren-Knopf oben rechts auf dem Ausgabefeld, wenn sich
+        dessen Groesse aendert (auch durch ein- und ausblendenden Rollbalken)."""
         art = ereignis.type()
         if art == QEvent.Wheel and (ereignis.modifiers() & Qt.ControlModifier):
             return True
+        if gegenstand is self.verlauf and art == QEvent.Resize:
+            self._kopieren_positionieren()
         return super().eventFilter(gegenstand, ereignis)
+
+    def _kopieren_positionieren(self) -> None:
+        """Setzt den Kopieren-Knopf oben rechts in die Ecke von self.verlauf,
+        einige Pixel Rand, damit er ueber dem Text schwebt statt eine eigene
+        Zeile zu belegen (schwebt auch beim Scrollen sichtbar mit)."""
+        rand = 6
+        breite = self.verlauf.width()
+        self.kopieren.adjustSize()
+        x = max(0, breite - self.kopieren.width() - rand)
+        self.kopieren.move(x, rand)
 
     def keyPressEvent(self, ereignis) -> None:
         if ereignis.matches(QKeySequence.Paste) and self._bild_aus_ablage():

@@ -160,16 +160,10 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* Schmale Zeile unmittelbar ueber dem Ausgabefeld, nur als Traeger fuer den
-   Kopieren-Knopf am rechten Rand - keine eigene Flaeche, kein Rahmen. */
-#kopierzeile {
-    background-color: transparent;
-}
-
-/* Kopieren-Knopf: klein und unauffaellig am rechten Rand direkt ueber dem
-   Ausgabefeld, in der Groesse den kleinen Zaehlerfeldern der Kopfzeile
-   angeglichen - keine grosse Schaltflaeche wie #probe oder #schliessen in
-   den Einstellungen. */
+/* Kopieren-Knopf: schwebt als Kind-Widget direkt auf dem Ausgabefeld oben
+   rechts (Positionierung in fenster.py), klein und unauffaellig, in der
+   Groesse den kleinen Zaehlerfeldern der Kopfzeile angeglichen - keine
+   grosse Schaltflaeche wie #probe oder #schliessen in den Einstellungen. */
 QPushButton#kopieren {
     background-color: #262c36;
     color: #e6ecf5;
