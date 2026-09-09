@@ -1,0 +1,101 @@
+﻿{
+  "letztes_projekt": "CWB",
+  "sprache": {
+    "weg": "edge",
+    "stimme": "de-DE-SeraphinaMultilingualNeural",
+    "tempo": 0,
+    "stufe": 1
+  },
+  "ablage_zuletzt": "b90e01c86ac5db9da2abbddc273fb61b143fdc130d57a742398d406003bf4d1e",
+  "modell": "sonnet",
+  "toene": {
+    "alle_aus": false,
+    "arbeit": false,
+    "warnung": true,
+    "abschluss": true
+  },
+  "tokenverbrauch": {
+    "2026-09-05": 394037,
+    "2026-09-06": 585053,
+    "2026-09-07": 1251353,
+    "2026-09-08": 1035432,
+    "2026-09-09": 578295
+  },
+  "pfade": {
+    "projektwurzel": "C:\\Users\\Entwickler\\Desktop\\start",
+    "skills": "C:\\Users\\Entwickler\\.claude\\skills",
+    "memory_hub": "C:\\Users\\Entwickler\\Desktop\\start\\memory_hub\\memory.db"
+  },
+  "ablage_waechter": true,
+  "zusatzprojekte": [
+    {
+      "name": "Max und frriends",
+      "pfad": "C:\\Max und frriends"
+    },
+    {
+      "name": "assistenz",
+      "pfad": "C:\\Users\\Entwickler\\Desktop\\start\\assistenz"
+    },
+    {
+      "name": "CWB",
+      "pfad": "C:\\Users\\Entwickler\\Desktop\\start\\CWB"
+    },
+    {
+      "name": "memory_hub",
+      "pfad": "C:\\Users\\Entwickler\\Desktop\\start\\memory_hub"
+    },
+    {
+      "name": "schreiber",
+      "pfad": "C:\\Projekte\\schreiber"
+    },
+    {
+      "name": "prompt_optimizer",
+      "pfad": "C:\\Users\\Entwickler\\Desktop\\start\\prompt_optimizer"
+    },
+    {
+      "name": "hausgemacht",
+      "pfad": "C:\\Projekte\\hausgemacht"
+    }
+  ],
+  "internet_ohne_rueckfrage": true,
+  "loeschen_ohne_rueckfrage": true,
+  "installieren_ohne_rueckfrage": true,
+  "rueckfrage_bei_befehl": false,
+  "freigaben": [
+    {
+      "name": "Skill-Ordner",
+      "pfad": "C:\\Users\\Entwickler\\.claude\\skills"
+    },
+    {
+      "name": "Claude-Temp-Ordner",
+      "pfad": "C:\\Users\\ENTWIC~1\\AppData\\Local\\Temp\\claude"
+    },
+    {
+      "name": "cwb-werkzeuge",
+      "pfad": "C:\\Users\\Entwickler\\.cwb-werkzeuge"
+    },
+    {
+      "name": "tmp",
+      "pfad": "C:\\tmp"
+    },
+    {
+      "name": "schreiber",
+      "pfad": "C:\\Projekte\\schreiber"
+    },
+    {
+      "name": "AI Terminal Bridge",
+      "pfad": "C:\\Users\\Entwickler\\Desktop\\start\\AI Terminal Bridge"
+    }
+  ],
+  "fenster": {
+    "x": 50,
+    "y": 60,
+    "breite": 845,
+    "hoehe": 541
+  },
+  "sichtbare_kacheln": [
+    "Bericht-Text kopieren",
+    "Bericht-Datei kopieren"
+  ]
+}
+
