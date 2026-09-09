@@ -303,6 +303,12 @@ class Ausgabekopf(QWidget):
             for teil, breite in gemessen:
                 teil.wunschbreite_setzen(breite)
                 teil.setFixedHeight(hoehe)
+            # Die Kopfzeile bekommt ihre Hoehe direkt und einmalig gesetzt,
+            # statt sie ueber die Kindfelder implizit vom Layout ableiten zu
+            # lassen (analog zu ATBs _set_panel_height). So steht in jedem
+            # Zustand ein einziger, eindeutiger Wert fest - kein Messen und
+            # Zurueckstellen der Fenstergroesse ist mehr noetig.
+            self.setFixedHeight(hoehe)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Maße der Kopfzeile nicht festgelegt: %s", fehler)
 

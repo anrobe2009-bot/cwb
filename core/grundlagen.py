@@ -67,6 +67,12 @@ _STIL_MASS_MUSTER = re.compile(r"(\d+(?:\.\d+)?)(pt|px)")
 _roh_stil = ""
 _letzter_faktor: float | None = None
 _stil_zeitgeber: QTimer | None = None
+# Wiedereintritts-Sperre: waehrend setStyleSheet() laeuft, loest Qt an
+# jedem Widget - auch am Hauptfenster - ein StyleChange-Ereignis aus. Ohne
+# diese Sperre wuerde das dortige resizeEvent das fuer ein echtes
+# Nutzer-Ziehen halten und die Skalierung erneut anstossen (analog zum
+# Wiedereintritts-Schutz in ATB, _apply_scale/_breite_laeuft).
+_stil_wird_angewandt = False
 
 
 def _stil_skaliert(text: str, faktor: float) -> str:
@@ -92,15 +98,24 @@ def stil_laden(anwendung: QApplication) -> None:
         log.error("stil.qss nicht lesbar: %s", fehler)
 
 
+def stil_wird_angewandt() -> bool:
+    """True, waehrend stil_anwenden() gerade setStyleSheet() ausfuehrt."""
+    return _stil_wird_angewandt
+
+
 def stil_anwenden(faktor: float) -> None:
-    global _letzter_faktor
+    global _letzter_faktor, _stil_wird_angewandt
     faktor = max(SKALA_MIN, min(SKALA_MAX, faktor))
     if _letzter_faktor is not None and abs(faktor - _letzter_faktor) < 0.02:
         return
     _letzter_faktor = faktor
     anwendung = QApplication.instance()
     if anwendung is not None and _roh_stil:
-        anwendung.setStyleSheet(_stil_skaliert(_roh_stil, faktor))
+        _stil_wird_angewandt = True
+        try:
+            anwendung.setStyleSheet(_stil_skaliert(_roh_stil, faktor))
+        finally:
+            _stil_wird_angewandt = False
 
 
 def stil_verzoegert(breite: int, hoehe: int) -> None:

@@ -76,6 +76,7 @@ try:
         stil_erneuern,
         stil_laden,
         stil_verzoegert,
+        stil_wird_angewandt,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -127,6 +128,7 @@ except ImportError:
         stil_erneuern,
         stil_laden,
         stil_verzoegert,
+        stil_wird_angewandt,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -626,17 +628,16 @@ class Werkbank(QMainWindow):
         sichtbare = einstellungen_lesen().get("sichtbare_kacheln")
         if not isinstance(sichtbare, list):
             sichtbare = KACHELN_VOREINSTELLUNG
-        groesse_vorher = self.size()
+        # Das Ein-/Ausblenden von Kacheln raeumt nur die Kachelreihe neu ein.
+        # Die Fenstergroesse wird dabei nicht mehr gemessen und zurueckgesetzt
+        # (das war die Quelle unnoetiger resizeEvent-Kaskaden) - die
+        # Fenstergroesse aendert sich programmatisch nur noch beim Start
+        # (fenster_geometrie_anwenden) und durch aktives Ziehen am Rahmen.
         for name in KACHELN_SCHALTBAR:
             try:
                 self.kacheln.kachel_zeigen(name, name in sichtbare)
             except Exception as fehler:  # noqa: BLE001
                 log.exception("Kachel-Sichtbarkeit nicht angewendet (%s): %s", name, fehler)
-        # Das Ein-/Ausblenden von Kacheln raeumt nur die Kachelreihe neu ein
-        # und darf die tatsaechliche Fenstergroesse nie eigenmaechtig
-        # veraendern - nur aktives Ziehen am Rahmen durch den Nutzer darf das.
-        if self.size() != groesse_vorher:
-            self.resize(groesse_vorher)
 
     def _aufbauen(self) -> None:
         mitte = QWidget()
@@ -1875,17 +1876,24 @@ class Werkbank(QMainWindow):
             schluessel = (schrift.family(), round(schrift.pointSizeF(), 1))
             if schluessel != self._kopf_schrift_merker:
                 self._kopf_schrift_merker = schluessel
-                groesse_vorher = self.size()
+                # Setzt nur feste Masse an den Kopfzeilen-Widgets selbst
+                # (core/kopfzeile.py, masse_festlegen). Ruehrt die
+                # Fenstergroesse nicht mehr an - das war die Quelle der
+                # resizeEvent-Kaskaden (Korrektur loeste selbst ein neues
+                # resizeEvent aus, das die Skalierung erneut anstiess).
                 self.ausgabekopf.masse_festlegen()
-                # Das Ausmessen der Kopfzeile darf die tatsaechliche
-                # Fenstergroesse nie eigenmaechtig veraendern - nur aktives
-                # Ziehen am Rahmen durch den Nutzer darf das.
-                if self.size() != groesse_vorher:
-                    self.resize(groesse_vorher)
             self.ausgabekopf.status_zeichnen()
 
     def resizeEvent(self, ereignis) -> None:
         super().resizeEvent(ereignis)
+        # Wiedereintritts-Sperre: setStyleSheet() (in stil_anwenden) loest an
+        # jedem Widget - auch hier - ein StyleChange-Ereignis aus, das ueber
+        # Qt auch ein resizeEvent nach sich ziehen kann. Das ist keine echte
+        # Groessenaenderung durch den Nutzer, sondern ein Nachbeben der
+        # eigenen Skalierung - hier wird es nicht weiterverarbeitet, sonst
+        # startete stil_verzoegert seinen Zeitgeber immer wieder neu.
+        if stil_wird_angewandt():
+            return
         log.info(
             "resizeEvent %s: %dx%d (vorher %dx%d)",
             datetime.now().strftime("%H:%M:%S.%f")[:-3],
