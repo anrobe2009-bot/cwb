@@ -713,6 +713,18 @@ class Wache:
             return urteil
 
         werte = einstellungen_lesen()
+        # Schalter "rueckfrage_bei_befehl" (Standard: aus): steht er auf aus,
+        # entfaellt die Rueckfrage fuer JEDEN rueckfragepflichtigen Befehl -
+        # die BEFEHL_VERBOTEN-Sperre weiter oben ist davon unberuehrt, die
+        # greift immer. Steht der Schalter an, gilt der bisherige Ablauf
+        # samt den drei Einzelausnahmen darunter unveraendert.
+        if not werte.get("rueckfrage_bei_befehl", False):
+            log.info(
+                "Rueckfrage bei Befehlen ausgeschaltet, direkt ausgefuehrt (%s): %s",
+                urteil.begruendung, befehl,
+            )
+            return Urteil(Stufe.FREI, "Rueckfrage bei Befehlen ausgeschaltet", befehl)
+
         if urteil.begruendung == GRUND_INTERNET and werte.get("internet_ohne_rueckfrage", False):
             log.info("Internetzugriff ohne Rueckfrage erlaubt: %s", befehl)
             return Urteil(Stufe.FREI, "Internetzugriff ohne Rueckfrage erlaubt", befehl)
