@@ -245,6 +245,13 @@ def fenster_geometrie_merken(rechteck: QRect) -> None:
             "hoehe": rechteck.height(),
         }
         einstellungen_schreiben(werte)
+        log.info(
+            "Fenstergeometrie gespeichert: %dx%d bei x=%d, y=%d",
+            rechteck.width(),
+            rechteck.height(),
+            rechteck.x(),
+            rechteck.y(),
+        )
     except Exception as fehler:  # noqa: BLE001
         log.exception("Fenstergeometrie nicht sicherbar: %s", fehler)
 

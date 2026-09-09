@@ -1886,6 +1886,14 @@ class Werkbank(QMainWindow):
 
     def resizeEvent(self, ereignis) -> None:
         super().resizeEvent(ereignis)
+        log.debug(
+            "resizeEvent %s: %dx%d (vorher %dx%d)",
+            datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            self.width(),
+            self.height(),
+            ereignis.oldSize().width(),
+            ereignis.oldSize().height(),
+        )
         stil_verzoegert(self.width(), self.height())
         # Die Meldung in der Kopfzeile bleibt einzeilig, also muss die Kuerzung
         # zur neuen Breite passen. Beim allerersten Ereignis steht sie noch nicht.
