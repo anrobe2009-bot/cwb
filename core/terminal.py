@@ -54,8 +54,10 @@ ZEITLIMIT_RUN = 120
 ZEITLIMIT_ADMIN = 300
 # CWB wartet auf die Antwort des erhoehten Worker-Prozesses etwas laenger als
 # dessen eigenes Zeitlimit: die Zeit fuer die UAC-Rueckfrage und das Anlaufen
-# des Prozesses beim allerersten Admin-Befehl muss mit hinein.
-ZEITLIMIT_ADMIN_WARTEN = ZEITLIMIT_ADMIN + 60
+# des Prozesses beim allerersten Admin-Befehl muss mit hinein. 120 Sekunden
+# Puffer, damit auch beim Suchen des UAC-Dialogs per Bildschirmleser genug
+# Zeit zum Bestaetigen bleibt, bevor CWB aufgibt.
+ZEITLIMIT_ADMIN_WARTEN = ZEITLIMIT_ADMIN + 120
 
 SW_HIDE = 0
 
@@ -230,6 +232,11 @@ class AdminWorkerVerwaltung:
         except OSError as fehler:
             log.error("Sperrdatei fuer Admin-Worker nicht loeschbar: %s", fehler)
 
+    def uac_bevorstehend(self) -> bool:
+        """True, solange der erhoehte Worker noch nicht gestartet wurde - der
+        naechste Aufruf von auftrag_ausfuehren loest dann den UAC-Dialog aus."""
+        return not self._gestartet
+
     def _sicherstellen(self) -> None:
         """Startet den erhoehten Worker beim ersten Admin-Befehl - danach nie
         wieder in diesem Prozess, auch nicht nach einem abgelehnten
@@ -383,6 +390,10 @@ class TerminalFaden(QThread):
     # einem eigenen, erhoehten Prozess ohne verbundene Rohre - dort gibt es
     # nur das Endergebnis.
     teil_da = Signal(str)
+    # Nur beim allerersten Admin-Befehl im Prozess: kurz bevor der UAC-Dialog
+    # erscheint, damit das Fenster eine Ansage/einen Ton abspielen kann - sonst
+    # wirkt es, als haenge CWB, bis der Dialog beachtet wird.
+    admin_wartet_auf_uac = Signal()
 
     def __init__(self, art: str, befehl: str, ordner: Path, eltern=None):
         super().__init__(eltern)
@@ -392,6 +403,8 @@ class TerminalFaden(QThread):
 
     def run(self) -> None:
         if self.art == "admin":
+            if ADMIN_WORKER.uac_bevorstehend():
+                self.admin_wartet_auf_uac.emit()
             ergebnis = ADMIN_WORKER.auftrag_ausfuehren(self.befehl, self.ordner)
         else:
             ergebnis = befehl_ausfuehren(

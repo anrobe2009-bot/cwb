@@ -1021,7 +1021,16 @@ class Werkbank(QMainWindow):
         self._terminal_faden = TerminalFaden(art, befehl, self.projekt.pfad, self)
         self._terminal_faden.fertig_da.connect(self._terminal_fertig)
         self._terminal_faden.teil_da.connect(self._terminal_teil)
+        self._terminal_faden.admin_wartet_auf_uac.connect(self._admin_uac_hinweis)
         self._terminal_faden.start()
+
+    @slot_geschuetzt
+    def _admin_uac_hinweis(self) -> None:
+        """Ertoent, kurz bevor Windows den UAC-Dialog fuer den erhoehten
+        Admin-Worker zeigt - macht hoerbar, dass jetzt eine Reaktion noetig
+        ist, statt dass CWB scheinbar haengt."""
+        self.sprecher.ton("wartet")
+        self.sprecher.sprich("Bitte Rechteanforderung von Windows bestätigen.", art="meldung")
 
     @slot_geschuetzt
     def _terminal_teil(self, zeile: str) -> None:
