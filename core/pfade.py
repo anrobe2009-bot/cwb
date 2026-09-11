@@ -67,7 +67,6 @@ PFADE_SCHLUESSEL = "pfade"
 PROJEKTWURZEL = "projektwurzel"
 SKILLS = "skills"
 MEMORY_HUB = "memory_hub"
-CODE_INDEX = "code_index"
 ZUSATZPROJEKTE_SCHLUESSEL = "zusatzprojekte"
 FREIGABEN_SCHLUESSEL = "freigaben"
 
@@ -197,22 +196,10 @@ def hub_datenbank_merken(pfad: Path | str | None) -> None:
 
 
 # -- Code-Index ---------------------------------------------------------------
+# Fester Unterordner, kein externes Werkzeug mehr - anders als Skills oder
+# Memory Hub braucht das keine Einstellung und keinen Vorschlag.
 
-def code_index_ordner_vorschlag() -> Path:
-    """`code_index` neben CWB - dort liegt das Werkzeug fuer die Codesuche,
-    falls installiert. Kein Teil von CWB, meistens gibt es ihn nicht."""
-    return CWB_WURZEL.parent / "code_index"
-
-
-def code_index_ordner() -> Path | None:
-    """Der eingestellte Code-Index-Ordner, sonst der Vorschlag, falls er
-    tatsaechlich existiert, sonst `None`. Ohne ihn bleibt das automatische
-    Nachindizieren beim Sitzungsstart einfach aus - nichts haengt davon ab."""
-    gemerkt = _pfad_gemerkt(CODE_INDEX)
-    if gemerkt:
-        return Path(gemerkt)
-    vorschlag = code_index_ordner_vorschlag()
-    return vorschlag if vorschlag.is_dir() else None
+INDEX_ORDNER = CWB_WURZEL / "index"
 
 
 # -- Zusatzprojekte ----------------------------------------------------------

@@ -21,6 +21,14 @@ build/
 .ablage/
 .cwb/
 
+# Code-Index (index/): Roberts eigene Vektordatenbank mit fremdem Quellcode
+# gehoert niemandem sonst und darf nie mitgepackt werden.
+index/chroma_db/
+index/manifeste/
+index/.sperre
+index/*.log
+index/*.log.*
+
 # Persoenliche Einstellungen: enthaelt die Pfade dieses Rechners,
 # das zuletzt geoeffnete Projekt und den Tokenverbrauch.
 # Wird beim ersten Start neu angelegt (core/ersteinrichtung.py).

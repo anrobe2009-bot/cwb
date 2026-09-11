@@ -40,6 +40,25 @@ und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
   Alter. Liest zusätzlich einträge aus dem projektübergreifenden Memory Hub
   (`memory_hub/memory.db`), aber nur die des aktuellen Projekts bzw. `global`.
 
+## Dateien in index/
+
+Code-Index: lokale semantische Codesuche über alle Projekte, die Robert je
+in CWB öffnet — kein API-Schlüssel, rechnet mit `all-MiniLM-L6-v2`. Keine
+feste Projektliste: jeder Ordner, den CWB öffnet, wird zu einem Eintrag.
+
+- **indexer.py** — Chunking, Einbettung, ChromaDB-Anbindung (`chroma_db/`,
+  eine Sammlung pro Projekt-Pfad-Hash), Datei-Stat-Manifest (`manifeste/`)
+  für die Änderungserkennung, Schreibsperre (`.sperre`) gegen gleichzeitige
+  Läufe. `index_aktualisieren()` ist der einzige Indizier-Weg, für den
+  ersten Lauf genauso wie für spätere.
+- **cli.py** — Kommandozeile, ein Projektordner pro Aufruf; `sitzung.py`
+  ruft das bei jedem Projektwechsel auf.
+- **code_index_mcp.py** — MCP-Server (stdio), Werkzeug `code_suchen`.
+  Läuft als eigener, in `~/.claude.json` registrierter Prozess; das
+  Projekt erkennt er über sein eigenes Arbeitsverzeichnis, das CWB beim
+  Verbindungsaufbau setzt (`core/sitzung.py`, `ClaudeAgentOptions.cwd`).
+  Die Registrierung selbst ist Rechner-Sache, nicht Teil von CWB.
+
 Einstiegspunkt ist `fenster.main()`.
 
 ## Konventionen

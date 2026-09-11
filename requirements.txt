@@ -15,3 +15,9 @@ pywin32>=306; sys_platform == "win32"
 
 # Töne laufen über winsound, das zur Python-Standardbibliothek unter Windows
 # gehört und nicht installiert werden muss.
+
+# Code-Index (index/): lokale semantische Codesuche, kein API-Schlüssel nötig
+chromadb>=0.4.24
+sentence-transformers>=3.0.0
+transformers>=4.41,<5
+torch

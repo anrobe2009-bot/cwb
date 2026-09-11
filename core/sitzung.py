@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -46,13 +47,13 @@ from claude_agent_sdk import (
 try:
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
-    from .pfade import code_index_ordner, freigaben_mit_zusatz
+    from .pfade import INDEX_ORDNER, freigaben_mit_zusatz
     from .sicherheit import Stufe, Urteil, Wache
     from .wissen import NACHTRAG_ANWEISUNG, Wissen
 except ImportError:
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
-    from pfade import code_index_ordner, freigaben_mit_zusatz
+    from pfade import INDEX_ORDNER, freigaben_mit_zusatz
     from sicherheit import Stufe, Urteil, Wache
     from wissen import NACHTRAG_ANWEISUNG, Wissen
 
@@ -232,11 +233,6 @@ TAETIGKEIT_UNBEKANNT = "führt aus"
 # Werkzeuge, die immer eine gesprochene Rueckfrage ausloesen (Git hilft hier nicht)
 NETZ_WERKZEUGE = {"WebFetch", "WebSearch"}
 
-# Obergrenze fuer das Nachindizieren des Code-Index beim Sitzungsstart. Bei
-# wenigen Aenderungen dauert das echt nur ein bis zwei Sekunden; die Grenze
-# ist nur ein Sicherheitsnetz gegen einen versehentlichen Vollindex (z.B.
-# beim allerersten Lauf ohne Manifest), damit der Start nie haengen bleibt.
-CODE_INDEX_TIMEOUT = 15
 
 # Ordner fuer das Auftragsprotokoll, relativ zum Projekt
 PROTOKOLL_UNTERORDNER = Path(".cwb") / "protokoll"
@@ -691,36 +687,55 @@ class Sitzung:
         self.wissen.einrichten()
         self._kontext_ausstehend = self.wissen.kontextblock()
 
-        await self._code_index_nachfuehren()
-
         self._melde(Zustand.BEREIT, f"Projekt geoeffnet: {self.wache.projekt.name}")
         log.info("Sitzung verbunden fuer %s, Modell %s", self.wache.projekt.pfad, self.modell_name)
 
-    async def _code_index_nachfuehren(self) -> None:
-        """Aktualisiert den Code-Index fuer das offene Projekt um nur die seit
-        dem letzten Lauf geaenderten Dateien (core/pfade.py, code_index_ordner).
+        self._code_index_anstossen()
+
+    def _code_index_anstossen(self) -> None:
+        """Stoesst das Nachindizieren des offenen Projekts an, ohne die
+        Sitzung zu blockieren: erst geaenderte Dateien, bei einem unbekannten
+        Projekt (kein Manifest) automatisch alles - das kann bei einem neuen
+        oder grossen Projekt Minuten dauern, Robert nimmt das bewusst in Kauf.
         Ein veralteter Index zeigt sonst auf Codestellen, die es nicht mehr
-        gibt. Gibt es das Werkzeug nicht, schlaegt es fehl oder braucht es zu
-        lange, wird nur geloggt - die Sitzung startet in jedem Fall."""
-        ordner = code_index_ordner()
-        if ordner is None:
-            return
-        cli = ordner / "cli.py"
+        gibt. Laeuft als eigener Prozess im Hintergrund weiter; eine kurze
+        Ansage markiert Start und Ende. Gibt es das Werkzeug nicht oder
+        scheitert der Start, wird nur geloggt."""
+        cli = INDEX_ORDNER / "cli.py"
         if not cli.is_file():
             return
+        pfad = str(self.wache.projekt.pfad)
+        name = self.wache.projekt.name
         try:
-            ergebnis = await asyncio.to_thread(
-                subprocess.run,
-                [sys.executable, str(cli), "--nachindizieren", str(self.wache.projekt.pfad)],
-                capture_output=True, text=True, timeout=CODE_INDEX_TIMEOUT,
+            prozess = subprocess.Popen(
+                [sys.executable, str(cli), pfad],
+                cwd=str(INDEX_ORDNER), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            if ergebnis.returncode == 0:
-                log.info("Code-Index nachgefuehrt: %s", ergebnis.stdout.strip())
-            else:
-                log.warning("Code-Index-Nachlauf fehlgeschlagen (%s): %s",
-                            ergebnis.returncode, ergebnis.stderr.strip()[:500])
         except Exception as fehler:  # noqa: BLE001
-            log.warning("Code-Index-Nachlauf uebersprungen: %s", fehler)
+            log.warning("Code-Index nicht gestartet: %s", fehler)
+            return
+        self._melde(Zustand.DENKT, f"Indiziere {name} fuer die Codesuche …")
+        threading.Thread(
+            target=self._code_index_warten, args=(prozess, name), daemon=True,
+        ).start()
+
+    def _code_index_warten(self, prozess: subprocess.Popen, name: str) -> None:
+        """Laeuft in einem eigenen Thread, damit das Warten auf den
+        Index-Prozess nichts sonst blockiert. `_melde` darf aus jedem Thread
+        gerufen werden - es haengt nur ein Qt-Signal an (siehe core/faden.py)."""
+        try:
+            ausgabe, fehlerausgabe = prozess.communicate()
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Code-Index-Prozess fuer %s: %s", name, fehler)
+            return
+        if prozess.returncode == 0:
+            log.info("Code-Index aktualisiert fuer %s: %s", name, (ausgabe or "").strip())
+            if "uebersprungen" not in (ausgabe or ""):
+                self._melde(Zustand.FERTIG, f"Index aktuell: {name}")
+        else:
+            log.warning("Code-Index-Lauf fehlgeschlagen fuer %s (%s): %s",
+                        name, prozess.returncode, (fehlerausgabe or "").strip()[:500])
 
     async def _modelle_lesen(self) -> None:
         """Holt die Modellliste der laufenden Claude-Code-CLI und loest daraus
