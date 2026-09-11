@@ -47,13 +47,13 @@ from claude_agent_sdk import (
 try:
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
-    from .pfade import INDEX_ORDNER, freigaben_mit_zusatz
+    from .pfade import INDEX_ORDNER, freigaben_lesen
     from .sicherheit import Stufe, Urteil, Wache
     from .wissen import NACHTRAG_ANWEISUNG, Wissen
 except ImportError:
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
-    from pfade import INDEX_ORDNER, freigaben_mit_zusatz
+    from pfade import INDEX_ORDNER, freigaben_lesen
     from sicherheit import Stufe, Urteil, Wache
     from wissen import NACHTRAG_ANWEISUNG, Wissen
 
@@ -657,7 +657,7 @@ class Sitzung:
         # werden. Fuer die bereits laufende Sitzung wirkt das nicht - add_dirs
         # geht als Startparameter an den CLI-Unterprozess und laesst sich dort
         # nicht nachtraeglich erweitern.
-        zusatzordner = [eintrag["pfad"] for eintrag in freigaben_mit_zusatz()]
+        zusatzordner = [eintrag["pfad"] for eintrag in freigaben_lesen()]
         return ClaudeAgentOptions(
             cwd=str(self.wache.projekt.pfad),
             add_dirs=zusatzordner,

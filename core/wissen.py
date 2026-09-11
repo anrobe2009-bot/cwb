@@ -22,14 +22,17 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from .pfade import hub_datenbank
+    from .pfade import HUB_DATENBANK
 except ImportError:
-    from pfade import hub_datenbank
+    from pfade import HUB_DATENBANK
 
 log = logging.getLogger("cwb.wissen")
 
-# Wo der Memory Hub liegt, steht in einstellungen.json (siehe pfade.py). Er
-# darf ganz fehlen; dann arbeitet CWB nur mit dem Gedächtnis im Projekt.
+# Der Memory Hub liegt fest unter memory_hub/ (siehe pfade.py, HUB_DATENBANK).
+# Fehlt die Datei - z.B. bei einer frisch verschenkten Kopie ohne eigene
+# Geschichte - arbeitet CWB einfach nur mit dem Gedächtnis im Projekt; sie
+# entsteht von selbst, sobald der MCP-Server (memory_hub/memory_mcp.py) den
+# ersten Eintrag schreibt.
 
 MAX_TAGEBUCH = 40        # jüngste Tagebucheinträge im Kontextblock
 MAX_HUB = 40             # Einträge aus dem Memory Hub im Kontextblock
@@ -107,7 +110,7 @@ class HubLeser:
 
     def __init__(self, datenbank: Path | None = None):
         if datenbank is None:
-            datenbank = hub_datenbank()
+            datenbank = HUB_DATENBANK
         self.datenbank = Path(datenbank) if datenbank else None
         self.tabelle: str | None = None
         self.spalte_projekt: str | None = None

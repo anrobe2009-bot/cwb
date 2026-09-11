@@ -19,8 +19,8 @@ dort gerollt statt abgeschnitten:
             immer sichtbar und stehen deshalb nicht hier. Tastenkuerzel
             wirken unabhaengig von der Sichtbarkeit immer.
 - Skills    reine Anzeige der geladenen Skills, Ordner oeffnen
-- Pfade     Projektordner, Skill-Ordner, Memory Hub; dieselben Angaben wie
-            bei der Ersteinrichtung, jederzeit aenderbar
+- Pfade     Projektordner, Skill-Ordner; dieselben Angaben wie bei der
+            Ersteinrichtung, jederzeit aenderbar
 - Projekte  gepflegte Zusatzliste: Projekte ausserhalb des Projektordners,
             mit Ordnerdialog hinzugefuegt, frei benannt, entfernbar
 - Freigaben gepflegte Liste von Ordnern ausserhalb des Projekts, in denen
@@ -92,8 +92,6 @@ try:
         freigabe_entfernen,
         freigabe_hinzufuegen,
         freigaben_lesen,
-        hub_datenbank,
-        hub_datenbank_merken,
         log_einrichten,
         projektwurzel,
         projektwurzel_merken,
@@ -125,8 +123,6 @@ except ImportError:
         freigabe_entfernen,
         freigabe_hinzufuegen,
         freigaben_lesen,
-        hub_datenbank,
-        hub_datenbank_merken,
         log_einrichten,
         projektwurzel,
         projektwurzel_merken,
@@ -1269,19 +1265,6 @@ class EinstellungenFenster(QDialog):
         )
         self.pfad_skills.geaendert.connect(self._skillordner_gemerkt)
         gruppe.feld(self.pfad_skills)
-
-        hub = hub_datenbank()
-        self.pfad_hub = Pfadzeile(
-            "Memory Hub",
-            "Datei memory.db des projektübergreifenden Gedächtnisses. "
-            "Leer heißt: es gibt keinen, CWB arbeitet nur mit dem "
-            "Gedächtnis im Projekt.",
-            str(hub) if hub else "",
-            datei=True,
-            sprecher=self.sprecher,
-        )
-        self.pfad_hub.geaendert.connect(self._hub_gemerkt)
-        gruppe.feld(self.pfad_hub)
         return gruppe
 
     def _wurzel_gemerkt(self, wert: str) -> None:
@@ -1298,17 +1281,6 @@ class EinstellungenFenster(QDialog):
     def _skillordner_gemerkt(self, wert: str) -> None:
         skill_ordner_merken(wert if wert else None)
         self.sprecher.sprich("Skill-Ordner gemerkt.")
-
-    def _hub_gemerkt(self, wert: str) -> None:
-        hub_datenbank_merken(wert if wert else None)
-        if not wert:
-            self.sprecher.sprich("Kein Memory Hub. Das ist in Ordnung.")
-            return
-        if not Path(wert).is_file():
-            log.warning("Eingestellte Memory-Hub-Datei gibt es nicht: %s", wert)
-            self.sprecher.sprich("Gemerkt, aber diese Datei gibt es nicht.")
-            return
-        self.sprecher.sprich("Memory Hub gemerkt.")
 
     # -- Bereich Projekte -----------------------------------------------------
 

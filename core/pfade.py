@@ -1,23 +1,24 @@
 """
 CWB - Code Workbench
-Pfade: wo die Projekte liegen, wo die Skills liegen, wo der Memory Hub liegt.
+Pfade: wo die Projekte liegen, wo die Skills liegen.
 
 Reines Python ohne Oberflaeche. Dadurch koennen sicherheit.py und wissen.py
 hier lesen, ohne Qt zu laden, und grundlagen.py holt sich von hier die
 Einstellungsdatei.
 
-Nichts ist fest auf einen Rechner eingetragen. Gefragt wird beim ersten
-Start (core/ersteinrichtung.py), gemerkt wird in einstellungen.json unter
-dem Schluessel "pfade":
+Nichts ist fest auf einen Rechner eingetragen, ausser den beiden fest
+eingebauten Werkzeug-Unterordnern index/ und memory_hub/ (INDEX_ORDNER,
+HUB_DATENBANK) - die sind Teil von CWB selbst und brauchen keine Einstellung.
+Projektordner und Skill-Ordner werden beim ersten Start gefragt
+(core/ersteinrichtung.py) und in einstellungen.json unter dem Schluessel
+"pfade" gemerkt:
 
     "pfade": {
       "projektwurzel": "D:/Arbeit",
-      "skills":        "C:/Users/Name/.claude/skills",
-      "memory_hub":    ""
+      "skills":        "C:/Users/Name/.claude/skills"
     }
 
-Ein leerer Eintrag heisst "gibt es hier nicht" - beim Memory Hub ist das der
-Normalfall und bricht nichts. Fehlt ein Schluessel ganz, gilt der Vorschlag.
+Fehlt ein Schluessel ganz, gilt der Vorschlag.
 """
 
 import json
@@ -66,7 +67,6 @@ log = logging.getLogger("cwb.pfade")
 PFADE_SCHLUESSEL = "pfade"
 PROJEKTWURZEL = "projektwurzel"
 SKILLS = "skills"
-MEMORY_HUB = "memory_hub"
 ZUSATZPROJEKTE_SCHLUESSEL = "zusatzprojekte"
 FREIGABEN_SCHLUESSEL = "freigaben"
 
@@ -168,36 +168,19 @@ def skill_ordner_merken(pfad: Path | str) -> None:
     pfad_merken(SKILLS, pfad)
 
 
-# -- Memory Hub -------------------------------------------------------------
+# -- Memory Hub ---------------------------------------------------------------
+# Fester Unterordner, kein externes Werkzeug mehr - braucht keine Einstellung
+# und keinen Vorschlag. `memory.db` legt core/wissen.py bzw. memory_hub/
+# memory_db.py selbst an, wenn sie fehlt (siehe dort, CREATE TABLE IF NOT
+# EXISTS) - ein frischer CWB-Start ohne Datei ist der Normalfall bei einer
+# verschenkten Kopie.
 
-def hub_datenbank_vorschlag() -> Path | None:
-    """`memory_hub/memory.db` neben den Projekten, falls es sie dort gibt.
-    Der Memory Hub ist kein Teil von CWB; meistens gibt es ihn nicht."""
-    wurzel = projektwurzel()
-    if wurzel is None:
-        return None
-    kandidat = wurzel / "memory_hub" / "memory.db"
-    return kandidat if kandidat.is_file() else None
-
-
-def hub_datenbank() -> Path | None:
-    """Die eingestellte Memory-Hub-Datenbank oder `None`. `None` ist ein
-    gültiger Zustand: ohne Hub arbeitet CWB nur mit dem Projektgedächtnis."""
-    gemerkt = _pfad_gemerkt(MEMORY_HUB)
-    if gemerkt:
-        return Path(gemerkt)
-    if gemerkt == "":
-        return None  # ausdrücklich abgewählt
-    return hub_datenbank_vorschlag()
-
-
-def hub_datenbank_merken(pfad: Path | str | None) -> None:
-    pfad_merken(MEMORY_HUB, pfad)
+HUB_DATENBANK = CWB_WURZEL / "memory_hub" / "memory.db"
 
 
 # -- Code-Index ---------------------------------------------------------------
-# Fester Unterordner, kein externes Werkzeug mehr - anders als Skills oder
-# Memory Hub braucht das keine Einstellung und keinen Vorschlag.
+# Fester Unterordner, kein externes Werkzeug mehr - braucht ebenfalls keine
+# Einstellung und keinen Vorschlag.
 
 INDEX_ORDNER = CWB_WURZEL / "index"
 
@@ -299,18 +282,6 @@ def freigaben_lesen() -> list[dict]:
     return ergebnis
 
 
-def freigaben_mit_zusatz() -> list[dict]:
-    """Freigaben-Liste, ergaenzt um den memory_hub-Sondereintrag aus den
-    Zusatzprojekten. memory_hub zaehlt zusaetzlich als Freigabe, alle
-    anderen Zusatzprojekte bleiben gegeneinander isoliert. Einzige Quelle
-    fuer diese Zusammenfuehrung - sowohl die Ordnergrenze-Pruefung als auch
-    add_dirs der Sitzung nutzen dieselbe Liste, damit beide nicht
-    auseinanderlaufen."""
-    memory_hub_eintraege = [
-        e for e in zusatzprojekte_lesen() if e.get("name") == "memory_hub"
-    ]
-    return freigaben_lesen() + memory_hub_eintraege
-
 
 def freigaben_schreiben(liste: list[dict]) -> None:
     werte = einstellungen_lesen()
@@ -363,5 +334,6 @@ if __name__ == "__main__":
     print("Einstellungsdatei :", EINSTELLUNGEN_DATEI)
     print("Projektwurzel     :", projektwurzel() or f"(nicht gesetzt, Vorschlag: {projektwurzel_vorschlag()})")
     print("Skill-Ordner      :", skill_ordner())
-    print("Memory Hub        :", hub_datenbank() or "(keiner)")
+    print("Memory Hub        :", HUB_DATENBANK if HUB_DATENBANK.is_file() else "(noch keine Eintraege)")
+    print("Code-Index        :", INDEX_ORDNER if INDEX_ORDNER.is_dir() else "(fehlt)")
     print("Vollständig       :", pfade_vollstaendig())

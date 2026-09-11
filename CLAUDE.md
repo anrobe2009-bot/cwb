@@ -37,8 +37,9 @@ und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
   stumm. Erzeugte Sätze werden in `.stimmen/` zwischengespeichert.
 - **wissen.py** — Projektgedächtnis: `CLAUDE.md` im Projekt (Grundlagen),
   `wissen/tagebuch.md` (Verlauf), `wissen/offen.md` (offene Punkte), Archiv nach
-  Alter. Liest zusätzlich einträge aus dem projektübergreifenden Memory Hub
-  (`memory_hub/memory.db`), aber nur die des aktuellen Projekts bzw. `global`.
+  Alter. Liest zusätzlich Einträge aus dem projektübergreifenden Memory Hub
+  (`memory_hub/memory.db`, `pfade.HUB_DATENBANK`), aber nur die des aktuellen
+  Projekts bzw. `global` — direkt per SQLite, ohne Umweg über den MCP-Server.
 
 ## Dateien in index/
 
@@ -53,11 +54,29 @@ feste Projektliste: jeder Ordner, den CWB öffnet, wird zu einem Eintrag.
   ersten Lauf genauso wie für spätere.
 - **cli.py** — Kommandozeile, ein Projektordner pro Aufruf; `sitzung.py`
   ruft das bei jedem Projektwechsel auf.
-- **code_index_mcp.py** — MCP-Server (stdio), Werkzeug `code_suchen`.
+- **mcp_server.py** — MCP-Server (stdio), Werkzeug `code_suchen`.
   Läuft als eigener, in `~/.claude.json` registrierter Prozess; das
   Projekt erkennt er über sein eigenes Arbeitsverzeichnis, das CWB beim
   Verbindungsaufbau setzt (`core/sitzung.py`, `ClaudeAgentOptions.cwd`).
   Die Registrierung selbst ist Rechner-Sache, nicht Teil von CWB.
+
+## Dateien in memory_hub/
+
+Projektübergreifendes Gedächtnis, MCP-Server `memory-hub`. Fester
+Unterordner ohne Einstellung (`pfade.HUB_DATENBANK`) — anders als beim
+Code-Index braucht `core/wissen.py` (`HubLeser`) hier keinen eigenen
+MCP-Aufruf, sondern liest `memory.db` direkt per SQLite mit.
+
+- **memory_db.py** — Schema (`CREATE TABLE IF NOT EXISTS`, legt die
+  Datenbank beim ersten Aufruf selbst an), Lesen/Schreiben/Suche/FTS5,
+  Projektverwaltung. `DB_PATH` liegt relativ neben der Datei (bzw. neben
+  der EXE bei `sys.frozen`) - keine feste Rechnerangabe.
+- **memory_mcp.py** — MCP-Server (stdio), Werkzeuge `memory_search`,
+  `memory_add`, `memory_list`, `memory_forget`, `memory_projects`.
+
+Nur diese beiden Dateien plus `memory.db` sind Teil von CWB; die frühere
+eigenständige GUI, das Audit-Werkzeug und die Dokumentation des Memory Hub
+blieben bewusst im alten, eigenständigen Projektordner zurück.
 
 Einstiegspunkt ist `fenster.main()`.
 

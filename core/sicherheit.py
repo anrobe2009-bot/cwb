@@ -23,7 +23,6 @@ try:
         einstellungen_lesen,
         freigabe_hinzufuegen,
         freigaben_lesen,
-        freigaben_mit_zusatz,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -33,7 +32,6 @@ except ImportError:
         einstellungen_lesen,
         freigabe_hinzufuegen,
         freigaben_lesen,
-        freigaben_mit_zusatz,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
@@ -215,12 +213,12 @@ class Ordnergrenze:
     def _freigabe_treffer(self, pfad: Path) -> str | None:
         """Name der Freigabe, in der der Pfad liegt, sonst None. Die Liste
         (Einstellungen, Reiter Freigaben) wird bei jeder Pruefung neu
-        gelesen, damit Aenderungen dort sofort wirken, ohne Neustart. Aus
-        den Zusatzprojekten zaehlt nur "memory_hub" zusaetzlich als
-        Freigabe - alle anderen Zusatzprojekte bleiben gegeneinander
-        isoliert. Die Geheimnis-Sperre in pruefe() wird vorher geprueft und
-        greift auch innerhalb von memory_hub unveraendert weiter."""
-        for eintrag in freigaben_mit_zusatz():
+        gelesen, damit Aenderungen dort sofort wirken, ohne Neustart.
+        Zusatzprojekte bleiben gegeneinander isoliert - memory_hub und
+        index/ brauchen hier keine Sonderrolle mehr, sie liegen als feste
+        Unterordner innerhalb von CWB selbst. Die Geheimnis-Sperre in
+        pruefe() wird vorher geprueft und gilt unveraendert weiter."""
+        for eintrag in freigaben_lesen():
             try:
                 basis = Path(eintrag["pfad"]).resolve()
             except (OSError, ValueError):

@@ -2,10 +2,10 @@
 CWB - Code Workbench
 Ersteinrichtung: die Pfadfrage beim allerersten Start.
 
-Gefragt wird nach dem Ordner, in dem die Projekte liegen, nach dem
-Skill-Ordner und nach der Memory-Hub-Datenbank. Vorgeschlagen wird jeweils
-der uebliche Ort; uebernommen wird mit der Eingabetaste. Nur der
-Projektordner muss stimmen, die beiden anderen duerfen leer bleiben.
+Gefragt wird nach dem Ordner, in dem die Projekte liegen, und nach dem
+Skill-Ordner. Vorgeschlagen wird jeweils der uebliche Ort; uebernommen wird
+mit der Eingabetaste. Nur der Projektordner muss stimmen, der Skill-Ordner
+darf leer bleiben.
 
 Die Antworten landen in einstellungen.json (siehe pfade.py) und werden nie
 wieder gefragt, solange der Projektordner dort steht und es ihn gibt.
@@ -32,8 +32,6 @@ from PySide6.QtWidgets import (
 
 try:
     from .pfade import (
-        hub_datenbank,
-        hub_datenbank_merken,
         projektwurzel,
         projektwurzel_merken,
         projektwurzel_vorschlag,
@@ -42,8 +40,6 @@ try:
     )
 except ImportError:
     from pfade import (
-        hub_datenbank,
-        hub_datenbank_merken,
         projektwurzel,
         projektwurzel_merken,
         projektwurzel_vorschlag,
@@ -157,7 +153,7 @@ class Ersteinrichtung(QDialog):
         self.setWindowTitle("CWB — Erste Einrichtung")
         self.setAccessibleName("Erste Einrichtung")
         self.setAccessibleDescription(
-            "Drei Pfade: Projektordner, Skill-Ordner, Memory Hub. "
+            "Zwei Pfade: Projektordner, Skill-Ordner. "
             "Tabulator wechselt das Feld, Eingabetaste übernimmt."
         )
 
@@ -170,7 +166,7 @@ class Ersteinrichtung(QDialog):
         hinweis = QLabel(
             "CWB weiß noch nicht, wo deine Projekte liegen. Der Vorschlag ist "
             "der Ordner über dem CWB-Ordner. Stimmt er, genügt die Eingabetaste. "
-            "Skill-Ordner und Memory Hub dürfen leer bleiben."
+            "Der Skill-Ordner darf leer bleiben."
         )
         hinweis.setObjectName("einstellungshinweis")
         hinweis.setWordWrap(True)
@@ -191,17 +187,6 @@ class Ersteinrichtung(QDialog):
             sprecher=sprecher,
         )
         aufbau.addWidget(self.skills)
-
-        hub = hub_datenbank()
-        self.hub = Pfadzeile(
-            "Memory Hub",
-            "Datei memory.db des projektübergreifenden Gedächtnisses. "
-            "Gibt es keine, bleibt das Feld leer.",
-            str(hub) if hub else "",
-            datei=True,
-            sprecher=sprecher,
-        )
-        aufbau.addWidget(self.hub)
 
         self.fertig = QPushButton("Übernehmen und starten")
         self.fertig.setObjectName("schliessen")
@@ -249,9 +234,6 @@ class Ersteinrichtung(QDialog):
 
         skills = self.skills.wert()
         skill_ordner_merken(skills if skills else None)
-
-        hub = self.hub.wert()
-        hub_datenbank_merken(hub if hub else None)
 
         if not Path(wurzel).is_dir():
             log.warning("Eingestellter Projektordner gibt es nicht: %s", wurzel)
