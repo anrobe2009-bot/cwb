@@ -6,9 +6,11 @@ Reines Python ohne Oberflaeche. Dadurch koennen sicherheit.py und wissen.py
 hier lesen, ohne Qt zu laden, und grundlagen.py holt sich von hier die
 Einstellungsdatei.
 
-Nichts ist fest auf einen Rechner eingetragen, ausser den beiden fest
-eingebauten Werkzeug-Unterordnern index/ und memory_hub/ (INDEX_ORDNER,
-HUB_DATENBANK) - die sind Teil von CWB selbst und brauchen keine Einstellung.
+Nichts ist fest auf einen Rechner eingetragen. Der Code der beiden fest
+eingebauten Werkzeuge liegt in index/ und memory_hub/ (INDEX_ORDNER); ihre
+Daten - Gedaechtnis und Vektordatenbank - liegen ausserhalb des
+Programmordners unter %LOCALAPPDATA%\\CWB (core/datenordner.py,
+HUB_DATENBANK, INDEX_DATEN), damit sie jeden Programmwechsel ueberleben.
 Projektordner und Skill-Ordner werden beim ersten Start gefragt
 (core/ersteinrichtung.py) und in einstellungen.json unter dem Schluessel
 "pfade" gemerkt:
@@ -26,6 +28,11 @@ import logging
 import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+try:
+    from . import datenordner as _datenordner
+except ImportError:
+    import datenordner as _datenordner
 
 CWB_WURZEL = Path(__file__).resolve().parent.parent
 EINSTELLUNGEN_DATEI = CWB_WURZEL / "einstellungen.json"
@@ -168,21 +175,32 @@ def skill_ordner_merken(pfad: Path | str) -> None:
     pfad_merken(SKILLS, pfad)
 
 
-# -- Memory Hub ---------------------------------------------------------------
-# Fester Unterordner, kein externes Werkzeug mehr - braucht keine Einstellung
-# und keinen Vorschlag. `memory.db` legt core/wissen.py bzw. memory_hub/
-# memory_db.py selbst an, wenn sie fehlt (siehe dort, CREATE TABLE IF NOT
-# EXISTS) - ein frischer CWB-Start ohne Datei ist der Normalfall bei einer
-# verschenkten Kopie.
+# -- Datenordner ----------------------------------------------------------------
+# Laufzeitdaten, die einen Programmwechsel ueberleben muessen, liegen unter
+# %LOCALAPPDATA%\CWB (core/datenordner.py) - nicht im Programmordner. Beim
+# Laden werden alte Bestaende aus dem Programmordner einmalig hinuebergeholt.
 
-HUB_DATENBANK = CWB_WURZEL / "memory_hub" / "memory.db"
+_datenordner.daten_umziehen()
+DATENORDNER = _datenordner.datenordner()
+
+
+# -- Memory Hub ---------------------------------------------------------------
+# Festes Werkzeug, braucht keine Einstellung und keinen Vorschlag. Der Code
+# liegt in memory_hub/, die Datenbank im Datenordner. `memory.db` legt
+# core/wissen.py bzw. memory_hub/memory_db.py selbst an, wenn sie fehlt
+# (siehe dort, CREATE TABLE IF NOT EXISTS) - ein frischer CWB-Start ohne
+# Datei ist der Normalfall bei einer verschenkten Kopie.
+
+HUB_DATENBANK = _datenordner.hub_datenbank()
 
 
 # -- Code-Index ---------------------------------------------------------------
-# Fester Unterordner, kein externes Werkzeug mehr - braucht ebenfalls keine
-# Einstellung und keinen Vorschlag.
+# Festes Werkzeug, braucht ebenfalls keine Einstellung und keinen Vorschlag.
+# INDEX_ORDNER ist der Code (cli.py, indexer.py, mcp_server.py), INDEX_DATEN
+# die Vektordatenbank samt Manifesten im Datenordner.
 
 INDEX_ORDNER = CWB_WURZEL / "index"
+INDEX_DATEN = _datenordner.index_datenordner()
 
 
 # -- Zusatzprojekte ----------------------------------------------------------
@@ -334,6 +352,7 @@ if __name__ == "__main__":
     print("Einstellungsdatei :", EINSTELLUNGEN_DATEI)
     print("Projektwurzel     :", projektwurzel() or f"(nicht gesetzt, Vorschlag: {projektwurzel_vorschlag()})")
     print("Skill-Ordner      :", skill_ordner())
+    print("Datenordner       :", DATENORDNER)
     print("Memory Hub        :", HUB_DATENBANK if HUB_DATENBANK.is_file() else "(noch keine Eintraege)")
-    print("Code-Index        :", INDEX_ORDNER if INDEX_ORDNER.is_dir() else "(fehlt)")
+    print("Code-Index        :", INDEX_DATEN if INDEX_DATEN.is_dir() else "(fehlt)")
     print("Vollständig       :", pfade_vollstaendig())

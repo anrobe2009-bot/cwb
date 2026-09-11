@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
@@ -80,9 +81,19 @@ SKIP_DIRS = {
     ".cwb", ".ablage", ".stimmen", ".toene", ".git_alt", "_backup", "sicherung",
 }
 
-_CHROMA_DIR = WURZEL / "chroma_db"
-_MANIFEST_DIR = WURZEL / "manifeste"
-_LOCK_DATEI = WURZEL / ".sperre"
+# Vektordatenbank, Manifeste und Schreibsperre liegen unter %LOCALAPPDATA%\CWB,
+# nicht im Programmordner - damit der fertige Index jeden Programmwechsel
+# ueberlebt. Den Ort kennt core/datenordner.py (frei von Qt und Log-
+# Einrichtung, damit auch der MCP-Server es aus jeder Sitzung laden kann).
+# Alte Bestaende aus index/ holt daten_umziehen() einmalig herueber.
+sys.path.insert(0, str(WURZEL.parent))
+from core import datenordner as _datenordner  # noqa: E402
+
+_datenordner.daten_umziehen()
+_DATEN = _datenordner.index_datenordner()
+_CHROMA_DIR = _DATEN / "chroma_db"
+_MANIFEST_DIR = _DATEN / "manifeste"
+_LOCK_DATEI = _DATEN / ".sperre"
 
 # Ein echter Lauf dauert auch bei einem grossen Projekt selten laenger als
 # eine halbe Stunde. Eine aeltere Sperre ist der Rest eines abgestuerzten

@@ -8,6 +8,14 @@ und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
 
 - **fenster.py** — Hauptfenster (`Werkbank`), Aktivitätsbalken und `main()`.
   Gestaltung ausschließlich in `stil.qss`.
+- **datenordner.py** — reines Python ohne Qt und ohne Log-Einrichtung beim
+  Laden: kennt `%LOCALAPPDATA%\CWB`, wo Gedächtnis (`memory_hub/memory.db`)
+  und Code-Index (`index/chroma_db`, `index/manifeste`, `index/.sperre`)
+  liegen, damit sie jeden Programmwechsel überleben. `daten_umziehen()` holt
+  alte Bestände aus dem Programmordner einmalig herüber (SQLite-Backup-API,
+  Nachtrag fehlender Einträge, Ordner per Umbenennen) und wird von
+  `pfade.py`, `memory_hub/memory_db.py` und `index/indexer.py` beim Laden
+  aufgerufen — die beiden MCP-Server laufen auch ohne CWB.
 - **grundlagen.py** — Pfade, Log-Einrichtung, `einstellungen.json`, Skalierung des
   Stilblatts, Liste der offenen Fenster, `slot_geschuetzt`. Liegt getrennt, weil
   fenster.py beim Start als Hauptmodul läuft und nicht zurückimportiert werden darf.
@@ -50,7 +58,8 @@ feste Projektliste: jeder Ordner, den CWB öffnet, wird zu einem Eintrag.
 - **indexer.py** — Chunking, Einbettung, ChromaDB-Anbindung (`chroma_db/`,
   eine Sammlung pro Projekt-Pfad-Hash), Datei-Stat-Manifest (`manifeste/`)
   für die Änderungserkennung, Schreibsperre (`.sperre`) gegen gleichzeitige
-  Läufe. `index_aktualisieren()` ist der einzige Indizier-Weg, für den
+  Läufe. Alle drei liegen unter `%LOCALAPPDATA%\CWB\index\`
+  (`core/datenordner.py`), nicht im Programmordner. `index_aktualisieren()` ist der einzige Indizier-Weg, für den
   ersten Lauf genauso wie für spätere.
 - **cli.py** — Kommandozeile, ein Projektordner pro Aufruf; `sitzung.py`
   ruft das bei jedem Projektwechsel auf.
@@ -62,15 +71,16 @@ feste Projektliste: jeder Ordner, den CWB öffnet, wird zu einem Eintrag.
 
 ## Dateien in memory_hub/
 
-Projektübergreifendes Gedächtnis, MCP-Server `memory-hub`. Fester
-Unterordner ohne Einstellung (`pfade.HUB_DATENBANK`) — anders als beim
+Projektübergreifendes Gedächtnis, MCP-Server `memory-hub`. Der Code liegt
+hier, die Datenbank unter `%LOCALAPPDATA%\CWB\memory_hub\memory.db`
+(`pfade.HUB_DATENBANK`, `core/datenordner.py`) — anders als beim
 Code-Index braucht `core/wissen.py` (`HubLeser`) hier keinen eigenen
 MCP-Aufruf, sondern liest `memory.db` direkt per SQLite mit.
 
 - **memory_db.py** — Schema (`CREATE TABLE IF NOT EXISTS`, legt die
   Datenbank beim ersten Aufruf selbst an), Lesen/Schreiben/Suche/FTS5,
-  Projektverwaltung. `DB_PATH` liegt relativ neben der Datei (bzw. neben
-  der EXE bei `sys.frozen`) - keine feste Rechnerangabe.
+  Projektverwaltung. `DB_PATH` kommt aus `core/datenordner.py`; neben der
+  Datei liegt nur noch das Log.
 - **memory_mcp.py** — MCP-Server (stdio), Werkzeuge `memory_search`,
   `memory_add`, `memory_list`, `memory_forget`, `memory_projects`.
 

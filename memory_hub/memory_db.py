@@ -20,13 +20,23 @@ HAS_FTS = True
 
 
 def base_dir():
-    """Ordner der Anwendung - auch als EXE korrekt."""
+    """Ordner der Anwendung - auch als EXE korrekt. Hier liegt nur noch das
+    Log; die Datenbank liegt im Datenordner (siehe DB_PATH)."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
-DB_PATH = os.path.join(base_dir(), "memory.db")
+# Die Datenbank liegt unter %LOCALAPPDATA%\CWB, nicht im Programmordner -
+# damit Roberts Gedaechtnis jeden Programmwechsel ueberlebt. Den Ort kennt
+# core/datenordner.py; das Modul ist bewusst frei von Qt und Log-Einrichtung,
+# damit dieser MCP-Server es aus jeder Claude-Code-Sitzung laden kann. Alte
+# Bestaende aus dem Programmordner holt daten_umziehen() einmalig herueber.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import datenordner as _datenordner  # noqa: E402
+
+_datenordner.daten_umziehen()
+DB_PATH = str(_datenordner.hub_datenbank())
 
 
 def _now():

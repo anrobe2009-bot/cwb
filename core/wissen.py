@@ -28,7 +28,8 @@ except ImportError:
 
 log = logging.getLogger("cwb.wissen")
 
-# Der Memory Hub liegt fest unter memory_hub/ (siehe pfade.py, HUB_DATENBANK).
+# Der Memory Hub liegt fest unter %LOCALAPPDATA%\CWB\memory_hub\ (siehe
+# pfade.py, HUB_DATENBANK, und core/datenordner.py).
 # Fehlt die Datei - z.B. bei einer frisch verschenkten Kopie ohne eigene
 # Geschichte - arbeitet CWB einfach nur mit dem Gedächtnis im Projekt; sie
 # entsteht von selbst, sobald der MCP-Server (memory_hub/memory_mcp.py) den

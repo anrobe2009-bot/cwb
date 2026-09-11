@@ -21,22 +21,18 @@ build/
 .ablage/
 .cwb/
 
-# Code-Index (index/): Roberts eigene Vektordatenbank mit fremdem Quellcode
-# gehoert niemandem sonst und darf nie mitgepackt werden.
+# Code-Index und Memory Hub: ihre Daten liegen seit dem Umzug unter
+# %LOCALAPPDATA%\CWB (core/datenordner.py). Im Programmordner bleiben nur
+# Logs und die als *.umgezogen markierten Reste des Umzugs - beides gehoert
+# niemandem sonst und darf nie mitgepackt werden.
 index/chroma_db/
 index/manifeste/
 index/.sperre
 index/*.log
 index/*.log.*
-
-# Memory Hub (memory_hub/): Roberts persoenliches Gedaechtnis aus allen
-# Projekten - darf nie mitgepackt werden. Eine verschenkte Kopie startet mit
-# leerem Gedaechtnis, memory_hub/memory_db.py legt die Datei bei Bedarf
-# selbst neu an.
-memory_hub/memory.db
-memory_hub/memory.db-wal
-memory_hub/memory.db-shm
+memory_hub/memory.db*
 memory_hub/*.log
+*.umgezogen
 
 # Persoenliche Einstellungen: enthaelt die Pfade dieses Rechners,
 # das zuletzt geoeffnete Projekt und den Tokenverbrauch.
