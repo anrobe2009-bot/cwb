@@ -29,6 +29,7 @@ import struct
 import subprocess
 import sys
 import threading
+import zipfile
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -199,7 +200,14 @@ TROTZDEM_FARBE = "1"
 # Ordner fuer die Berichtdateien, relativ zum Projekt. Der Bericht liegt schon
 # in der Zwischenablage; fuer den Fall, dass daraus beim Einfuegen im Chat nur
 # eine leere Anlage wird, gibt es ihn zusaetzlich als Datei zum Hochladen.
+# Die Datei ist ein ZIP mit der Textdatei darin: einzeln hochgeladene
+# Textdateien kamen im Chat regelmaessig leer an, verpackt kommen sie durch.
+# Eine lose Textdatei daneben braucht niemand - vorgelesen wird aus dem
+# Speicher (_letzter_bericht), nicht von der Platte.
 BERICHT_UNTERORDNER = Path(".cwb") / "bericht"
+# So viele Berichtdateien bleiben liegen, aeltere werden beim naechsten
+# Speichern entfernt - sonst sammeln sich dort Hunderte an.
+BERICHTE_BEHALTEN = 30
 
 # Markierungen am Anfang des Eingabefelds. Steht eine davon in der ersten
 # Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
@@ -1415,23 +1423,50 @@ class Werkbank(QMainWindow):
 
     def _bericht_datei_speichern(self) -> Path | None:
         """Speichert den zuletzt gebauten Bericht (self._letzter_bericht)
-        zusaetzlich als Textdatei unter .cwb/bericht/, mit Datum und Uhrzeit im
-        Dateinamen. So laesst er sich hochladen, wenn das Einfuegen aus der
-        Zwischenablage im Chat nur als leere Anlage ankommt."""
+        zusaetzlich als ZIP unter .cwb/bericht/, mit Datum und Uhrzeit im
+        Dateinamen und der gleichnamigen Textdatei darin. So laesst er sich
+        hochladen, wenn das Einfuegen aus der Zwischenablage im Chat nur als
+        leere Anlage ankommt. Raeumt danach alte Berichte weg."""
         ordner = self.projekt.pfad / BERICHT_UNTERORDNER
         try:
             ordner.mkdir(parents=True, exist_ok=True)
         except OSError as fehler:
             log.error("Berichtordner nicht anlegbar: %s", fehler)
             return None
-        ziel = ordner / f"{datetime.now():%Y-%m-%d_%H-%M-%S}.txt"
+        name = f"{datetime.now():%Y-%m-%d_%H-%M-%S}"
+        ziel = ordner / f"{name}.zip"
         try:
-            ziel.write_text(self._letzter_bericht, encoding="utf-8")
-        except OSError as fehler:
+            with zipfile.ZipFile(ziel, "w", compression=zipfile.ZIP_DEFLATED) as archiv:
+                archiv.writestr(f"{name}.txt", self._letzter_bericht)
+        except (OSError, zipfile.BadZipFile) as fehler:
             log.error("Berichtdatei nicht schreibbar: %s", fehler)
             return None
         log.info("Bericht als Datei gespeichert: %s", ziel)
+        self._berichte_aufraeumen(ordner, behalten=ziel)
         return ziel
+
+    @staticmethod
+    def _berichte_aufraeumen(ordner: Path, behalten: Path) -> None:
+        """Laesst die juengsten BERICHTE_BEHALTEN Berichtdateien liegen und
+        loescht den Rest - Textdateien aus der Zeit vor dem ZIP eingeschlossen.
+        Die Namen beginnen mit dem Zeitstempel, deshalb reicht Sortieren nach
+        Namen. `behalten` bleibt in jedem Fall stehen."""
+        try:
+            dateien = sorted(
+                p for p in ordner.iterdir()
+                if p.is_file() and p.suffix.lower() in (".zip", ".txt")
+            )
+        except OSError as fehler:
+            log.warning("Berichtordner nicht lesbar: %s", fehler)
+            return
+        alte = [p for p in dateien[:-BERICHTE_BEHALTEN] if p != behalten]
+        for datei in alte:
+            try:
+                datei.unlink()
+            except OSError as fehler:
+                log.warning("Alter Bericht nicht loeschbar: %s (%s)", datei, fehler)
+        if alte:
+            log.info("Alte Berichte entfernt: %s, %s bleiben", len(alte), BERICHTE_BEHALTEN)
 
     def _berichtordner_oeffnen(self) -> None:
         """Oeffnet den Ordner mit den Berichtdateien im Explorer, damit die
