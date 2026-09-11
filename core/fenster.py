@@ -29,6 +29,7 @@ import struct
 import subprocess
 import sys
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -308,6 +309,14 @@ def platzwort(platz: int) -> str:
     return PLATZWOERTER.get(int(platz), str(platz))
 
 
+def zeitabstand_wort(sekunden: int) -> str:
+    """Verstrichene Zeit als kurzer, sprechbarer Ausdruck, z.B. 'vor 2 Minuten'."""
+    if sekunden < 60:
+        return "vor wenigen Sekunden"
+    minuten = round(sekunden / 60)
+    return "vor einer Minute" if minuten <= 1 else f"vor {minuten} Minuten"
+
+
 def datei_in_zwischenablage(pfad: Path) -> bool:
     """Legt eine Datei als Dateiverweis in die Windows-Zwischenablage
     (CF_HDROP) - so, wie beim Kopieren einer Datei im Explorer. Andere
@@ -451,6 +460,12 @@ class Werkbank(QMainWindow):
         # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
         # selbst, die ueber den Arbeitsfaden laufen.
         self._pending_terminal: dict | None = None
+        # Die letzten zehn tatsaechlich gestarteten Auftraege (Art, geglaetteter
+        # Text, Zeitpunkt) - Grundlage der Dublettenerkennung in _absenden.
+        self._auftragsverlauf: deque[tuple[str, str, datetime]] = deque(maxlen=10)
+        # Steht ein per Rueckfrage bestaetigter Wiederholungsauftrag hier,
+        # wird er nach "Ja" ohne erneute Dublettenpruefung fortgesetzt.
+        self._pending_dublette: dict | None = None
         # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
         # Collector eingesammelt wird, bevor er fertig ist.
         self._terminal_faden: TerminalFaden | None = None
@@ -1017,6 +1032,12 @@ class Werkbank(QMainWindow):
             if ja:
                 self._terminal_starten(wartend["befehl"], wartend["admin"])
             return
+        if self._pending_dublette is not None:
+            wartend, self._pending_dublette = self._pending_dublette, None
+            if ja:
+                self._absenden(vorspann=wartend["vorspann"], roh=wartend["roh"],
+                                dublette_bestaetigt=True)
+            return
         self.faden.frage_beantworten(ja)
 
     # -- Terminal (#run# und #admin#) ---------------------------------------
@@ -1579,16 +1600,66 @@ class Werkbank(QMainWindow):
         finally:
             self._aus_ablage = False
 
+    # -- Dublettenerkennung ---------------------------------------------------
+    # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
+    # der Zwischenablage, kurz genug, dass ein am naechsten Tag bewusst
+    # wiederholter Auftrag nicht angemeckert wird.
+    DUBLETTE_FENSTER_SEKUNDEN = 600
+
+    def _text_glaetten(self, text: str) -> str:
+        return " ".join(text.split())
+
+    def _dublette_pruefen(self, art: str, text: str) -> str | None:
+        """`None`, wenn der Auftrag neu ist, sonst ein sprechbarer Zeitabstand
+        zum letzten praktisch gleichen Auftrag. Leerzeichen und Zeilenumbrueche
+        werden vor dem Vergleich geglaettet, damit ein aus der Zwischenablage
+        neu eingefuegter, inhaltlich identischer Text trotzdem erkannt wird."""
+        geglaettet = self._text_glaetten(text)
+        if not geglaettet:
+            return None
+        jetzt = datetime.now()
+        for alte_art, alter_text, zeitpunkt in reversed(self._auftragsverlauf):
+            if alte_art == art and alter_text == geglaettet:
+                vergangen = (jetzt - zeitpunkt).total_seconds()
+                if vergangen <= self.DUBLETTE_FENSTER_SEKUNDEN:
+                    return zeitabstand_wort(int(vergangen))
+                return None
+        return None
+
+    def _dublette_merken(self, art: str, text: str) -> None:
+        geglaettet = self._text_glaetten(text)
+        if geglaettet:
+            self._auftragsverlauf.append((art, geglaettet, datetime.now()))
+
     @slot_geschuetzt
-    def _absenden(self, vorspann: str = "") -> None:
+    def _absenden(self, vorspann: str = "", *, roh: str | None = None,
+                  dublette_bestaetigt: bool = False) -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
         eine zweite Ansage kurz danach auszuloesen. Leer heisst: normaler
         Weg, die Ansage entsteht ganz in dieser Methode und in
-        `_auftrag_starten`."""
-        roh = self.eingabe.toPlainText()
+        `_auftrag_starten`. `roh`/`dublette_bestaetigt` bedienen die
+        Wiederaufnahme nach einer bestaetigten Dublette (siehe
+        `_frage_beantworten`) - ohne Aufrufer wird wie gewohnt aus dem
+        Eingabefeld gelesen und frisch auf Dubletten geprueft."""
+        if roh is None:
+            roh = self.eingabe.toPlainText()
         art, text = markierung_erkennen(roh)
+
+        if text.strip() and not self._holt_vorgemerkten:
+            if not dublette_bestaetigt:
+                alter = self._dublette_pruefen(art, text)
+                if alter is not None:
+                    self._pending_dublette = {"roh": roh, "vorspann": vorspann}
+                    self.eingabe.clear()
+                    satz = (f"Dieser Auftrag wurde {alter} praktisch gleichlautend "
+                            f"schon ausgeführt. Trotzdem ausführen?")
+                    self._verlauf_anhaengen(text, "hinweis")
+                    self._frage(satz, "Auftrag wiederholen?")
+                    return
+            self._dublette_merken(art, text)
+
         if art in ("run", "admin"):
             # #run# und #admin# laufen nie ueber Claude Code: kein
             # Modellaufruf, kein Tokenverbrauch, direkt im Terminal.
@@ -1902,13 +1973,30 @@ class Werkbank(QMainWindow):
             # neuen Prozesses, bevor der alte sich beendet - das alte Fenster
             # friert dabei ein, statt zu verschwinden. Daher ein eigener,
             # entkoppelter Prozess statt eines echten Prozess-Austauschs.
-            subprocess.Popen([sys.executable] + sys.argv, cwd=str(CWB_WURZEL))
+            subprocess.Popen(self._neustart_befehl(), cwd=str(CWB_WURZEL))
         except OSError as fehler:
             log.error("Neustart gescheitert: %s", fehler)
             self.sprecher.sprich("Neustart gescheitert.", art="fehler")
             return
         self.close()
         QApplication.instance().quit()
+
+    def _neustart_befehl(self) -> list[str]:
+        """Baut die Kommandozeile fuer den Neustart-Unterprozess.
+
+        Im gepackten Zustand (starter.py, setzt `sys.frozen`) hat starter.py
+        beim eigenen Start `sys.argv[0]` auf `core/fenster.py` umgeschrieben,
+        damit runpy die Datei als __main__ ausfuehrt. Ein Neustart ueber
+        `sys.argv` wuerde deshalb core/fenster.py direkt aufrufen und ohne
+        den von starter.py gesetzten Suchpfad zum Ordner `pakete` sofort an
+        einem fehlenden PySide6-Import scheitern - das Fenster verschwindet,
+        ohne dass je ein neues erscheint. Deshalb im gepackten Zustand immer
+        ueber starter.py neu starten, im Skript-Start (kein sys.frozen)
+        bleibt der bisherige Weg ueber sys.argv unveraendert."""
+        if getattr(sys, "frozen", False):
+            einstieg = CWB_WURZEL / "starter.py"
+            return [sys.executable, str(einstieg)] + sys.argv[1:]
+        return [sys.executable] + sys.argv
 
     def _bild_aus_ablage(self) -> bool:
         ablage = QGuiApplication.clipboard().image()
