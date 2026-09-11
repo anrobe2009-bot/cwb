@@ -15,7 +15,12 @@ und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
   alte Bestände aus dem Programmordner einmalig herüber (SQLite-Backup-API,
   Nachtrag fehlender Einträge, Ordner per Umbenennen) und wird von
   `pfade.py`, `memory_hub/memory_db.py` und `index/indexer.py` beim Laden
-  aufgerufen — die beiden MCP-Server laufen auch ohne CWB.
+  aufgerufen — die beiden MCP-Server laufen auch ohne CWB. `erstuebernahme()`
+  (aus `fenster.main()`) ist der Gegenfall: startet eine installierte Fassung
+  mit leerem Datenordner, kopiert sie einmalig Gedächtnis, Index und
+  `einstellungen.json` aus einer älteren Datenhaltung auf demselben Rechner
+  (CWB-Ordner aus `~/.claude.json`, `%APPDATA%\CWB`); nie verschieben,
+  Marker `uebernahme.json` im Datenordner, bei Fremden passiert still nichts.
 - **grundlagen.py** — Pfade, Log-Einrichtung, `einstellungen.json`, Skalierung des
   Stilblatts, Liste der offenen Fenster, `slot_geschuetzt`. Liegt getrennt, weil
   fenster.py beim Start als Hauptmodul läuft und nicht zurückimportiert werden darf.

@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
 
 try:
     from .ablagewaechter import Zwischenablagewaechter
+    from .datenordner import erstuebernahme
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
     from .faden import SitzungsFaden
@@ -96,7 +97,7 @@ try:
         modell_lesen,
         modell_merken,
     )
-    from .pfade import freigaben_lesen, pfade_vollstaendig
+    from .pfade import EINSTELLUNGEN_DATEI, freigaben_lesen, pfade_vollstaendig
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
@@ -116,6 +117,7 @@ try:
     )
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
+    from datenordner import erstuebernahme
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
     from faden import SitzungsFaden
@@ -148,7 +150,7 @@ except ImportError:
         modell_lesen,
         modell_merken,
     )
-    from pfade import freigaben_lesen, pfade_vollstaendig
+    from pfade import EINSTELLUNGEN_DATEI, freigaben_lesen, pfade_vollstaendig
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
@@ -2146,6 +2148,13 @@ def main() -> None:
     stil_laden(anwendung)
 
     sprecher = Sprecher()
+
+    # Frisch installierte Fassung mit leerem Datenordner: gibt es auf diesem
+    # Rechner eine aeltere Datenhaltung, wird sie genau einmal kopiert - vor
+    # der Ersteinrichtung, damit uebernommene Einstellungen sie ersparen.
+    uebernahme = erstuebernahme(EINSTELLUNGEN_DATEI)
+    if uebernahme is not None:
+        sprecher.sprich(uebernahme.ansage(), art="immer")
 
     # Beim allerersten Start ist noch kein Projektordner gemerkt. Ohne ihn
     # bliebe die Projektwahl leer, deshalb wird vorher gefragt.
