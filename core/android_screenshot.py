@@ -5,9 +5,17 @@ Android-Screenshot direkt als Bild in die Windows-Zwischenablage: ersetzt
 verbundenen Android-Geraet auf und legt das PNG als echtes Bild in die
 Zwischenablage - mit Strg+V direkt in einen Chat einfuegbar.
 
-Eigenstaendiges Kommandozeilenwerkzeug, aufrufbar per #RUN#-Befehl:
+Eigenstaendiges Kommandozeilenwerkzeug. Aus dem Projekt CWB selbst per
+#RUN#-Befehl:
 
     #run# python core\\android_screenshot.py
+
+Aus JEDEM anderen Projekt heraus (der #RUN#-Befehl laeuft sonst im dort
+offenen Projektordner, in dem diese Datei nicht liegt) ueber das
+Startskript mit absolutem Pfad in .cwb-werkzeuge, unabhaengig vom offenen
+Projekt:
+
+    #run# python C:\\Users\\Entwickler\\.cwb-werkzeuge\\android_screenshot.py
 
 Fuer die Zwischenablage gilt derselbe Weg wie beim Bericht-Kopieren
 (core/zielfenster.py, _in_zwischenablage_legen; core/fenster.py,
