@@ -3,8 +3,9 @@ CWB - Code Workbench
 Waechter ueber der Zwischenablage.
 
 Sieht alle zwei Sekunden nach, ob in der Zwischenablage ein Text steht,
-dessen erste Zeile eine der drei Markierungen ist (#code#, #run#, #admin#).
-Nur dann wird der Text uebernommen und abgeschickt.
+dessen erste Zeile eine der vier Markierungen ist (#code#, #run#, #admin#,
+#bild#). Nur dann wird der Text uebernommen und abgeschickt. #bild# braucht
+keinen Inhalt dahinter - die Markierung allein loest schon aus.
 
 Sobald ein markierter Auftrag uebernommen ist, leert der Waechter die
 Zwischenablage. Damit kann derselbe Text nie zweimal auslösen - es gibt
@@ -73,7 +74,7 @@ class Zwischenablagewaechter(QObject):
     `markierung_erkennen` zerlegt einen Text in (Art, Inhalt),
     `aktiv` sagt vor jedem Blick, ob der Waechter eingeschaltet ist,
     `ausfuehren` bekommt Art und Inhalt eines erkannten Auftrags
-    ("code", "run" oder "admin").
+    ("code", "run", "admin" oder "bild").
     """
 
     def __init__(self, markierung_erkennen, aktiv, ausfuehren, eltern=None):
@@ -129,9 +130,13 @@ class Zwischenablagewaechter(QObject):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Markierung nicht prüfbar: %s", fehler)
             return
-        if art not in ("code", "run", "admin") or not inhalt:
+        if art not in ("code", "run", "admin", "bild"):
             # Kein markierter Auftrag. Hier endet jede Beruehrung mit dem
             # Text: nichts wird behalten und nichts ins Log geschrieben.
+            return
+        if art != "bild" and not inhalt:
+            # Nur #bild# loest ohne Inhalt aus - alle anderen Markierungen
+            # brauchen einen Auftrag dahinter.
             return
         log.info("Wächter: markierter Auftrag erkannt (%s), %d Zeichen", art, len(inhalt))
         # Erst die Zwischenablage leeren, dann ausfuehren: so kann derselbe

@@ -40,7 +40,9 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     Qt,
+    QThread,
     QTimer,
+    Signal,
 )
 from PySide6.QtGui import (
     QFont,
@@ -65,6 +67,7 @@ from PySide6.QtWidgets import (
 
 try:
     from .ablagewaechter import Zwischenablagewaechter
+    from .android_screenshot import screenshot_in_zwischenablage
     from .datenordner import erstuebernahme
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
@@ -118,6 +121,7 @@ try:
     )
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
+    from android_screenshot import screenshot_in_zwischenablage
     from datenordner import erstuebernahme
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
@@ -218,20 +222,28 @@ BERICHTE_BEHALTEN = 30
 # PowerShell-Befehl im Projektordner - ohne Modellaufruf, ohne
 # Tokenverbrauch. #ADMIN# fragt dafuer immer erst mit dem vollen Befehl
 # zurueck und laeuft danach mit erhoehten Rechten (siehe core/terminal.py).
+# #BILD# braucht keinen Befehlstext dahinter: die Markierung allein holt
+# einen Screenshot vom verbundenen Android-Geraet (core/android_screenshot.py,
+# BildFaden unten) und legt einen Dateiverweis in die Zwischenablage - ohne
+# Claude Code, ohne Terminal, ohne jede Text-Rueckspielung ins Zielfenster.
 MARKIERUNG_CODE = "#CODE#"
 MARKIERUNG_RUN = "#RUN#"
 MARKIERUNG_ADMIN = "#ADMIN#"
+MARKIERUNG_BILD = "#BILD#"
 
 # #RUN#-Befehle, die ihr Ergebnis selbst als Bild in die Zwischenablage legen
 # (core/android_screenshot.py, auch ueber das Startskript in
 # .cwb-werkzeuge). Fuer sie darf die Text-Rueckspielung unten in
 # _terminal_fertig() das Bild nicht mit der gedruckten Meldung ueberschreiben.
+# Bleibt fuer den alten #RUN#-Aufrufweg bestehen - #BILD# unten braucht diese
+# Ausnahme nicht mehr, weil es nie ueber das Terminal laeuft.
 BEFEHLE_OHNE_TEXT_RUECKSPIELUNG = ("android_screenshot.py",)
 
 _MARKIERUNGEN = {
     MARKIERUNG_CODE: "code",
     MARKIERUNG_RUN: "run",
     MARKIERUNG_ADMIN: "admin",
+    MARKIERUNG_BILD: "bild",
 }
 
 # Leerraum, der vor der Markierung stehen darf. Neben den ueblichen
@@ -243,16 +255,30 @@ RANDZEICHEN = " \t\r\n\v\f\u00a0\u200b\u200e\u200f\ufeff"
 def markierung_erkennen(text: str) -> tuple[str, str]:
     """Zerlegt eine Eingabe in Markierung und Inhalt.
 
-    Rueckgabe: ("code" | "run" | "admin" | "", Inhalt ohne Markierungszeile).
-    Leerraum und Leerzeilen vor der Markierung werden uebergangen. Ohne
-    Markierung bleibt der Text unveraendert und die Art ist leer - er gilt
-    dann als gewoehnlicher Auftrag und wird nie verworfen."""
+    Rueckgabe: ("code" | "run" | "admin" | "bild" | "", Inhalt ohne
+    Markierungszeile). Leerraum und Leerzeilen vor der Markierung werden
+    uebergangen. Ohne Markierung bleibt der Text unveraendert und die Art ist
+    leer - er gilt dann als gewoehnlicher Auftrag und wird nie verworfen. Bei
+    "bild" ist ein leerer Inhalt der Normalfall: die Markierung allein loest
+    schon aus, es gehoert kein Befehlstext dahinter."""
     ohne_rand = text.lstrip(RANDZEICHEN)
     kopf, _, rest = ohne_rand.partition("\n")
     art = _MARKIERUNGEN.get(kopf.strip(RANDZEICHEN).upper())
     if art:
         return art, rest.strip(RANDZEICHEN)
     return "", text.strip(RANDZEICHEN)
+
+
+class BildFaden(QThread):
+    """#BILD#: holt den Android-Screenshot in einem eigenen Thread (core/
+    android_screenshot.py, screenshot_in_zwischenablage) - weder der
+    adb-Aufruf noch der eigenstaendige PowerShell-Prozess fuer den
+    Dateiverweis in der Zwischenablage duerfen das Fenster haengen lassen."""
+
+    fertig_da = Signal(object)
+
+    def run(self) -> None:
+        self.fertig_da.emit(screenshot_in_zwischenablage())
 
 
 # Hoechstzahl Saetze, die von einer Rueckfrage oder Fehlermeldung gesprochen
@@ -485,6 +511,8 @@ class Werkbank(QMainWindow):
         # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
         # Collector eingesammelt wird, bevor er fertig ist.
         self._terminal_faden: TerminalFaden | None = None
+        # Haelt den laufenden #BILD#-Auftrag, aus demselben Grund.
+        self._bild_faden: BildFaden | None = None
         # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
         # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
         self._terminal_ziel: tuple | None = None
@@ -1187,6 +1215,43 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich(satz, art="fertig" if ergebnis.erfolg else "fehler")
         self._verlauf_nachtragen()
 
+    # -- Bild (#BILD#) --------------------------------------------------------
+
+    def _bild_markierung(self) -> None:
+        """Verarbeitet einen #BILD#-Auftrag: die Markierung allein genuegt,
+        es gehoert kein Befehlstext dahinter. Laeuft nie ueber Claude Code
+        und nie ueber das Terminal - kein Ausgabefeld wird belegt, keine
+        Zwischenablage mit Text ueberschrieben, kein Ergebnis in ein fremdes
+        Fenster zurueckgespielt. Danach steht nur ein Dateiverweis auf den
+        Screenshot in der Zwischenablage (core/android_screenshot.py)."""
+        if self._bild_faden is not None and self._bild_faden.isRunning():
+            self.sprecher.sprich("Es läuft schon ein Screenshot-Auftrag.", art="fehler")
+            return
+        log.info("Bild-Auftrag gestartet (#BILD#)")
+        self._status_zeigen("Screenshot wird geholt…")
+        self.sprecher.sprich("Screenshot wird geholt…", art="meldung")  # stumm: Zwischenmeldung
+        self._bild_faden = BildFaden(self)
+        self._bild_faden.fertig_da.connect(self._bild_fertig)
+        self._bild_faden.start()
+
+    @slot_geschuetzt
+    def _bild_fertig(self, ergebnis) -> None:
+        if ergebnis.erfolg:
+            log.info(
+                "Screenshot bereit: %s (%dx%d)", ergebnis.pfad, ergebnis.breite, ergebnis.hoehe
+            )
+            self._status_zeigen(f"Screenshot bereit: {ergebnis.pfad}")
+            # Die eine kurze Ansage - kein Text geht ins Ausgabefeld, die
+            # Zwischenablage traegt schon den Dateiverweis und bleibt
+            # unangetastet.
+            self.sprecher.sprich("Screenshot bereit.", art="fertig")
+        else:
+            log.error("Screenshot fehlgeschlagen: %s", ergebnis.fehler)
+            self._status_zeigen(f"Screenshot fehlgeschlagen: {ergebnis.fehler}")
+            self.sprecher.sprich(
+                kurzfassen(ergebnis.fehler) or "Screenshot fehlgeschlagen.", art="fehler"
+            )
+
     # -- Modellwahl ---------------------------------------------------------
 
     @slot_geschuetzt
@@ -1640,6 +1705,12 @@ class Werkbank(QMainWindow):
             "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
             len(text), art or "ohne Markierung", len(inhalt),
         )
+        if art == "bild":
+            # #BILD# fuellt nie das Eingabefeld: die Markierung allein loest
+            # schon aus, kein Inhalt noetig.
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung()
+            return
         if art in ("run", "admin"):
             # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
             # im Terminal, ohne Claude Code.
@@ -1660,10 +1731,14 @@ class Werkbank(QMainWindow):
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
         """Der Wächter hat einen markierten Auftrag gefunden. #run# und
-        #admin# laufen direkt im Terminal, ohne Eingabefeld und ohne Claude
-        Code. #code# geht wie bisher ueber das Eingabefeld und _absenden.
-        Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
-        ablagewaechter.py)."""
+        #admin# laufen direkt im Terminal, #BILD# holt direkt den Screenshot -
+        alle drei ohne Eingabefeld und ohne Claude Code. #code# geht wie
+        bisher ueber das Eingabefeld und _absenden. Die Zwischenablage ist zu
+        diesem Zeitpunkt schon geleert (siehe ablagewaechter.py)."""
+        if art == "bild":
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung()
+            return
         if art in ("run", "admin"):
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
@@ -1735,6 +1810,12 @@ class Werkbank(QMainWindow):
                     return
             self._dublette_merken(art, text)
 
+        if art == "bild":
+            # #BILD# braucht keinen Befehlstext: die Markierung allein loest
+            # schon aus, direkt der Screenshot-Ausloeser, ohne Claude Code.
+            self.eingabe.clear()
+            self._bild_markierung()
+            return
         if art in ("run", "admin"):
             # #run# und #admin# laufen nie ueber Claude Code: kein
             # Modellaufruf, kein Tokenverbrauch, direkt im Terminal.

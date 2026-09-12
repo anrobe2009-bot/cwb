@@ -62,6 +62,7 @@ import subprocess
 import sys
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -266,6 +267,35 @@ def _ueber_zwischenablage(png_daten: bytes) -> Path:
                 "Bild kam trotz mehrerer Versuche nicht in der Zwischenablage an."
             )
     return ziel
+
+
+@dataclass
+class ScreenshotErgebnis:
+    """Ergebnis eines Screenshot-Vorgangs - fuer den #BILD#-Ausloeser in
+    core/fenster.py (BildFaden) ebenso wie fuer die Kommandozeile."""
+    erfolg: bool
+    pfad: Path | None = None
+    breite: int = 0
+    hoehe: int = 0
+    fehler: str = ""
+
+
+def screenshot_in_zwischenablage() -> ScreenshotErgebnis:
+    """Fuehrt Variante B end-to-end aus: Bild holen, dauerhaft in Downloads
+    ablegen, Dateiverweis in die Zwischenablage haengen. Wirft nichts - jeder
+    Fehlschlag kommt als `ScreenshotErgebnis(erfolg=False, fehler=...)`
+    zurueck, damit ein Aufrufer wie BildFaden ihn ohne try/except weiterreichen
+    kann."""
+    try:
+        png_daten = _screenshot_holen()
+    except RuntimeError as fehler:
+        return ScreenshotErgebnis(False, fehler=str(fehler))
+    breite, hoehe = _png_masse(png_daten)
+    try:
+        ziel = _ueber_zwischenablage(png_daten)
+    except (RuntimeError, OSError) as fehler:
+        return ScreenshotErgebnis(False, fehler=str(fehler))
+    return ScreenshotErgebnis(True, ziel, breite, hoehe)
 
 
 def main() -> int:
