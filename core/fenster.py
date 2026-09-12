@@ -222,6 +222,12 @@ MARKIERUNG_CODE = "#CODE#"
 MARKIERUNG_RUN = "#RUN#"
 MARKIERUNG_ADMIN = "#ADMIN#"
 
+# #RUN#-Befehle, die ihr Ergebnis selbst als Bild in die Zwischenablage legen
+# (core/android_screenshot.py, auch ueber das Startskript in
+# .cwb-werkzeuge). Fuer sie darf die Text-Rueckspielung unten in
+# _terminal_fertig() das Bild nicht mit der gedruckten Meldung ueberschreiben.
+BEFEHLE_OHNE_TEXT_RUECKSPIELUNG = ("android_screenshot.py",)
+
 _MARKIERUNGEN = {
     MARKIERUNG_CODE: "code",
     MARKIERUNG_RUN: "run",
@@ -1139,12 +1145,21 @@ class Werkbank(QMainWindow):
         log.info("Terminalbefehl beendet, Erfolg=%s, Code=%s", ergebnis.erfolg, ergebnis.code)
         self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
         satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
+        befehl_lief = self._terminal_faden.befehl if self._terminal_faden else ""
+        bild_bleibt = ergebnis.erfolg and any(
+            marker in befehl_lief for marker in BEFEHLE_OHNE_TEXT_RUECKSPIELUNG
+        )
+        if bild_bleibt:
+            # Das Skript hat sein Bild schon selbst in die Zwischenablage
+            # gelegt - die Text-Rueckspielung wuerde es sofort wieder mit der
+            # gedruckten Meldung ueberschreiben, darum bleibt sie hier aus.
+            satz += " Bild liegt in der Zwischenablage."
         # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
         # Auftrag kam (siehe zielfenster.py). Ist beim Auftragsstart keins
         # gemerkt worden, nimmt zielfenster.einfuegen() das zuletzt bekannte
         # Ziel. Nur wenn noch nie eins bekannt war, bleibt das Ergebnis in
         # der Zwischenablage liegen.
-        if zielfenster.einfuegen(self._terminal_ziel, text):
+        elif zielfenster.einfuegen(self._terminal_ziel, text):
             satz += " Ergebnis eingefügt."
         else:
             satz += " Ergebnis liegt in der Zwischenablage."
