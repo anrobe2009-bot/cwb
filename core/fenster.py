@@ -1146,9 +1146,27 @@ class Werkbank(QMainWindow):
         self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
         satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
         befehl_lief = self._terminal_faden.befehl if self._terminal_faden else ""
-        bild_bleibt = ergebnis.erfolg and any(
-            marker in befehl_lief for marker in BEFEHLE_OHNE_TEXT_RUECKSPIELUNG
+        marker_treffer = next(
+            (m for m in BEFEHLE_OHNE_TEXT_RUECKSPIELUNG if m in befehl_lief), None
         )
+        bild_bleibt = ergebnis.erfolg and marker_treffer is not None
+        if marker_treffer and not ergebnis.erfolg:
+            log.info(
+                "Text-Rueckspielung NICHT uebersprungen: Marker '%s' im Befehl gefunden, "
+                "aber Befehl fehlgeschlagen (Code %s): %s",
+                marker_treffer, ergebnis.code, befehl_lief,
+            )
+        elif bild_bleibt:
+            log.info(
+                "Text-Rueckspielung uebersprungen: Marker '%s' im Befehl gefunden: %s",
+                marker_treffer, befehl_lief,
+            )
+        else:
+            log.info(
+                "Text-Rueckspielung normal ausgefuehrt: kein Marker aus "
+                "BEFEHLE_OHNE_TEXT_RUECKSPIELUNG im Befehl gefunden: %s",
+                befehl_lief,
+            )
         if bild_bleibt:
             # Das Skript hat sein Bild schon selbst in die Zwischenablage
             # gelegt - die Text-Rueckspielung wuerde es sofort wieder mit der
