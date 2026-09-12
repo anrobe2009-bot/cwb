@@ -43,6 +43,10 @@ except ImportError:
 
 log_einrichten()
 log = logging.getLogger("cwb.ablagewaechter")
+# Eigene Stufe, unabhaengig vom INFO-Grundpegel: die Durchlauf-Protokollzeile
+# unten (DEBUG) soll ohne weitere Einstellung in der Logdatei stehen, um
+# einen ausbleibenden Trigger nachvollziehen zu koennen.
+log.setLevel(logging.DEBUG)
 
 # Abstand zwischen zwei Blicken in die Zwischenablage.
 PRUEF_ABSTAND_MS = 2000
@@ -130,9 +134,20 @@ class Zwischenablagewaechter(QObject):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Markierung nicht prüfbar: %s", fehler)
             return
+        # Durchlauf-Protokoll (DEBUG): nur die erste Zeile, gekuerzt, damit
+        # kein ganzer Auftragstext oder zufaellig kopiertes Geheimnis in der
+        # Logdatei landet - genug, um zu sehen, ob und als was eine
+        # Markierung erkannt wurde.
+        kopf_vorschau = text.strip().splitlines()[0][:40] if text.strip() else ""
+        log.debug(
+            "Wächter-Durchlauf: Kopf %r, erkannt als %r",
+            kopf_vorschau,
+            art or "-",
+        )
         if art not in ("code", "run", "admin", "bild"):
             # Kein markierter Auftrag. Hier endet jede Beruehrung mit dem
-            # Text: nichts wird behalten und nichts ins Log geschrieben.
+            # Text: nichts wird behalten und nichts ins Log geschrieben
+            # (ausser der Durchlaufzeile oben, siehe dort).
             return
         if art != "bild" and not inhalt:
             # Nur #bild# loest ohne Inhalt aus - alle anderen Markierungen
