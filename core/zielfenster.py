@@ -43,6 +43,7 @@ import threading
 import time
 from ctypes import wintypes
 
+from PySide6.QtCore import QMimeData, QUrl
 from PySide6.QtGui import QGuiApplication
 
 try:
@@ -442,6 +443,43 @@ def _in_zwischenablage_legen(text: str) -> bool:
         "Ergebnis nach %d Versuchen nicht in die Zwischenablage gelegt - "
         "vermutlich Zugriffskonflikt rund um eine Rechteanforderung (UAC)",
         ZWISCHENABLAGE_VERSUCHE,
+    )
+    return False
+
+
+def datei_in_zwischenablage_legen(pfad: str) -> bool:
+    """Legt einen Dateiverweis auf `pfad` in die Zwischenablage - dasselbe
+    CF_HDROP-Format, das der Windows-Explorer beim Kopieren einer Datei per
+    Strg+C erzeugt und das Chatfenster als Bild annehmen, waehrend rohe
+    Bilddaten (CF_DIB/CF_BITMAP ueber QClipboard.setImage()) dort mitunter
+    abgelehnt werden (core/android_screenshot.py). Direkt ueber
+    QClipboard.setMimeData() im laufenden CWB-Prozess, ohne PowerShell oder
+    sonst einen zweiten Prozess - muss auf dem GUI-Thread laufen, wie
+    _in_zwischenablage_legen auch. Gleiches Schreiben-zurücklesen-Muster:
+    bei Abweichung mit steigender Wartezeit erneut versucht."""
+    url = QUrl.fromLocalFile(pfad)
+    for versuch in range(1, ZWISCHENABLAGE_VERSUCHE + 1):
+        try:
+            mime = QMimeData()
+            mime.setUrls([url])
+            QGuiApplication.clipboard().setMimeData(mime)
+            zurueckgelesen = QGuiApplication.clipboard().mimeData().urls()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage-Versuch %d (Bild) fehlgeschlagen: %s", versuch, fehler)
+            zurueckgelesen = []
+        if zurueckgelesen == [url]:
+            if versuch > 1:
+                log.info("Bild erst im %d. Versuch in der Zwischenablage angekommen", versuch)
+            return True
+        if versuch < ZWISCHENABLAGE_VERSUCHE:
+            wartezeit = ZWISCHENABLAGE_WARTE_BASIS_S * versuch
+            log.warning(
+                "Zwischenablage-Versuch %d (Bild): Dateiverweis kam nicht an, warte %.2fs",
+                versuch, wartezeit,
+            )
+            time.sleep(wartezeit)
+    log.error(
+        "Bild nach %d Versuchen nicht in die Zwischenablage gelegt", ZWISCHENABLAGE_VERSUCHE
     )
     return False
 

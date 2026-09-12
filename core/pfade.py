@@ -25,6 +25,7 @@ Fehlt ein Schluessel ganz, gilt der Vorschlag.
 
 import json
 import logging
+import sys
 import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -46,6 +47,45 @@ LOG_SICHERUNGEN = 3
 LOG_FORM = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
 
+class _SicheresRotierendesLog(RotatingFileHandler):
+    """Wie RotatingFileHandler, aber eine fehlgeschlagene Drehung darf nie
+    dazu fuehren, dass jeder weitere Eintrag stillschweigend verlorengeht.
+
+    Am 12.09.2026 gegen 11:29 Uhr blieb die Logdatei kurz vor der Groessen-
+    grenze stehen: die naechste Zeile stiess die Drehung an, die scheiterte
+    vermutlich, weil ein anderer Prozess cwb_fehler.log gleichzeitig offen
+    hielt (RotatingFileHandler.rotate() nutzt os.rename, das Windows bei
+    einem fremden Zugriff auf Quelle oder Ziel mit PermissionError ablehnt).
+    Die Standardklasse faengt so einen Fehler zwar ab (handleError schreibt
+    nur nach stderr, in einer Fenster-Anwendung ohne Konsole also ins
+    Nichts), verwirft dabei aber genau den Log-Satz, der die Drehung
+    ausgeloest hat - und weil die Datei dadurch weiter ueber der Grenze
+    bleibt, versucht jeder folgende Aufruf dieselbe Drehung erneut, scheitert
+    erneut und verwirft wieder seinen Satz: das Log blieb seither leer.
+    Hier wird die Drehung stattdessen in einem eigenen try/except versucht;
+    schlaegt sie fehl, wird das genutzte Handle sichergestellt und der Satz
+    trotzdem geschrieben - die Datei waechst dann eben ueber die Grenze
+    hinaus, bis sich die Drehung wieder ausfuehren laesst, statt dass CWB
+    blind wird."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if self.shouldRollover(record):
+                try:
+                    self.doRollover()
+                except OSError as fehler:
+                    print(
+                        f"CWB: Log-Drehung fehlgeschlagen, schreibe ohne Drehung weiter: "
+                        f"{fehler}",
+                        file=sys.stderr,
+                    )
+                    if self.stream is None and not self.delay:
+                        self.stream = self._open()
+            logging.FileHandler.emit(self, record)
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
 def log_einrichten() -> None:
     """Haengt den rotierenden Schreiber einmalig an den Wurzel-Logger.
 
@@ -56,7 +96,7 @@ def log_einrichten() -> None:
     for vorhanden in wurzel.handlers:
         if getattr(vorhanden, "_cwb_log", False):
             return
-    schreiber = RotatingFileHandler(
+    schreiber = _SicheresRotierendesLog(
         str(LOG_DATEI),
         maxBytes=LOG_GROESSE,
         backupCount=LOG_SICHERUNGEN,

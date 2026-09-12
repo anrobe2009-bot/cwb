@@ -67,7 +67,7 @@ from PySide6.QtWidgets import (
 
 try:
     from .ablagewaechter import Zwischenablagewaechter
-    from .android_screenshot import screenshot_in_zwischenablage
+    from .android_screenshot import screenshot_ablegen
     from .datenordner import erstuebernahme
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
@@ -121,7 +121,7 @@ try:
     )
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
-    from android_screenshot import screenshot_in_zwischenablage
+    from android_screenshot import screenshot_ablegen
     from datenordner import erstuebernahme
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
@@ -271,14 +271,15 @@ def markierung_erkennen(text: str) -> tuple[str, str]:
 
 class BildFaden(QThread):
     """#BILD#: holt den Android-Screenshot in einem eigenen Thread (core/
-    android_screenshot.py, screenshot_in_zwischenablage) - weder der
-    adb-Aufruf noch der eigenstaendige PowerShell-Prozess fuer den
-    Dateiverweis in der Zwischenablage duerfen das Fenster haengen lassen."""
+    android_screenshot.py, screenshot_ablegen) - der adb-Aufruf darf das
+    Fenster nicht haengen lassen. Legt nur die Datei in Downloads ab, ruehrt
+    die Zwischenablage nicht an: QClipboard darf nur auf dem GUI-Thread
+    laufen, das erledigt _bild_fertig() unten nach fertig_da."""
 
     fertig_da = Signal(object)
 
     def run(self) -> None:
-        self.fertig_da.emit(screenshot_in_zwischenablage())
+        self.fertig_da.emit(screenshot_ablegen())
 
 
 # Hoechstzahl Saetze, die von einer Rueckfrage oder Fehlermeldung gesprochen
@@ -1240,6 +1241,16 @@ class Werkbank(QMainWindow):
             log.info(
                 "Screenshot bereit: %s (%dx%d)", ergebnis.pfad, ergebnis.breite, ergebnis.hoehe
             )
+            # Dateiverweis erst hier in die Zwischenablage legen: dieser Slot
+            # laeuft auf dem GUI-Thread (fertig_da-Signal), waehrend der
+            # BildFaden-Thread QClipboard nicht anfassen darf.
+            if not zielfenster.datei_in_zwischenablage_legen(str(ergebnis.pfad)):
+                log.error("Screenshot-Dateiverweis nicht in die Zwischenablage gelegt")
+                self._status_zeigen(f"Screenshot liegt nur in Downloads: {ergebnis.pfad}")
+                self.sprecher.sprich(
+                    "Screenshot bereit, aber nicht in die Zwischenablage gelegt.", art="fehler"
+                )
+                return
             self._status_zeigen(f"Screenshot bereit: {ergebnis.pfad}")
             # Die eine kurze Ansage - kein Text geht ins Ausgabefeld, die
             # Zwischenablage traegt schon den Dateiverweis und bleibt

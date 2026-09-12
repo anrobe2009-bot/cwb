@@ -31,7 +31,19 @@ schlaegt einer der beiden fehl. Deshalb wird der Waechter vorher ueber
 seinen bestehenden Schalter in einstellungen.json (Schluessel
 "ablage_waechter", siehe core/fenster.py) angehalten und danach auf den
 vorherigen Wert zurueckgesetzt - ohne dass dieses Skript mit dem
-laufenden CWB-Prozess sprechen muesste.
+laufenden CWB-Prozess sprechen muesste. Variante B gilt nur noch fuer den
+eigenstaendigen Kommandozeilenaufruf unten (z.B. aus einem ANDEREN
+Projekt per #RUN#, wo kein Zugriff auf CWBs eigene QGuiApplication
+besteht) - der #BILD#-Ausloeser in core/fenster.py braucht sie nicht mehr.
+
+VARIANTE C - #BILD# aus dem laufenden CWB-Prozess (screenshot_ablegen()
+unten plus core/zielfenster.py, datei_in_zwischenablage_legen). Holt das
+Bild und legt es in Downloads ab wie Variante A, ohne PowerShell oder
+sonst einen zweiten Prozess - den Dateiverweis setzt core/fenster.py
+(BildFaden/_bild_fertig) danach direkt ueber QClipboard.setMimeData() auf
+dem GUI-Thread. Weil alles im selben Prozess laeuft wie CWBs eigener
+Zwischenablage-Waechter, gibt es den Zugriffskonflikt von Variante B gar
+nicht erst - der Waechter muss dafuer nicht angehalten werden.
 
 Eigenstaendiges Kommandozeilenwerkzeug. Aus dem Projekt CWB selbst per
 #RUN#-Befehl:
@@ -278,6 +290,26 @@ class ScreenshotErgebnis:
     breite: int = 0
     hoehe: int = 0
     fehler: str = ""
+
+
+def screenshot_ablegen() -> ScreenshotErgebnis:
+    """Holt den Screenshot und legt ihn dauerhaft in Downloads ab (Variante A) -
+    ruehrt die Zwischenablage nicht an. Fuer den #BILD#-Ausloeser in core/
+    fenster.py (BildFaden): laeuft in einem Hintergrund-Thread, wo QClipboard
+    nicht angefasst werden darf. Den Dateiverweis in die Zwischenablage legt
+    danach core/zielfenster.py (datei_in_zwischenablage_legen) direkt ueber
+    Qt auf dem GUI-Thread - kein PowerShell, kein zweiter Prozess. Wirft
+    nichts, wie screenshot_in_zwischenablage()."""
+    try:
+        png_daten = _screenshot_holen()
+    except RuntimeError as fehler:
+        return ScreenshotErgebnis(False, fehler=str(fehler))
+    breite, hoehe = _png_masse(png_daten)
+    try:
+        ziel = _in_downloads_ablegen(png_daten)
+    except OSError as fehler:
+        return ScreenshotErgebnis(False, fehler=str(fehler))
+    return ScreenshotErgebnis(True, ziel, breite, hoehe)
 
 
 def screenshot_in_zwischenablage() -> ScreenshotErgebnis:
