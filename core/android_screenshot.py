@@ -12,11 +12,18 @@ Mal ueberschrieben - der Datei-Dialog jedes Chat-Programms schaut dort
 ohnehin zuerst nach, Robert muss nie suchen. Kein Zwischenablage-Zugriff,
 also auch keine Blockade moeglich.
 
-VARIANTE B - Zwischenablage, mit angehaltenem Waechter. Legt das Bild wie
-zuvor per eigenstaendigem PowerShell-Prozess (System.Windows.Forms.Clipboard)
-ab, mit Strg+V direkt einfuegbar. Robert bekam dabei zuletzt HRESULT
--2147221040 (CLIPBRD_E_CANT_OPEN) von OleFlushClipboard - auch nach
-Abschalten des Windows-Zwischenablageverlaufs. Grund: CWBs eigener
+VARIANTE B - Zwischenablage, mit angehaltenem Waechter. Legt nicht die
+Bilddaten selbst ab, sondern einen DATEIVERWEIS (CF_HDROP) auf die Datei im
+Downloads-Ordner - genau das, was der Windows-Explorer beim Kopieren einer
+Datei per Strg+C in die Zwischenablage legt. Das war der entscheidende
+Unterschied: Robert hat eine PNG-Datei im Explorer kopiert und per Strg+V
+sofort im Chatfenster einfuegen koennen, waehrend dasselbe Chatfenster
+Bilddaten (CF_BITMAP/CF_DIB) aus einem frueheren Anlauf dieses Skripts nicht
+annahm. Die Datei muss dafuer dauerhaft auf der Platte liegen, nicht nur
+temporaer - deshalb nutzt Variante B denselben Downloads-Pfad wie Variante A
+(_in_downloads_ablegen). Gesetzt wird der Verweis per
+System.Windows.Forms.Clipboard.SetFileDropList ueber einen eigenstaendigen
+PowerShell-Prozess, unabhaengig von Qt/QClipboard. CWBs eigener
 Zwischenablage-Waechter (core/ablagewaechter.py) liest alle zwei Sekunden
 clipboard.text() im selben Windows-Sitzungskontext und oeffnet dafuer kurz
 die Zwischenablage - faellt das mit dem PowerShell-Zugriff zusammen,
@@ -49,12 +56,10 @@ import argparse
 import contextlib
 import ctypes
 import logging
-import os
 import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -195,34 +200,21 @@ def _waechter_pausiert():
         log.info("Zwischenablage-Wächter-Schalter zurückgesetzt (%s)", vorher)
 
 
-def _screenshot_datei_schreiben(png_daten: bytes) -> str:
-    """Schreibt die PNG-Bytes in eine temporaere Datei und gibt deren Pfad
-    zurueck. Getrennt vom Zwischenablage-Schritt: adb-Abruf und
-    Windows-Zwischenablage sind zwei unabhaengige technische Wege."""
-    datei = tempfile.NamedTemporaryFile(
-        prefix="cwb_android_screenshot_", suffix=".png", delete=False
-    )
-    try:
-        datei.write(png_daten)
-    finally:
-        datei.close()
-    return datei.name
-
-
 def _datei_in_zwischenablage(pfad: str) -> bool:
-    """Legt die fertige Bilddatei per eigenstaendigem PowerShell-Prozess in
-    die Windows-Zwischenablage - unabhaengig von Qt/QClipboard.
-    Clipboard.SetImage() ruft intern SetDataObject(image, copy: true) auf
-    und uebergibt die Daten damit sofort an Windows (OleSetClipboard +
-    OleFlushClipboard), das Bild bleibt daher auch nach Prozessende in der
-    Zwischenablage."""
+    """Legt einen DATEIVERWEIS auf die fertige Bilddatei in die Windows-
+    Zwischenablage - per eigenstaendigem PowerShell-Prozess, unabhaengig von
+    Qt/QClipboard. Genau das legt auch der Windows-Explorer beim Kopieren
+    einer Datei per Strg+C ab (CF_HDROP), im Unterschied zu Bilddaten
+    (CF_BITMAP/CF_DIB) per Clipboard.SetImage(). SetFileDropList erwartet
+    eine StringCollection, ruft intern ebenfalls SetDataObject(copy: true)
+    auf - der Verweis bleibt daher auch nach Prozessende in der
+    Zwischenablage, solange die Datei selbst auf der Platte liegen bleibt."""
     befehl = (
         "Add-Type -AssemblyName System.Windows.Forms; "
-        "Add-Type -AssemblyName System.Drawing; "
-        f"$bild = [System.Drawing.Image]::FromFile('{pfad}'); "
-        "[System.Windows.Forms.Clipboard]::SetImage($bild); "
-        "$bild.Dispose(); "
-        "if ([System.Windows.Forms.Clipboard]::ContainsImage()) "
+        "$dateien = New-Object System.Collections.Specialized.StringCollection; "
+        f"$dateien.Add('{pfad}') | Out-Null; "
+        "[System.Windows.Forms.Clipboard]::SetFileDropList($dateien); "
+        "if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) "
         "{ Write-Output 'JA' } else { Write-Output 'NEIN' }"
     )
     try:
@@ -262,16 +254,18 @@ def _mit_wiederholung_in_zwischenablage(pfad: str) -> bool:
     return False
 
 
-def _ueber_zwischenablage(png_daten: bytes) -> bool:
-    pfad = _screenshot_datei_schreiben(png_daten)
-    try:
-        with _waechter_pausiert():
-            return _mit_wiederholung_in_zwischenablage(pfad)
-    finally:
-        try:
-            os.remove(pfad)
-        except OSError:
-            pass
+def _ueber_zwischenablage(png_daten: bytes) -> Path:
+    """Legt die Datei dauerhaft im Downloads-Ordner ab (derselbe Pfad wie
+    Variante A) und haengt einen Dateiverweis darauf in die Zwischenablage -
+    der Verweis zeigt auf die Platte, die Datei darf danach also nicht
+    geloescht werden, sonst zeigt Strg+V ins Leere."""
+    ziel = _in_downloads_ablegen(png_daten)
+    with _waechter_pausiert():
+        if not _mit_wiederholung_in_zwischenablage(str(ziel)):
+            raise RuntimeError(
+                "Bild kam trotz mehrerer Versuche nicht in der Zwischenablage an."
+            )
+    return ziel
 
 
 def main() -> int:
@@ -293,16 +287,21 @@ def main() -> int:
     breite, hoehe = _png_masse(png_daten)
 
     if argumente.zwischenablage:
-        if not _ueber_zwischenablage(png_daten):
+        try:
+            ziel = _ueber_zwischenablage(png_daten)
+        except (RuntimeError, OSError) as fehler:
+            log.error("Android-Screenshot nicht in die Zwischenablage gelegt: %s", fehler)
             print(
-                "FEHLER: Bild kam trotz mehrerer Versuche nicht in der Zwischenablage an. "
-                "Vermutlich haelt ein anderer Prozess die Zwischenablage laenger blockiert "
-                "(OneDrive-Synchronisierung oder ein anderes Cloud-/Clipboard-Werkzeug) - "
-                "kein Fehler in diesem Skript, siehe Log."
+                f"FEHLER: {fehler} Vermutlich haelt ein anderer Prozess die Zwischenablage "
+                "laenger blockiert (OneDrive-Synchronisierung oder ein anderes "
+                "Cloud-/Clipboard-Werkzeug) - kein Fehler in diesem Skript, siehe Log."
             )
             return 1
-        log.info("Android-Screenshot in die Zwischenablage gelegt (%dx%d)", breite, hoehe)
-        print(f"Screenshot in die Zwischenablage gelegt ({breite}x{hoehe}).")
+        log.info(
+            "Android-Screenshot als Dateiverweis auf %s in die Zwischenablage gelegt (%dx%d)",
+            ziel, breite, hoehe,
+        )
+        print(f"Screenshot als Dateiverweis in der Zwischenablage: {ziel} ({breite}x{hoehe}).")
         return 0
 
     try:
