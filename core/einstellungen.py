@@ -960,6 +960,17 @@ class EinstellungenFenster(QDialog):
             "Zwischenablage.",
             bool(werte.get("bericht_kopieren", True)),
         )
+        self.bericht_als_zip = self._schalter(
+            gruppe,
+            "bericht_als_zip",
+            "Bericht als ZIP-Datei",
+            "Legt die gespeicherte Berichtdatei als ZIP ab, und die Kachel "
+            "„Bericht-Datei kopieren“ legt diese ZIP-Fassung in die "
+            "Zwischenablage. Kommt beim Hochladen in den Chat zuverlässiger "
+            "an als eine lose Textdatei. Steht der Schalter aus, wird die "
+            "Textdatei direkt abgelegt.",
+            bool(werte.get("bericht_als_zip", True)),
+        )
         self.mauszeiger_ansage = self._schalter(
             gruppe,
             "mauszeiger_ansage",

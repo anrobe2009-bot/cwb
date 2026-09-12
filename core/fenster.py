@@ -1423,10 +1423,11 @@ class Werkbank(QMainWindow):
 
     def _bericht_datei_speichern(self) -> Path | None:
         """Speichert den zuletzt gebauten Bericht (self._letzter_bericht)
-        zusaetzlich als ZIP unter .cwb/bericht/, mit Datum und Uhrzeit im
-        Dateinamen und der gleichnamigen Textdatei darin. So laesst er sich
-        hochladen, wenn das Einfuegen aus der Zwischenablage im Chat nur als
-        leere Anlage ankommt. Raeumt danach alte Berichte weg."""
+        zusaetzlich unter .cwb/bericht/, mit Datum und Uhrzeit im Dateinamen.
+        Steht der Schalter "Bericht als ZIP-Datei" an (Standard), liegt der
+        Text als ZIP darin - das kommt beim Hochladen in den Chat
+        zuverlaessiger an als eine lose Textdatei. Steht er aus, wird die
+        Textdatei direkt abgelegt. Raeumt danach alte Berichte weg."""
         ordner = self.projekt.pfad / BERICHT_UNTERORDNER
         try:
             ordner.mkdir(parents=True, exist_ok=True)
@@ -1434,10 +1435,14 @@ class Werkbank(QMainWindow):
             log.error("Berichtordner nicht anlegbar: %s", fehler)
             return None
         name = f"{datetime.now():%Y-%m-%d_%H-%M-%S}"
-        ziel = ordner / f"{name}.zip"
+        als_zip = einstellungen_lesen().get("bericht_als_zip", True)
+        ziel = ordner / (f"{name}.zip" if als_zip else f"{name}.txt")
         try:
-            with zipfile.ZipFile(ziel, "w", compression=zipfile.ZIP_DEFLATED) as archiv:
-                archiv.writestr(f"{name}.txt", self._letzter_bericht)
+            if als_zip:
+                with zipfile.ZipFile(ziel, "w", compression=zipfile.ZIP_DEFLATED) as archiv:
+                    archiv.writestr(f"{name}.txt", self._letzter_bericht)
+            else:
+                ziel.write_text(self._letzter_bericht, encoding="utf-8")
         except (OSError, zipfile.BadZipFile) as fehler:
             log.error("Berichtdatei nicht schreibbar: %s", fehler)
             return None

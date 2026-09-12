@@ -87,9 +87,18 @@ MCP-Aufruf, sondern liest `memory.db` direkt per SQLite mit.
   Projektverwaltung. `DB_PATH` kommt aus `core/datenordner.py`; neben der
   Datei liegt nur noch das Log.
 - **memory_mcp.py** — MCP-Server (stdio), Werkzeuge `memory_search`,
-  `memory_add`, `memory_list`, `memory_forget`, `memory_projects`.
+  `memory_add`, `memory_list`, `memory_forget`, `memory_projects`,
+  `memory_aufraeumen`.
+- **aufraeumen.py** — Aufräummodus fürs Tagesende, pro Projekt: findet
+  inhaltsleere Einträge (Meldungen übers Schreiben), Doppelungen (der
+  ausführlichere bleibt), erledigte `[OFFEN]`-Vermerke (werden zu
+  `[ERLEDIGT datum]`) und überholte Einträge (nur Hinweis). `analysieren()`
+  ändert nichts und liefert einen Bericht zum Vorlesen; `ausfuehren()` setzt
+  nur ausdrücklich genannte Nummern um und legt Gelöschtes vorher in
+  `aufraeum_papierkorb.jsonl` neben der Datenbank ab (`wiederherstellen()`).
+  Angeheftete Einträge werden nie angefasst. Auch als Kommandozeile nutzbar.
 
-Nur diese beiden Dateien plus `memory.db` sind Teil von CWB; die frühere
+Nur diese Dateien plus `memory.db` sind Teil von CWB; die frühere
 eigenständige GUI, das Audit-Werkzeug und die Dokumentation des Memory Hub
 blieben bewusst im alten, eigenständigen Projektordner zurück.
 

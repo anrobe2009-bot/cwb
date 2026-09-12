@@ -15,6 +15,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import memory_db as db  # noqa: E402
+import aufraeumen  # noqa: E402
 
 PROTOCOL = "2024-11-05"
 SERVER_NAME = "memory-hub"
@@ -107,6 +108,31 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_aufraeumen",
+        "description": (
+            "Aufraeummodus fuers Tagesende: prueft den Bestand EINES Projekts auf "
+            "inhaltsleere Eintraege (Meldungen ueber das Schreiben selbst), "
+            "Doppelungen, erledigte [OFFEN]-Vermerke und ueberholte Eintraege. "
+            "Ohne loeschen/erledigt wird NUR ein Bericht zum Vorlesen erzeugt, "
+            "nichts geaendert. Erst wenn der Nutzer dem Bericht zugestimmt hat, "
+            "mit den bestaetigten Nummern erneut aufrufen. Geloeschtes landet im "
+            "Papierkorb und kann mit wiederherstellen zurueckgeholt werden. "
+            "Angeheftete Eintraege werden nie angefasst."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Projektname"},
+                "loeschen": {"type": "array", "items": {"type": "integer"},
+                             "description": "Bestaetigte Eintragsnummern zum Entfernen"},
+                "erledigt": {"type": "array", "items": {"type": "integer"},
+                             "description": "Bestaetigte [OFFEN]-Nummern, die als erledigt markiert werden"},
+                "wiederherstellen": {"type": "array", "items": {"type": "integer"},
+                                     "description": "Nummern aus dem Papierkorb zurueckholen"}
+            },
+            "required": ["project"]
+        }
+    },
+    {
         "name": "memory_projects",
         "description": ("Nennt alle Projekte im Gedaechtnis samt Eintragszahl "
                         "und zugeordnetem Ordner, falls einer ueber die "
@@ -157,6 +183,18 @@ def call_tool(name, args):
         ok = db.delete_memory(mid)
         return ("Eintrag #%s geloescht." % mid) if ok else \
                ("Eintrag #%s existiert nicht." % mid)
+    if name == "memory_aufraeumen":
+        project = (args.get("project") or "").strip()
+        if not project:
+            return "Fehler: Projektname fehlt."
+        zurueck = [int(x) for x in (args.get("wiederherstellen") or [])]
+        if zurueck:
+            return aufraeumen.wiederherstellen(zurueck)
+        loeschen = [int(x) for x in (args.get("loeschen") or [])]
+        erledigt = [int(x) for x in (args.get("erledigt") or [])]
+        if loeschen or erledigt:
+            return aufraeumen.ausfuehren(project, loeschen, erledigt)
+        return aufraeumen.analysieren(project).text()
     if name == "memory_projects":
         p = db.list_projects_full()
         if not p:
