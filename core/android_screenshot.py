@@ -1,9 +1,21 @@
 """
 CWB - Code Workbench
 Android-Screenshot direkt als Bild in die Windows-Zwischenablage: ersetzt
-"adb pull" und manuelles Hochladen. Ruft `adb exec-out screencap -p` auf dem
-verbundenen Android-Geraet auf und legt das PNG als echtes Bild in die
-Zwischenablage - mit Strg+V direkt in einen Chat einfuegbar.
+"adb pull" und manuelles Hochladen.
+
+Zwei sauber getrennte Schritte, bewusst ohne Qt/QClipboard fuer die
+Zwischenablage - trotz OleFlushClipboard() und externer Pruefung kam bei
+Robert ueber Qt nie ein Bild an, nur Text:
+
+1. `adb exec-out screencap -p` liefert die rohen PNG-Bytes, die als
+   temporaere Datei auf die Platte geschrieben werden. Dieser Weg laeuft
+   bei Robert seit Stunden zuverlaessig.
+2. Ein eigenstaendiger PowerShell-Prozess laedt genau diese Datei und legt
+   sie ueber System.Windows.Forms.Clipboard als echtes Bild ab. .NETs
+   Clipboard.SetImage() ruft intern SetDataObject(image, copy: true) auf,
+   was die Daten sofort an Windows uebergibt (OleSetClipboard +
+   OleFlushClipboard) - das Bild bleibt daher auch nach Prozessende in der
+   Zwischenablage. Mit Strg+V direkt in einen Chat einfuegbar.
 
 Eigenstaendiges Kommandozeilenwerkzeug. Aus dem Projekt CWB selbst per
 #RUN#-Befehl:
@@ -17,29 +29,18 @@ Projekt:
 
     #run# python C:\\Users\\Entwickler\\.cwb-werkzeuge\\android_screenshot.py
 
-Fuer die Zwischenablage reicht QClipboard.setImage() allein nicht: Qt
-uebergibt Bilddaten unter Windows per verzoegertem OLE-Rendering - der
-eigentliche Bildtransfer an das Betriebssystem passiert erst, wenn ein
-anderer Prozess zugreift oder OleFlushClipboard() das erzwingt. Beendet
-sich dieses Skript vorher, ist das Bild nie wirklich angekommen, obwohl
-Qt keine Ausnahme meldet. Deshalb wird nach setImage() OleFlushClipboard()
-per ctypes aufgerufen. Die Ruecklese-Pruefung darf ausserdem NICHT ueber
-dasselbe QClipboard-Objekt laufen, das gerade geschrieben hat - das gibt
-auch dann "Erfolg" zurueck, wenn nur Qts interner Cache gefuellt ist, aber
-nie etwas an Windows uebergeben wurde. Stattdessen prueft ein eigener
-PowerShell-Prozess (System.Windows.Forms.Clipboard.ContainsImage()) die
-echte Zwischenablage von aussen.
-
 adb liefert die Bilddaten ueber subprocess als rohe Bytes - anders als eine
 PowerShell-Umleitung (">"), die Binaerdaten durch Zeilenende-Ersetzung
 beschaedigen kann, kommt hier nichts durch eine Textkodierung.
 """
 
-import ctypes
 import logging
+import os
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 try:
@@ -88,14 +89,42 @@ def _screenshot_holen() -> bytes:
     return ergebnis.stdout
 
 
-def _clipboard_hat_bild_extern() -> bool:
-    """Prueft unabhaengig von Qt, ob wirklich ein Bild in der Windows-
-    Zwischenablage liegt - ueber einen eigenen PowerShell-Prozess und
-    System.Windows.Forms.Clipboard, nicht ueber das QClipboard-Objekt, das
-    das Bild selbst gesetzt hat. Eine Pruefung mit demselben Objekt wuerde
-    auch dann "vorhanden" melden, wenn nur Qts interner Cache gefuellt ist."""
+def _png_masse(png_daten: bytes) -> tuple[int, int]:
+    """Liest Breite und Hoehe direkt aus dem IHDR-Chunk am Dateianfang -
+    ohne Bildbibliothek, nur fuer die Meldung an Robert."""
+    try:
+        breite, hoehe = struct.unpack(">II", png_daten[16:24])
+        return breite, hoehe
+    except struct.error:
+        return 0, 0
+
+
+def _screenshot_datei_schreiben(png_daten: bytes) -> str:
+    """Schreibt die PNG-Bytes in eine temporaere Datei und gibt deren Pfad
+    zurueck. Getrennt vom Zwischenablage-Schritt: adb-Abruf und
+    Windows-Zwischenablage sind zwei unabhaengige technische Wege."""
+    datei = tempfile.NamedTemporaryFile(
+        prefix="cwb_android_screenshot_", suffix=".png", delete=False
+    )
+    try:
+        datei.write(png_daten)
+    finally:
+        datei.close()
+    return datei.name
+
+
+def _datei_in_zwischenablage(pfad: str) -> bool:
+    """Legt die fertige Bilddatei per eigenstaendigem PowerShell-Prozess in
+    die Windows-Zwischenablage - unabhaengig von Qt/QClipboard, das bei
+    Robert trotz OleFlushClipboard() nicht zuverlaessig ankam.
+    Clipboard.SetImage() ruft intern SetDataObject(image, copy: true) auf
+    und uebergibt die Daten damit sofort an Windows."""
     befehl = (
         "Add-Type -AssemblyName System.Windows.Forms; "
+        "Add-Type -AssemblyName System.Drawing; "
+        f"$bild = [System.Drawing.Image]::FromFile('{pfad}'); "
+        "[System.Windows.Forms.Clipboard]::SetImage($bild); "
+        "$bild.Dispose(); "
         "if ([System.Windows.Forms.Clipboard]::ContainsImage()) "
         "{ Write-Output 'JA' } else { Write-Output 'NEIN' }"
     )
@@ -103,44 +132,27 @@ def _clipboard_hat_bild_extern() -> bool:
         ergebnis = subprocess.run(
             ["powershell", "-NoProfile", "-STA", "-Command", befehl],
             capture_output=True,
-            timeout=10,
+            timeout=15,
             check=False,
         )
     except (subprocess.TimeoutExpired, OSError) as fehler:
-        log.warning("Unabhaengige Zwischenablage-Pruefung fehlgeschlagen: %s", fehler)
+        log.error("Zwischenablage-PowerShell fehlgeschlagen: %s", fehler)
+        return False
+    if ergebnis.returncode != 0:
+        meldung = ergebnis.stderr.decode("utf-8", "replace").strip()
+        log.error("Zwischenablage-PowerShell-Fehler: %s", meldung)
         return False
     return b"JA" in ergebnis.stdout
 
 
-def _bild_in_zwischenablage(png_daten: bytes) -> tuple[bool, int, int]:
-    """Legt PNG-Bilddaten als echtes Bild in die Windows-Zwischenablage.
-    QClipboard.setImage() uebergibt die Daten unter Windows per verzoegertem
-    OLE-Rendering - OleFlushClipboard() erzwingt die sofortige Uebergabe an
-    das Betriebssystem, statt darauf zu warten, dass ein anderer Prozess
-    zugreift (der dann laengst beendete Python-Prozess koennte gar nicht
-    mehr antworten). Geprueft wird ueber einen unabhaengigen, externen
-    Prozess (_clipboard_hat_bild_extern), nicht ueber Qt selbst. Bei
-    Abweichung wird bis zu ZWISCHENABLAGE_VERSUCHE mal erneut versucht, mit
-    steigender Wartezeit."""
-    from PySide6.QtGui import QGuiApplication, QImage
-
-    app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
-    bild = QImage.fromData(png_daten, "PNG")
-    if bild.isNull():
-        raise RuntimeError("Die Bilddaten vom Geraet liessen sich nicht lesen.")
-
+def _mit_wiederholung_in_zwischenablage(pfad: str) -> bool:
+    """Versucht das Ablegen mehrfach mit steigender Wartezeit, falls ein
+    anderer Prozess die Zwischenablage kurzzeitig blockiert."""
     for versuch in range(1, ZWISCHENABLAGE_VERSUCHE + 1):
-        QGuiApplication.clipboard().setImage(bild)
-        for _ in range(5):
-            app.processEvents()
-        try:
-            ctypes.windll.ole32.OleFlushClipboard()
-        except OSError as fehler:
-            log.warning("OleFlushClipboard fehlgeschlagen: %s", fehler)
-        if _clipboard_hat_bild_extern():
+        if _datei_in_zwischenablage(pfad):
             if versuch > 1:
                 log.info("Bild erst im %d. Versuch in der Zwischenablage angekommen", versuch)
-            return True, bild.width(), bild.height()
+            return True
         if versuch < ZWISCHENABLAGE_VERSUCHE:
             wartezeit = ZWISCHENABLAGE_WARTE_BASIS_S * versuch
             log.warning(
@@ -150,7 +162,7 @@ def _bild_in_zwischenablage(png_daten: bytes) -> tuple[bool, int, int]:
     log.error(
         "Bild nach %d Versuchen nicht in die Zwischenablage gelegt", ZWISCHENABLAGE_VERSUCHE
     )
-    return False, bild.width(), bild.height()
+    return False
 
 
 def main() -> int:
@@ -161,12 +173,15 @@ def main() -> int:
         print(f"FEHLER: {fehler}")
         return 1
 
+    breite, hoehe = _png_masse(png_daten)
+    pfad = _screenshot_datei_schreiben(png_daten)
     try:
-        erfolg, breite, hoehe = _bild_in_zwischenablage(png_daten)
-    except RuntimeError as fehler:
-        log.error("Screenshot nicht in die Zwischenablage gelegt: %s", fehler)
-        print(f"FEHLER: {fehler}")
-        return 1
+        erfolg = _mit_wiederholung_in_zwischenablage(pfad)
+    finally:
+        try:
+            os.remove(pfad)
+        except OSError:
+            pass
 
     if not erfolg:
         print(
