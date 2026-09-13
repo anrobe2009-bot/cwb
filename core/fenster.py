@@ -611,6 +611,8 @@ class Werkbank(QMainWindow):
             markierung_erkennen,
             lambda: einstellungen_lesen().get("ablage_waechter", True),
             self._ablage_auftrag,
+            lambda: self._auftrag_laeuft,
+            self._ablage_dublette_melden,
             self,
         )
         self.ablage_waechter.starten()
@@ -1773,6 +1775,16 @@ class Werkbank(QMainWindow):
             self._absenden(vorspann="Auftrag angenommen.")
         finally:
             self._aus_ablage = False
+
+    def _ablage_dublette_melden(self, satz: str) -> None:
+        """Der Wächter hat denselben Auftragstext ein zweites Mal in der
+        Zwischenablage gefunden (siehe ablagewaechter.py, SPERRE_SEKUNDEN)
+        und ausdrücklich nicht erneut ausgeführt. `satz` ist entweder
+        "Läuft bereits." oder "Schon erledigt." - genau ein Satz, gesprochen
+        und im Ausgabefeld."""
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="fehler")
 
     # -- Dublettenerkennung ---------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
