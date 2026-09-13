@@ -96,6 +96,7 @@ SATZARTEN = {
     "fertig": 0,
     "fehler": 0,
     "frage": 0,
+    "hinweis": 0,
     "meldung": STUFE_MELDUNGEN,
     "beruehrt": STUFE_BERUEHRT,
 }
@@ -111,8 +112,11 @@ SATZART_STANDARD = "beruehrt"
 #   "fehler"   alle Fehlermeldungen, vollstaendig erhalten
 #   "frage"    Rueckfragen, die eine Antwort erwarten (sonst wartet CWB stumm)
 #   "immer"    was der Nutzer selbst abruft (F3, Strg+L, Probehoeren, Ersteinrichtung)
+#   "hinweis"  eine erlaubte, aber meldepflichtige Aktion, einmal je Auftrag -
+#              derzeit nur der erste Zugriff ausserhalb des Projektordners
+#              (core/sicherheit.py, Ordnergrenze.pruefe; core/fenster.py, _ereignis)
 # Soll eine Gruppe wieder sprechen, genuegt es, ihre Art hier einzutragen.
-ERLAUBTE_ARTEN = {"immer", "auftrag", "fertig", "fehler", "frage"}
+ERLAUBTE_ARTEN = {"immer", "auftrag", "fertig", "fehler", "frage", "hinweis"}
 
 # Derselbe Satz zweimal kurz hintereinander (zwei Wege, die beide melden)
 # wird nur einmal gesprochen.

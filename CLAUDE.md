@@ -41,8 +41,12 @@ und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
 - **sitzung.py** — Anbindung ans Claude Agent SDK. `Sitzung` führt Aufträge aus,
   meldet Ereignisse/Zustände (Balkenfarbe, Ton), prüft Berechtigungen über
   `sicherheit.Wache`, stellt Rückfragen bei kritischen Aktionen, zählt Tokenverbrauch.
-- **sicherheit.py** — reines Python, keine Oberfläche. `Ordnergrenze` hält Zugriffe
-  im Projektordner und sperrt Geheimnisdateien (.env, Keys, …). `GitNetz` legt vor
+- **sicherheit.py** — reines Python, keine Oberfläche. `Ordnergrenze` sperrt hart
+  Windows, beide Programme-Ordner und den Ordner über CWB (nur ihn selbst samt
+  `.git`, seine Unterordner sind die Projekte), dann Geheimnisdateien (.env,
+  Keys, …); Pfade außerhalb von Projekt und Freigaben sind nur für den laufenden
+  Auftrag erlaubt und werden beim ersten Zugriff je Ordner angesagt
+  (`Urteil.hinweis`), nie in `einstellungen.json` geschrieben. `GitNetz` legt vor
   jedem Auftrag einen Git-Sicherungspunkt an und kann zurückrollen. Klassifiziert
   Shell-Befehle in frei / rückfragepflichtig / verboten. `Wache` bündelt beides.
 - **sprache.py** — Sprachausgabe und Signaltöne. Wege: Edge-TTS (Standard, braucht

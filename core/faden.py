@@ -32,8 +32,8 @@ log = logging.getLogger("cwb.faden")
 class SitzungsFaden(QThread):
     """Führt die asynchrone Sitzung in einem eigenen Faden."""
 
-    # zustand, ansage, detail, pfad, taetigkeit, ablehnung
-    ereignis_da = Signal(str, str, str, str, str, bool)
+    # zustand, ansage, detail, pfad, taetigkeit, ablehnung, hinweis
+    ereignis_da = Signal(str, str, str, str, str, bool, bool)
     text_da = Signal(str)
     fertig_da = Signal(dict)
     frage_da = Signal(str, str)
@@ -102,7 +102,7 @@ class SitzungsFaden(QThread):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Arbeitsfaden abgestürzt: %s", fehler)
             self.ereignis_da.emit(
-                "fehler", "Arbeitsfaden abgestürzt", str(fehler), "", "", False
+                "fehler", "Arbeitsfaden abgestürzt", str(fehler), "", "", False, False
             )
         finally:
             self._schleife.close()
@@ -111,7 +111,8 @@ class SitzungsFaden(QThread):
         self.sitzung = Sitzung(
             Wache.oeffnen(self.projekt),
             bei_ereignis=lambda e: self.ereignis_da.emit(
-                e.zustand.value, e.ansage, e.detail, e.pfad, e.taetigkeit, e.ablehnung
+                e.zustand.value, e.ansage, e.detail, e.pfad, e.taetigkeit, e.ablehnung,
+                e.hinweis,
             ),
             bei_text=lambda t: self.text_da.emit(t),
             bei_rueckfrage=self._rueckfrage,
@@ -138,11 +139,11 @@ class SitzungsFaden(QThread):
                     log.exception("Modellwechsel gescheitert: %s", fehler)
                     self.ereignis_da.emit(
                         "fehler", "Modell konnte nicht gewechselt werden",
-                        str(fehler), "", "", False
+                        str(fehler), "", "", False, False
                     )
                 continue
             try:
-                self.ereignis_da.emit("denkt", "Auftrag laeuft", text[:120], "", "", False)
+                self.ereignis_da.emit("denkt", "Auftrag laeuft", text[:120], "", "", False, False)
                 bilanz = await self.sitzung.auftrag(text, bilder)
                 self.fertig_da.emit(bilanz)
             except Exception as fehler:  # noqa: BLE001

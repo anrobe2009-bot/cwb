@@ -180,13 +180,16 @@ class Ereignis:
     """Ein Schritt. ansage ist kurz und vorlesbar, detail nur auf Abruf.
     pfad ist die Datei, um die es gerade geht - leer, wenn es keine gibt.
     ablehnung markiert eine abgelehnte oder verweigerte Aktion: nur dann
-    kommt der volle Wortlaut (detail) ins Ausgabefeld."""
+    kommt der volle Wortlaut (detail) ins Ausgabefeld. hinweis markiert eine
+    erlaubte Aktion, von der der Nutzer trotzdem einmal erfahren soll
+    (gesprochen und als Zeile im Ausgabefeld, ohne Zustandswechsel)."""
     zustand: Zustand
     ansage: str
     detail: str = ""
     pfad: str = ""
     taetigkeit: str = ""
     ablehnung: bool = False
+    hinweis: bool = False
     zeitpunkt: datetime = field(default_factory=datetime.now)
 
     def zeile(self) -> str:
@@ -316,8 +319,9 @@ class Sitzung:
     # -- Ereignisse ---------------------------------------------------------
 
     def _melde(self, zustand: Zustand, ansage: str, detail: str = "",
-               pfad: str = "", taetigkeit: str = "", ablehnung: bool = False) -> None:
-        ereignis = Ereignis(zustand, ansage, detail, pfad, taetigkeit, ablehnung)
+               pfad: str = "", taetigkeit: str = "", ablehnung: bool = False,
+               hinweis: bool = False) -> None:
+        ereignis = Ereignis(zustand, ansage, detail, pfad, taetigkeit, ablehnung, hinweis)
         self.schritte.append(ereignis)
         try:
             self.bei_ereignis(ereignis)
@@ -411,6 +415,8 @@ class Sitzung:
                 urteil = self.wache.darf_pfad(pfad)
                 if urteil.verboten:
                     return self._ablehnen(urteil, urteil.ziel() or pfad)
+                if urteil.hinweis:
+                    self._hinweis_geben(urteil, pfad)
 
             if name == "Bash":
                 befehl = str(eingabe.get("command", ""))
@@ -472,6 +478,20 @@ class Sitzung:
         self._melde(Zustand.FEHLER, kurz, satz, ziel, ablehnung=True)
         self._protokoll_ablehnung_erfassen(ziel, urteil.begruendung)
         return PermissionResultDeny(message=satz)
+
+    def _hinweis_geben(self, urteil: Urteil, pfad: str) -> None:
+        """Erlaubter Vorgang, der trotzdem einmal angesagt wird - etwa der erste
+        Zugriff ausserhalb des Projekts in einem Auftrag. Der Zustand bleibt,
+        wie er ist (kein Balkenwechsel, kein neuer Ton); gesprochen wird der
+        kurze Satz aus dem Urteil, der volle Pfad steht nur im Ausgabefeld,
+        Protokoll und Log."""
+        zustand = self.schritte[-1].zustand if self.schritte else Zustand.DENKT
+        log.info("Hinweis: %s | Ziel: %s", urteil.hinweis, pfad)
+        self._melde(
+            zustand, urteil.hinweis, f"{urteil.hinweis} Pfad: {pfad}", pfad,
+            hinweis=True,
+        )
+        self._protokoll_hinweis_erfassen(pfad, urteil.hinweis)
 
     async def _frage(self, grund: str, detail: str) -> PermissionResultAllow | PermissionResultDeny:
         """Gesprochene Ein-Satz-Rueckfrage mit dem betroffenen Pfad oder Befehl.
@@ -573,6 +593,11 @@ class Sitzung:
             return
         self._protokoll["ablehnungen"].append({"ziel": ziel, "begruendung": begruendung})
 
+    def _protokoll_hinweis_erfassen(self, ziel: str, hinweis: str) -> None:
+        if self._protokoll is None:
+            return
+        self._protokoll["hinweise"].append({"ziel": ziel, "hinweis": hinweis})
+
     def _protokoll_rueckfrage_erfassen(self, grund: str, ziel: str, antwort: bool) -> None:
         if self._protokoll is None:
             return
@@ -619,6 +644,15 @@ class Sitzung:
             zeilen.append("Keine Ablehnungen.")
         zeilen.append("")
 
+        zeilen.append("## Hinweise")
+        hinweise = self._protokoll["hinweise"]
+        if hinweise:
+            for eintrag in hinweise:
+                zeilen.append(f"- `{eintrag['ziel'] or '(ohne Ziel)'}` — {eintrag['hinweis']}")
+        else:
+            zeilen.append("Keine Hinweise.")
+        zeilen.append("")
+
         zeilen.append("## Rückfragen")
         rueckfragen = self._protokoll["rueckfragen"]
         if rueckfragen:
@@ -658,9 +692,9 @@ class Sitzung:
 
     def _einstellungen(self) -> ClaudeAgentOptions:
         # Wird bei jedem Verbindungsaufbau neu gelesen, damit zwischenzeitlich
-        # hinzugekommene Freigaben (auch die automatisch eingetragenen aus
-        # sicherheit.Ordnergrenze.pruefe) in die naechste Sitzung uebernommen
-        # werden. Fuer die bereits laufende Sitzung wirkt das nicht - add_dirs
+        # von Hand (F12, Reiter Freigaben) hinzugekommene Freigaben in die
+        # naechste Sitzung uebernommen werden - automatisch traegt niemand mehr
+        # etwas ein. Fuer die bereits laufende Sitzung wirkt das nicht - add_dirs
         # geht als Startparameter an den CLI-Unterprozess und laesst sich dort
         # nicht nachtraeglich erweitern.
         zusatzordner = [eintrag["pfad"] for eintrag in freigaben_lesen()]
@@ -904,6 +938,7 @@ class Sitzung:
             "werkzeuge": [],
             "werkzeug_index": {},
             "ablehnungen": [],
+            "hinweise": [],
             "rueckfragen": [],
         }
 

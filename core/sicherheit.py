@@ -21,7 +21,6 @@ from typing import Iterable
 try:
     from .pfade import (
         einstellungen_lesen,
-        freigabe_hinzufuegen,
         freigaben_lesen,
         log_einrichten,
         projektwurzel,
@@ -30,14 +29,14 @@ try:
 except ImportError:
     from pfade import (
         einstellungen_lesen,
-        freigabe_hinzufuegen,
         freigaben_lesen,
         log_einrichten,
         projektwurzel,
         zusatzprojekte_lesen,
     )
 
-LOG_DATEI = Path(__file__).resolve().parent.parent / "cwb_fehler.log"
+CWB_WURZEL = Path(__file__).resolve().parent.parent
+LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 
 log_einrichten()
 log = logging.getLogger("cwb.sicherheit")
@@ -85,6 +84,76 @@ _GEHEIMNIS_REGEX = [re.compile(m, re.IGNORECASE) for m in GEHEIMNIS_MUSTER]
 ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
 
 
+# Harte Ordnersperre. Wird in Ordnergrenze.pruefe vor allem anderen geprueft -
+# auch vor den Freigaben aus einstellungen.json, damit ein dort eingetragener
+# Ordner die Sperre nicht aushebelt. Zwei Arten:
+#   mit_unterordnern=True   der Ordner samt allem darunter (Windows, Programme)
+#   mit_unterordnern=False  nur der Ordner selbst und die Dateien direkt darin;
+#                           seine Unterordner bleiben erlaubt.
+# Der Ordner ueber dem CWB-Programmordner (bei Robert C:\Users\...\Desktop\start)
+# ist von der zweiten Art: dort liegen die Projekte nebeneinander, die erlaubt
+# bleiben muessen - gesperrt sind nur seine eigenen Dateien und sein eigenes
+# Git-Repository (.git), denn der Ordner ist selbst ein Repository. Nichts ist
+# fest auf einen Rechner eingetragen: Windows- und Programme-Ordner kommen aus
+# der Umgebung, der start-Ordner aus der Lage von CWB.
+
+@dataclass(frozen=True)
+class Ordnersperre:
+    name: str
+    pfad: Path
+    mit_unterordnern: bool
+
+    def trifft(self, kandidat: Path) -> bool:
+        """Wahr, wenn der (aufgeloeste) Pfad unter diese Sperre faellt."""
+        if kandidat == self.pfad:
+            return True
+        if self.mit_unterordnern:
+            try:
+                kandidat.relative_to(self.pfad)
+                return True
+            except ValueError:
+                return False
+        # Nur der Ordner selbst: Dateien direkt darin und sein .git-Ordner.
+        # Ein Unterordner (ein Projekt) ist erlaubt, eine Datei direkt im
+        # Ordner nicht - das gilt auch fuer noch nicht vorhandene Ziele.
+        if kandidat.parent == self.pfad and not kandidat.is_dir():
+            return True
+        git = self.pfad / ".git"
+        if kandidat == git:
+            return True
+        try:
+            kandidat.relative_to(git)
+            return True
+        except ValueError:
+            return False
+
+
+def _umgebungsordner(name: str) -> Path | None:
+    wert = os.environ.get(name, "").strip()
+    if not wert:
+        return None
+    try:
+        return Path(wert).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def gesperrte_ordner() -> list[Ordnersperre]:
+    """Die Sperrliste, beim Anlegen einer Ordnergrenze einmal aufgebaut."""
+    sperren: list[Ordnersperre] = []
+    for name, variable in (
+        ("Windows", "SystemRoot"),
+        ("Programme", "ProgramFiles"),
+        ("Programme (x86)", "ProgramFiles(x86)"),
+    ):
+        pfad = _umgebungsordner(variable)
+        if pfad is not None:
+            sperren.append(Ordnersperre(name, pfad, True))
+    ueber_cwb = CWB_WURZEL.parent
+    sperren.append(Ordnersperre(ueber_cwb.name or str(ueber_cwb), ueber_cwb, False))
+    return sperren
+
+
 class Stufe(Enum):
     """Wie ein Vorgang behandelt wird."""
     FREI = "frei"              # ohne Rueckfrage ausfuehren
@@ -98,6 +167,10 @@ class Urteil:
     stufe: Stufe
     begruendung: str
     detail: str = ""
+    # Ein Satz, den der Nutzer einmal hoeren soll, obwohl der Vorgang frei
+    # ist - etwa beim ersten Zugriff ausserhalb des Projekts in einem Auftrag.
+    # Leer, wenn nichts anzusagen ist.
+    hinweis: str = ""
 
     @property
     def frei(self) -> bool:
@@ -204,7 +277,20 @@ class Ordnergrenze:
         self.projekt = Path(projekt).resolve()
         if not self.projekt.is_dir():
             raise NotADirectoryError(f"Projektordner nicht gefunden: {self.projekt}")
-        log.info("Ordnergrenze gesetzt auf %s", self.projekt)
+        self.sperren = gesperrte_ordner()
+        # Projektfremde Ordner, die im laufenden Auftrag schon einmal gemeldet
+        # wurden. Wird mit jedem Auftrag geleert (auftrag_beginnen) - der
+        # Zugriff gilt nur fuer diesen Auftrag, nichts davon wird gespeichert.
+        self._fremde_ordner: set[Path] = set()
+        log.info("Ordnergrenze gesetzt auf %s, gesperrt: %s", self.projekt,
+                 ", ".join(f"{s.name} ({s.pfad})" for s in self.sperren))
+
+    def auftrag_beginnen(self) -> None:
+        """Vergisst die im vorigen Auftrag gemeldeten fremden Ordner."""
+        self._fremde_ordner.clear()
+
+    def _sperre_treffer(self, pfad: Path) -> Ordnersperre | None:
+        return next((s for s in self.sperren if s.trifft(pfad)), None)
 
     def _ist_geheimnis(self, pfad: Path) -> bool:
         text = str(pfad)
@@ -246,6 +332,18 @@ class Ordnergrenze:
                 str(pfad),
             )
 
+        # Harte Sperre zuerst - vor Sperrliste, Freigaben und Projektgrenze,
+        # damit kein Eintrag in einstellungen.json sie aushebeln kann.
+        sperre = self._sperre_treffer(kandidat)
+        if sperre is not None:
+            log.warning("Zugriff auf gesperrten Ordner %s abgelehnt: %s",
+                        sperre.name, kandidat)
+            return Urteil(
+                Stufe.VERBOTEN,
+                f"Ordner {sperre.name} ist gesperrt: {kandidat}",
+                str(kandidat),
+            )
+
         if self._ist_geheimnis(kandidat):
             log.warning("Zugriff auf Geheimnisdatei abgelehnt: %s", kandidat)
             return Urteil(
@@ -265,18 +363,32 @@ class Ordnergrenze:
         try:
             kandidat.relative_to(self.projekt)
         except ValueError:
+            # Ausserhalb des Projekts und in keiner Freigabe: erlaubt, aber nur
+            # fuer den laufenden Auftrag. Nichts wird in einstellungen.json
+            # geschrieben - dauerhafte Freigaben gibt es nur von Hand ueber F12.
+            # Beim ersten Zugriff auf diesen Ordner im Auftrag bekommt das
+            # Urteil einen Hinweis, den die Oberflaeche ansagt und anzeigt;
+            # jeder weitere Zugriff auf denselben Ordner bleibt still.
             ordner = kandidat if kandidat.is_dir() else kandidat.parent
             name = ordner.name or str(ordner)
-            freigabe_hinzufuegen(ordner)
-            log.warning(
-                "Pfad ausserhalb der Ordnergrenze automatisch als Freigabe eintragen: "
-                "Projekt=%s, angefragter Pfad=%s, neue Freigabe=%s (%s)",
-                self.projekt, kandidat, name, ordner,
-            )
+            hinweis = ""
+            if ordner not in self._fremde_ordner:
+                self._fremde_ordner.add(ordner)
+                hinweis = (
+                    f"Zugriff außerhalb des Projekts auf Ordner {name}, "
+                    "nur für diesen Auftrag."
+                )
+                log.warning(
+                    "Pfad ausserhalb der Ordnergrenze, nur fuer diesen Auftrag erlaubt: "
+                    "Projekt=%s, angefragter Pfad=%s, Ordner=%s",
+                    self.projekt, kandidat, ordner,
+                )
             return Urteil(
                 Stufe.FREI,
-                f"Pfad wurde automatisch als Freigabe {name} eingetragen",
+                f"Pfad liegt außerhalb des Projekts, erlaubt nur für diesen Auftrag "
+                f"(Ordner {name})",
                 str(kandidat),
+                hinweis,
             )
 
         return Urteil(Stufe.FREI, "Pfad liegt im Projekt", str(kandidat))
@@ -661,6 +773,8 @@ class Wache:
         return wache
 
     def auftrag_beginnen(self, auftrag: str) -> Sicherungspunkt | None:
+        # Die im vorigen Auftrag gemeldeten fremden Ordner gelten nicht weiter.
+        self.grenze.auftrag_beginnen()
         self.letzter_punkt = self.netz.sicherungspunkt(auftrag)
         return self.letzter_punkt
 

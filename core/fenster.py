@@ -1307,7 +1307,8 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _ereignis(self, zustand: str, ansage: str, detail: str,
-                  pfad: str = "", taetigkeit: str = "", ablehnung: bool = False) -> None:
+                  pfad: str = "", taetigkeit: str = "", ablehnung: bool = False,
+                  hinweis: bool = False) -> None:
         """Waehrend der Arbeit bleibt die Statusmeldung leer: die laufende
         Taetigkeit steht ausschliesslich in der Plakette neben 'Ausgabe',
         farblich passend zum Balken, die betroffene Datei im Feld daneben.
@@ -1316,7 +1317,19 @@ class Werkbank(QMainWindow):
         Bei einer abgelehnten Aktion (ablehnung=True) ist ansage bewusst kurz
         und ohne Pfad - das ist alles, was gesprochen und in der Statuszeile
         angezeigt wird. Der volle Wortlaut mit Pfad steckt in detail und
-        kommt, rot markiert wie ein Fehler, ins Ausgabefeld."""
+        kommt, rot markiert wie ein Fehler, ins Ausgabefeld.
+
+        Ein Hinweis (hinweis=True) ist eine erlaubte Aktion, von der der
+        Nutzer trotzdem einmal erfahren soll - etwa der erste Zugriff
+        ausserhalb des Projekts in einem Auftrag. Er wird gesprochen (Art
+        'hinweis', siehe sprache.ERLAUBTE_ARTEN), steht in der Statuszeile
+        und als Hinweiszeile im Ausgabefeld; Balken und Ton bleiben, wie sie
+        sind, der Auftrag laeuft ohne Unterbrechung weiter."""
+        if hinweis:
+            self._status_zeigen(ansage)
+            self._verlauf_anhaengen(detail or ansage, "hinweis")
+            self.sprecher.sprich(kurzfassen(ansage), unterbrechen=False, art="hinweis")
+            return
         self._zustand_zeigen(zustand)
         self._taetigkeit_zeigen(
             taetigkeit or ZUSTAND_TAETIGKEIT.get(zustand, ""), pfad
