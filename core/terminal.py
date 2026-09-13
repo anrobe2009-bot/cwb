@@ -138,6 +138,7 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError as fehler:
         log.error("Terminalbefehl nicht startbar: %s (%s)", befehl, fehler)

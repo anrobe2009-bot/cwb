@@ -502,6 +502,7 @@ class GitNetz:
                     encoding="utf-8",
                     errors="replace",
                     timeout=30,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except (OSError, subprocess.SubprocessError) as fehler:
                 log.error("Git-Aufruf gescheitert %s: %s", argumente, fehler)

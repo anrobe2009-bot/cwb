@@ -153,6 +153,11 @@ NACHRICHT_MAX_BYTES = 32 * 1024 * 1024
 # So lange wird nach einem Not-Aus auf den Rest der alten Antwort gewartet,
 # damit er nicht in den naechsten Auftrag hineinlaeuft.
 STROM_LEEREN_SEKUNDEN = 15
+# Hoechstlaufzeit des Code-Index-Hintergrundprozesses (_code_index_warten).
+# Grosszuegig, weil ein neues oder grosses Projekt beim allerersten Lauf
+# tatsaechlich Minuten braucht - aber endlich, damit ein haengender Prozess
+# (z.B. ein Modell-Download ohne Antwort) nicht fuer immer ohne Ergebnis bleibt.
+CODE_INDEX_ZEITLIMIT = 30 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -767,11 +772,27 @@ class Sitzung:
     def _code_index_warten(self, prozess: subprocess.Popen, name: str) -> None:
         """Laeuft in einem eigenen Thread, damit das Warten auf den
         Index-Prozess nichts sonst blockiert. `_melde` darf aus jedem Thread
-        gerufen werden - es haengt nur ein Qt-Signal an (siehe core/faden.py)."""
+        gerufen werden - es haengt nur ein Qt-Signal an (siehe core/faden.py).
+
+        Ohne Zeitlimit wuerde ein haengender Index-Prozess (z.B. ein Modell-
+        Download ohne Antwort) fuer immer in communicate() stehenbleiben: die
+        Start-Ansage waere gesagt, aber nie ein Ergebnis oder ein Fehler -
+        Robert wartet dann auf etwas, das nie kommt. Jeder Ausgang meldet
+        sich deshalb entweder per `_melde` (hoerbar) oder wenigstens per Log."""
         try:
-            ausgabe, fehlerausgabe = prozess.communicate()
+            ausgabe, fehlerausgabe = prozess.communicate(timeout=CODE_INDEX_ZEITLIMIT)
+        except subprocess.TimeoutExpired:
+            prozess.kill()
+            try:
+                prozess.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            log.error("Code-Index-Lauf fuer %s abgebrochen (Zeitueberschreitung)", name)
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} abgebrochen (Zeitüberschreitung).")
+            return
         except Exception as fehler:  # noqa: BLE001
             log.warning("Code-Index-Prozess fuer %s: %s", name, fehler)
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} fehlgeschlagen.")
             return
         if prozess.returncode == 0:
             log.info("Code-Index aktualisiert fuer %s: %s", name, (ausgabe or "").strip())
@@ -780,6 +801,7 @@ class Sitzung:
         else:
             log.warning("Code-Index-Lauf fehlgeschlagen fuer %s (%s): %s",
                         name, prozess.returncode, (fehlerausgabe or "").strip()[:500])
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} fehlgeschlagen.")
 
     async def _modelle_lesen(self) -> None:
         """Holt die Modellliste der laufenden Claude-Code-CLI und loest daraus

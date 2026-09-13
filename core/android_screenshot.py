@@ -115,6 +115,7 @@ def _screenshot_holen() -> bytes:
             capture_output=True,
             timeout=ZEITLIMIT_S,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as fehler:
         raise RuntimeError(
@@ -236,6 +237,7 @@ def _datei_in_zwischenablage(pfad: str) -> bool:
             capture_output=True,
             timeout=15,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (subprocess.TimeoutExpired, OSError) as fehler:
         log.error("Zwischenablage-PowerShell fehlgeschlagen: %s", fehler)
