@@ -148,6 +148,12 @@ class Fehlerstrom:
             return meldung
         return f"{meldung} | CLI meldet: {letzte} (vollstaendig in cwb_fehler.log)"
 
+# Groesste einzelne Nachricht, die das SDK von der CLI annimmt (Vorgabe 1 MB).
+NACHRICHT_MAX_BYTES = 32 * 1024 * 1024
+# So lange wird nach einem Not-Aus auf den Rest der alten Antwort gewartet,
+# damit er nicht in den naechsten Auftrag hineinlaeuft.
+STROM_LEEREN_SEKUNDEN = 15
+
 
 # ---------------------------------------------------------------------------
 # Zustaende und Ereignisse
@@ -668,6 +674,10 @@ class Sitzung:
             model=self.modell,
             include_partial_messages=False,
             stderr=self.fehlerstrom.aufnehmen,
+            # Werkzeugergebnisse mit eingebetteten Bildern ueberschreiten die
+            # Vorgabe des SDK (1 MB) leicht; dann stirbt dessen Lesefaden
+            # und die Sitzung liefert still nichts mehr (siehe auftrag()).
+            max_buffer_size=NACHRICHT_MAX_BYTES,
         )
 
     async def verbinden(self) -> None:
@@ -904,6 +914,12 @@ class Sitzung:
         self._melde(Zustand.DENKT, "Auftrag laeuft")
         antwort: list[str] = []
         fehlermeldung = ""
+        # Jeder Auftrag endet mit genau einer ResultMessage. Bleibt sie aus,
+        # ist der Nachrichtenstrom des SDK tot (etwa nach einem Lesefehler):
+        # die Verbindung liefert dann fuer jeden weiteren Auftrag sofort
+        # nichts mehr und CWB meldete frueher trotzdem "Fertig".
+        ergebnis_da = False
+        verbindung_tot = False
 
         sendetext = text
         if self._kontext_ausstehend:
@@ -947,6 +963,7 @@ class Sitzung:
                     self._protokoll_ergebnisse_erfassen(nachricht)
 
                 elif isinstance(nachricht, ResultMessage):
+                    ergebnis_da = True
                     self._verbrauch_erfassen(nachricht)
                     if nachricht.is_error:
                         self.fehlerstrom.protokollieren("Claude Code meldet einen Fehler")
@@ -955,12 +972,30 @@ class Sitzung:
                         )
 
         except Exception as fehler:  # noqa: BLE001
+            # Ein Fehler aus dem Strom stammt vom Lesefaden des SDK, der
+            # danach beendet ist - der Klient ist damit unbrauchbar.
             log.exception("Auftrag gescheitert: %s", fehler)
             self.fehlerstrom.protokollieren("Auftrag gescheitert")
             fehlermeldung = self.fehlerstrom.ergaenzt(str(fehler))
+            verbindung_tot = True
 
         finally:
             self.laeuft = False
+
+        if self._abbruch and not ergebnis_da and not verbindung_tot:
+            # Der Rest der abgebrochenen Antwort liegt noch im Strom. Wird er
+            # nicht abgeholt, liest der naechste Auftrag ihn als seine
+            # Antwort und liefert damit alten Inhalt zum neuen Auftrag.
+            verbindung_tot = not await self._strom_leeren()
+
+        if not ergebnis_da and not self._abbruch and not fehlermeldung:
+            verbindung_tot = True
+            log.error("Auftrag endete ohne Ergebnismeldung - die Sitzung liefert nichts mehr")
+            self.fehlerstrom.protokollieren("Sitzung ohne Ergebnis")
+            fehlermeldung = self.fehlerstrom.ergaenzt(
+                "Die Sitzung hat keine Antwort geliefert. Sie wird neu verbunden; "
+                "bitte den Auftrag noch einmal geben."
+            )
 
         geaendert = self.wache.auftrag_bilanz()
         self._protokoll_schreiben(geaendert)
@@ -972,7 +1007,11 @@ class Sitzung:
         else:
             self._melde(Zustand.FERTIG, self._bilanz_satz(geaendert))
 
-        if not self._abbruch:
+        if verbindung_tot:
+            # Neue Sitzung statt weiterer stiller Leerlaeufe; der Nachtrag
+            # entfaellt, eine frische Sitzung weiss nichts vom Auftrag.
+            await self._neu_verbinden()
+        elif not self._abbruch:
             await self._nachtrag_stellen()
 
         return {
@@ -983,6 +1022,46 @@ class Sitzung:
             "schritte": len(self.schritte),
             "sicherungspunkt": punkt,
         }
+
+    async def _strom_leeren(self) -> bool:
+        """Holt nach einem Not-Aus den Rest der alten Antwort bis zur
+        ResultMessage ab und verwirft ihn. Rueckgabe: ob der Strom danach
+        sauber ist. Kommt binnen STROM_LEEREN_SEKUNDEN kein Ende, gilt die
+        Verbindung als tot."""
+        if self.klient is None:
+            return False
+
+        async def _abholen() -> bool:
+            async for nachricht in self.klient.receive_response():
+                if isinstance(nachricht, ResultMessage):
+                    return True
+            return False
+
+        try:
+            sauber = await asyncio.wait_for(_abholen(), STROM_LEEREN_SEKUNDEN)
+        except asyncio.TimeoutError:
+            log.warning("Rest der abgebrochenen Antwort kam nicht binnen %ss",
+                        STROM_LEEREN_SEKUNDEN)
+            return False
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Rest der abgebrochenen Antwort nicht abholbar: %s", fehler)
+            return False
+        if sauber:
+            log.info("Rest der abgebrochenen Antwort verworfen")
+        else:
+            log.warning("Strom endete nach Not-Aus ohne Ergebnismeldung")
+        return sauber
+
+    async def _neu_verbinden(self) -> None:
+        """Ersetzt eine unbrauchbar gewordene Sitzung durch eine frische.
+        Scheitert das, bleibt klient None und der naechste Auftrag versucht
+        es ueber verbinden() erneut."""
+        log.warning("Sitzung wird neu verbunden")
+        await self.trennen()
+        try:
+            await self.verbinden()
+        except Exception as fehler:  # noqa: BLE001
+            log.error("Neu verbinden gescheitert: %s", fehler)
 
     async def _nachtrag_stellen(self) -> None:
         """Fragt sich selbst nach dem Auftrag kurz ab und schreibt die Antwort
