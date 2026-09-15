@@ -352,14 +352,6 @@ def platzwort(platz: int) -> str:
     return PLATZWOERTER.get(int(platz), str(platz))
 
 
-def zeitabstand_wort(sekunden: int) -> str:
-    """Verstrichene Zeit als kurzer, sprechbarer Ausdruck, z.B. 'vor 2 Minuten'."""
-    if sekunden < 60:
-        return "vor wenigen Sekunden"
-    minuten = round(sekunden / 60)
-    return "vor einer Minute" if minuten <= 1 else f"vor {minuten} Minuten"
-
-
 def datei_in_zwischenablage(pfad: Path) -> bool:
     """Legt eine Datei als Dateiverweis in die Windows-Zwischenablage
     (CF_HDROP) - so, wie beim Kopieren einer Datei im Explorer. Andere
@@ -503,12 +495,11 @@ class Werkbank(QMainWindow):
         # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
         # selbst, die ueber den Arbeitsfaden laufen.
         self._pending_terminal: dict | None = None
-        # Die letzten zehn tatsaechlich gestarteten Auftraege (Art, geglaetteter
-        # Text, Zeitpunkt) - Grundlage der Dublettenerkennung in _absenden.
+        # Die letzten zehn angenommenen Auftraege (Art, geglaetteter Text,
+        # Zeitpunkt) - einzige Grundlage der Dublettensperre, siehe
+        # _dublette_abgewiesen. Waechter, F7 und das Eingabefeld tragen alle
+        # hier ein, nichts prueft an dieser Stelle vorbei.
         self._auftragsverlauf: deque[tuple[str, str, datetime]] = deque(maxlen=10)
-        # Steht ein per Rueckfrage bestaetigter Wiederholungsauftrag hier,
-        # wird er nach "Ja" ohne erneute Dublettenpruefung fortgesetzt.
-        self._pending_dublette: dict | None = None
         # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
         # Collector eingesammelt wird, bevor er fertig ist.
         self._terminal_faden: TerminalFaden | None = None
@@ -544,9 +535,6 @@ class Werkbank(QMainWindow):
         # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
         # erkennt _absenden, ob der neue Auftrag warten muss.
         self._auftrag_laeuft = False
-        # Wahr, solange gerade ein Auftrag des Zwischenablage-Waechters laeuft.
-        # Nur daran erkennt _absenden, ob ein Auftrag von anderer Seite kam.
-        self._aus_ablage = False
         # Wahr, solange ein vorgemerkter Auftrag aus einem anderen Projekt
         # nachgeholt wird. Nur so wird er nicht erneut als fremd erkannt.
         self._holt_vorgemerkten = False
@@ -611,8 +599,6 @@ class Werkbank(QMainWindow):
             markierung_erkennen,
             lambda: einstellungen_lesen().get("ablage_waechter", True),
             self._ablage_auftrag,
-            lambda: self._auftrag_laeuft,
-            self._ablage_dublette_melden,
             self,
         )
         self.ablage_waechter.starten()
@@ -1078,12 +1064,6 @@ class Werkbank(QMainWindow):
             wartend, self._pending_terminal = self._pending_terminal, None
             if ja:
                 self._terminal_starten(wartend["befehl"], wartend["admin"])
-            return
-        if self._pending_dublette is not None:
-            wartend, self._pending_dublette = self._pending_dublette, None
-            if ja:
-                self._absenden(vorspann=wartend["vorspann"], roh=wartend["roh"],
-                                dublette_bestaetigt=True)
             return
         self.faden.frage_beantworten(ja)
 
@@ -1707,16 +1687,23 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _aus_zwischenablage(self) -> None:
-        """F7: holt den Text aus der Zwischenablage ins Eingabefeld, sagt die
-        erkannte Auftragsart an und schickt ihn sofort ab.
+        """F7: holt den Text aus der Zwischenablage, sagt die erkannte
+        Auftragsart an und schickt ihn sofort ab.
 
         Notweg von Hand: gewoehnlich holt der Waechter markierte Auftraege von
         selbst, darum gibt es dafuer keine Kachel mehr. Die erste Zeile im Log
         ist der Beleg, dass die Taste ueberhaupt ankommt - vorher
-        (Strg+Umschalt+V) verschluckten die Textfelder sie."""
+        (Strg+Umschalt+V) verschluckten die Textfelder sie.
+
+        Die Zwischenablage wird sofort nach dem Lesen geleert - sonst faende
+        der Waechter zwei Sekunden spaeter denselben Text noch vor und hielte
+        ihn faelschlich fuer einen neuen, zweiten Auftrag. Die Dublettensperre
+        (`_dublette_abgewiesen`) prueft hier genauso wie beim Waechter - F7
+        ist kein Weg an ihr vorbei."""
         log.info("Aus Zwischenablage aufgerufen (F7)")
         try:
-            text = QGuiApplication.clipboard().text()
+            zwischenablage = QGuiApplication.clipboard()
+            text = zwischenablage.text()
         except Exception as fehler:  # noqa: BLE001
             log.exception("Zwischenablage nicht lesbar: %s", fehler)
             self.sprecher.sprich("Zwischenablage konnte nicht gelesen werden.",
@@ -1726,11 +1713,17 @@ class Werkbank(QMainWindow):
             log.info("Zwischenablage leer")
             self.sprecher.sprich("Zwischenablage ist leer.", art="fehler")
             return
+        try:
+            zwischenablage.clear()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage nicht leerbar: %s", fehler)
         art, inhalt = markierung_erkennen(text)
         log.info(
             "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
             len(text), art or "ohne Markierung", len(inhalt),
         )
+        if self._dublette_abgewiesen(art, inhalt):
+            return
         if art == "bild":
             # #BILD# fuellt nie das Eingabefeld: die Markierung allein loest
             # schon aus, kein Inhalt noetig.
@@ -1748,19 +1741,24 @@ class Werkbank(QMainWindow):
             # Text als Auftrag, damit nichts stillschweigend verlorengeht.
             inhalt = text.strip(RANDZEICHEN)
             art = ""
-        self.eingabe.setPlainText(inhalt if art == "" else text)
         ansage = (
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
-        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}")
+        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}", art=art, inhalt=inhalt)
 
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
-        """Der Wächter hat einen markierten Auftrag gefunden. #run# und
+        """Der Wächter hat einen markierten Auftrag gefunden. Die
+        Dublettensperre (`_dublette_abgewiesen`) prueft zuerst und fuer alle
+        vier Arten. Erst danach die eigentliche Verarbeitung: #run# und
         #admin# laufen direkt im Terminal, #BILD# holt direkt den Screenshot -
-        alle drei ohne Eingabefeld und ohne Claude Code. #code# geht wie
-        bisher ueber das Eingabefeld und _absenden. Die Zwischenablage ist zu
-        diesem Zeitpunkt schon geleert (siehe ablagewaechter.py)."""
+        alle drei ohne Eingabefeld und ohne Claude Code. #code# geht ueber
+        _absenden, mit Art und Inhalt direkt uebergeben statt ueber das
+        Eingabefeld neu geparst - sonst ginge die Markierung dabei verloren.
+        Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
+        ablagewaechter.py)."""
+        if self._dublette_abgewiesen(art, inhalt):
+            return
         if art == "bild":
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._bild_markierung()
@@ -1769,24 +1767,9 @@ class Werkbank(QMainWindow):
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
             return
-        self.eingabe.setPlainText(inhalt)
-        self._aus_ablage = True
-        try:
-            self._absenden(vorspann="Auftrag angenommen.")
-        finally:
-            self._aus_ablage = False
+        self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt)
 
-    def _ablage_dublette_melden(self, satz: str) -> None:
-        """Der Wächter hat denselben Auftragstext ein zweites Mal in der
-        Zwischenablage gefunden (siehe ablagewaechter.py, SPERRE_SEKUNDEN)
-        und ausdrücklich nicht erneut ausgeführt. `satz` ist entweder
-        "Läuft bereits." oder "Schon erledigt." - genau ein Satz, gesprochen
-        und im Ausgabefeld."""
-        self._verlauf_anhaengen(satz, "hinweis")
-        self._status_zeigen(satz)
-        self.sprecher.sprich(satz, art="fehler")
-
-    # -- Dublettenerkennung ---------------------------------------------------
+    # -- Dublettensperre ------------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
     # der Zwischenablage, kurz genug, dass ein am naechsten Tag bewusst
     # wiederholter Auftrag nicht angemeckert wird.
@@ -1795,56 +1778,73 @@ class Werkbank(QMainWindow):
     def _text_glaetten(self, text: str) -> str:
         return " ".join(text.split())
 
-    def _dublette_pruefen(self, art: str, text: str) -> str | None:
-        """`None`, wenn der Auftrag neu ist, sonst ein sprechbarer Zeitabstand
-        zum letzten praktisch gleichen Auftrag. Leerzeichen und Zeilenumbrueche
-        werden vor dem Vergleich geglaettet, damit ein aus der Zwischenablage
-        neu eingefuegter, inhaltlich identischer Text trotzdem erkannt wird."""
+    def _dublette_abgewiesen(self, art: str, text: str) -> bool:
+        """Die einzige Dublettensperre im ganzen Programm: Waechter, F7 und
+        das normale Absenden ueber das Eingabefeld laufen alle hier durch,
+        bevor irgendetwas ausgefuehrt oder in die Warteschlange gelegt wird.
+
+        Wahr, wenn `art`/`text` innerhalb von DUBLETTE_FENSTER_SEKUNDEN schon
+        einmal angenommen wurden - dann wird "Läuft bereits." (etwas
+        arbeitet noch) oder "Schon erledigt." (nichts arbeitet mehr)
+        gemeldet, gesprochen und im Ausgabefeld gezeigt, und der Aufrufer
+        muss abbrechen. Sonst merkt sich diese Methode den Auftrag sofort
+        selbst mit und gibt Falsch zurueck.
+
+        Leerzeichen und Zeilenumbrueche werden vor dem Vergleich geglaettet,
+        damit ein aus der Zwischenablage neu eingefuegter, inhaltlich
+        identischer Text trotzdem erkannt wird. Nur wenn weder eine Art noch
+        ein Text vorliegt, gibt es nichts zu vergleichen - #BILD# hat zwar
+        nie Text, aber immer die Art "bild" und bleibt damit vergleichbar."""
         geglaettet = self._text_glaetten(text)
-        if not geglaettet:
-            return None
+        if not art and not geglaettet:
+            return False
+        schluessel = (art, geglaettet)
         jetzt = datetime.now()
         for alte_art, alter_text, zeitpunkt in reversed(self._auftragsverlauf):
-            if alte_art == art and alter_text == geglaettet:
-                vergangen = (jetzt - zeitpunkt).total_seconds()
-                if vergangen <= self.DUBLETTE_FENSTER_SEKUNDEN:
-                    return zeitabstand_wort(int(vergangen))
-                return None
-        return None
-
-    def _dublette_merken(self, art: str, text: str) -> None:
-        geglaettet = self._text_glaetten(text)
-        if geglaettet:
-            self._auftragsverlauf.append((art, geglaettet, datetime.now()))
+            if (alte_art, alter_text) == schluessel:
+                if (jetzt - zeitpunkt).total_seconds() <= self.DUBLETTE_FENSTER_SEKUNDEN:
+                    satz = "Läuft bereits." if self._auftrag_laeuft else "Schon erledigt."
+                    log.info("Dublette abgewiesen (%s): %s",
+                             art or "ohne Markierung", satz)
+                    self._verlauf_anhaengen(satz, "hinweis")
+                    self._status_zeigen(satz)
+                    self.sprecher.sprich(satz, art="fehler")
+                    return True
+                break
+        self._auftragsverlauf.append((art, geglaettet, jetzt))
+        return False
 
     @slot_geschuetzt
-    def _absenden(self, vorspann: str = "", *, roh: str | None = None,
-                  dublette_bestaetigt: bool = False) -> None:
+    def _absenden(self, vorspann: str = "", *, art: str | None = None,
+                  inhalt: str | None = None) -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
         eine zweite Ansage kurz danach auszuloesen. Leer heisst: normaler
         Weg, die Ansage entsteht ganz in dieser Methode und in
-        `_auftrag_starten`. `roh`/`dublette_bestaetigt` bedienen die
-        Wiederaufnahme nach einer bestaetigten Dublette (siehe
-        `_frage_beantworten`) - ohne Aufrufer wird wie gewohnt aus dem
-        Eingabefeld gelesen und frisch auf Dubletten geprueft."""
-        if roh is None:
-            roh = self.eingabe.toPlainText()
-        art, text = markierung_erkennen(roh)
+        `_auftrag_starten`.
 
-        if text.strip() and not self._holt_vorgemerkten:
-            if not dublette_bestaetigt:
-                alter = self._dublette_pruefen(art, text)
-                if alter is not None:
-                    self._pending_dublette = {"roh": roh, "vorspann": vorspann}
-                    self.eingabe.clear()
-                    satz = (f"Dieser Auftrag wurde {alter} praktisch gleichlautend "
-                            f"schon ausgeführt. Trotzdem ausführen?")
-                    self._verlauf_anhaengen(text, "hinweis")
-                    self._frage(satz, "Auftrag wiederholen?")
-                    return
-            self._dublette_merken(art, text)
+        `art`/`inhalt` kommen vom Wächter und von F7 schon fertig zerlegt
+        herein - beide haben die Dublettensperre (`_dublette_abgewiesen`)
+        vorher selbst schon geprueft, deshalb wird hier nicht zweimal
+        geprueft und nicht zweimal gemerkt. So bekommt derselbe Auftrag
+        ueber jeden Weg dasselbe Paar aus Art und Text: fruehere Fassungen
+        schrieben den markierungsfreien Text zurueck ins Eingabefeld und
+        parsten ihn hier neu - dabei ging je nach Herkunft die Markierung
+        verloren, und zwei Wege desselben Auftrags sahen fuer die
+        Dublettensperre wie zwei verschiedene Auftraege aus. Bleiben beide
+        Parameter leer, wird wie gewohnt aus dem Eingabefeld gelesen und
+        dabei frisch auf Dubletten geprueft."""
+        if art is None:
+            roh = self.eingabe.toPlainText()
+            art, text = markierung_erkennen(roh)
+            if (text.strip() and not self._holt_vorgemerkten
+                    and self._dublette_abgewiesen(art, text)):
+                self.eingabe.clear()
+                return
+        else:
+            text = inhalt
+            roh = f"{MARKIERUNG_CODE}\n{text}" if art == "code" else text
 
         if art == "bild":
             # #BILD# braucht keinen Befehlstext: die Markierung allein loest

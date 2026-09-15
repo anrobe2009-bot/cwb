@@ -9,13 +9,13 @@ keinen Inhalt dahinter - die Markierung allein loest schon aus.
 
 Sobald ein markierter Auftrag uebernommen ist, leert der Waechter die
 Zwischenablage. Damit kann derselbe Text nicht ueber die Zwischenablage
-selbst zweimal auslösen - fuegt Robert denselben Auftragstext aber ein
-zweites Mal ein, waehrend der erste noch laeuft oder gerade erst fertig
-ist, wuerde er ohne weitere Pruefung erneut ausgefuehrt. Dagegen merkt sich
-der Waechter Art und Inhalt des zuletzt erkannten Auftrags (siehe
-SPERRE_SEKUNDEN): kommt derselbe Text innerhalb dieser Frist erneut, wird
-er nicht ausgefuehrt, sondern nur kurz gemeldet. Alles ohne Markierung
-bleibt unberuehrt: es wird weder gelesen noch geloescht noch protokolliert.
+selbst zweimal auslösen. Ob derselbe Auftrag ausserdem ueber einen anderen
+Weg hereinkam - etwa F7 - und deshalb schon laeuft oder schon fertig ist,
+weiss dieses Modul nicht: die Dublettensperre sitzt zentral in fenster.py
+(`_dublette_abgewiesen`), durch die jeder erkannte Auftrag hindurch muss,
+bevor er ausgefuehrt wird - hier gibt es dafuer keinen eigenen Merker mehr.
+Alles ohne Markierung bleibt unberuehrt: es wird weder gelesen noch
+geloescht noch protokolliert.
 
 Dieses Modul kennt fenster.py nicht. Was "Markierung" heisst, ob der
 Waechter eingeschaltet ist und was mit einem Auftrag geschieht, kommt
@@ -36,7 +36,6 @@ wird die Zwischenablage in diesem Durchlauf gar nicht erst beruehrt.
 
 import ctypes
 import logging
-import time
 
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
@@ -51,15 +50,6 @@ log = logging.getLogger("cwb.ablagewaechter")
 
 # Abstand zwischen zwei Blicken in die Zwischenablage.
 PRUEF_ABSTAND_MS = 2000
-
-# Wie lange sich der Waechter den zuletzt erkannten Auftrag merkt, um ein
-# versehentliches zweites Einfuegen desselben Textes abzufangen. Lang genug
-# fuer ein verspaetetes zweites Einfuegen, kurz genug, dass ein spaeter
-# absichtlich wiederholter Auftrag nicht dauerhaft blockiert bleibt. Der
-# Merker gilt ohnehin nur fuer die Lebensdauer dieses Fensters: bei einem
-# Projektwechsel (core/fenster.py, _projekt_wechseln) entsteht ein neues
-# Fenster mit einem neuen, leeren Waechter.
-SPERRE_SEKUNDEN = 600
 
 # Windows-Formatkennungen fuer die verbreiteten Textformate (winuser.h).
 _CF_TEXT = 1
@@ -88,28 +78,18 @@ class Zwischenablagewaechter(QObject):
     `markierung_erkennen` zerlegt einen Text in (Art, Inhalt),
     `aktiv` sagt vor jedem Blick, ob der Waechter eingeschaltet ist,
     `ausfuehren` bekommt Art und Inhalt eines erkannten Auftrags
-    ("code", "run", "admin" oder "bild"),
-    `beschaeftigt` sagt, ob gerade noch irgendein Auftrag laeuft - damit
-    unterscheidet die Dublettenmeldung "Laeuft bereits" von "Schon erledigt",
-    `dublette_melden` bekommt genau diesen einen Satz, wenn derselbe Auftrag
-    innerhalb von SPERRE_SEKUNDEN ein zweites Mal erkannt wird.
+    ("code", "run", "admin" oder "bild") - die Dublettenpruefung liegt beim
+    Aufrufer, nicht hier (siehe fenster.py, `_dublette_abgewiesen`).
     """
 
-    def __init__(self, markierung_erkennen, aktiv, ausfuehren, beschaeftigt,
-                 dublette_melden, eltern=None):
+    def __init__(self, markierung_erkennen, aktiv, ausfuehren, eltern=None):
         super().__init__(eltern)
         self._markierung_erkennen = markierung_erkennen
         self._aktiv = aktiv
         self._ausfuehren = ausfuehren
-        self._beschaeftigt = beschaeftigt
-        self._dublette_melden = dublette_melden
         # Fehler beim Lesen der Ablage nur einmal ins Log, nicht alle zwei
         # Sekunden erneut.
         self._lesefehler_gemeldet = False
-        # Art und geglaetteter Inhalt des zuletzt erkannten Auftrags, mit
-        # Zeitpunkt - Grundlage der Dublettensperre in _nachsehen().
-        self._letzter_auftrag: tuple[str, str] | None = None
-        self._letzter_zeitpunkt: float = 0.0
         self._uhr = QTimer(self)
         self._uhr.setInterval(PRUEF_ABSTAND_MS)
         self._uhr.timeout.connect(self._nachsehen)
@@ -163,33 +143,7 @@ class Zwischenablagewaechter(QObject):
             # Nur #bild# loest ohne Inhalt aus - alle anderen Markierungen
             # brauchen einen Auftrag dahinter.
             return
-        # Leerzeichen/Zeilenumbrueche am Rand geglaettet, damit ein aus
-        # Versehen mitkopierter zusaetzlicher Zeilenumbruch nicht als neuer,
-        # anderer Auftrag durchgeht.
-        schluessel = (art, inhalt.strip())
-        jetzt = time.monotonic()
-        if (self._letzter_auftrag == schluessel
-                and jetzt - self._letzter_zeitpunkt <= SPERRE_SEKUNDEN):
-            try:
-                zwischenablage.clear()
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Zwischenablage nicht leerbar: %s", fehler)
-            try:
-                laeuft_noch = bool(self._beschaeftigt())
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Beschaeftigt-Abfrage gescheitert: %s", fehler)
-                laeuft_noch = False
-            satz = "Läuft bereits." if laeuft_noch else "Schon erledigt."
-            log.info("Wächter: derselbe Auftrag erneut erkannt - %s", satz)
-            try:
-                self._dublette_melden(satz)
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Dublettenmeldung gescheitert: %s", fehler)
-            return
-
         log.info("Wächter: markierter Auftrag erkannt (%s), %d Zeichen", art, len(inhalt))
-        self._letzter_auftrag = schluessel
-        self._letzter_zeitpunkt = jetzt
         # Erst die Zwischenablage leeren, dann ausfuehren: so kann derselbe
         # Text nicht ein zweites Mal auslösen, auch wenn der Auftrag laenger
         # braucht als der naechste Blick des Timers.
