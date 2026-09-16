@@ -495,10 +495,12 @@ class Werkbank(QMainWindow):
         # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
         # selbst, die ueber den Arbeitsfaden laufen.
         self._pending_terminal: dict | None = None
-        # Die letzten zehn angenommenen Auftraege (Art, geglaetteter Text,
-        # Zeitpunkt) - einzige Grundlage der Dublettensperre, siehe
-        # _dublette_abgewiesen. Waechter, F7 und das Eingabefeld tragen alle
-        # hier ein, nichts prueft an dieser Stelle vorbei.
+        # Die letzten zehn angenommenen Auftraege an Claude Code (Art "code"
+        # oder ohne Markierung, geglaetteter Text, Zeitpunkt) - einzige
+        # Grundlage der Dublettensperre, siehe _dublette_abgewiesen.
+        # Waechter, F7 und das Eingabefeld tragen hier ein; "run", "admin"
+        # und "bild" laufen an dieser Stelle nie vorbei, weil sie nie an
+        # Claude Code gehen.
         self._auftragsverlauf: deque[tuple[str, str, datetime]] = deque(maxlen=10)
         # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
         # Collector eingesammelt wird, bevor er fertig ist.
@@ -1722,19 +1724,22 @@ class Werkbank(QMainWindow):
             "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
             len(text), art or "ohne Markierung", len(inhalt),
         )
-        if self._dublette_abgewiesen(art, inhalt):
-            return
         if art == "bild":
             # #BILD# fuellt nie das Eingabefeld: die Markierung allein loest
-            # schon aus, kein Inhalt noetig.
+            # schon aus, kein Inhalt noetig. Keine Dublettenpruefung: ein
+            # Bildschirmabzug ohne Inhalt ist zwangslaeufig jedes Mal
+            # derselbe Text und laeuft immer sofort.
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._bild_markierung()
             return
         if art in ("run", "admin"):
             # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
-            # im Terminal, ohne Claude Code.
+            # im Terminal, ohne Claude Code, und ohne Dublettenpruefung -
+            # diese Befehle laufen immer sofort, auch wiederholt.
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
+            return
+        if self._dublette_abgewiesen(art, inhalt):
             return
         if not inhalt:
             # Nur die Markierung, kein Auftrag darunter: dann gilt der ganze
@@ -1748,24 +1753,27 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
-        """Der Wächter hat einen markierten Auftrag gefunden. Die
-        Dublettensperre (`_dublette_abgewiesen`) prueft zuerst und fuer alle
-        vier Arten. Erst danach die eigentliche Verarbeitung: #run# und
+        """Der Wächter hat einen markierten Auftrag gefunden. #run# und
         #admin# laufen direkt im Terminal, #BILD# holt direkt den Screenshot -
-        alle drei ohne Eingabefeld und ohne Claude Code. #code# geht ueber
+        alle drei ohne Eingabefeld, ohne Claude Code und ohne
+        Dublettenpruefung, sie laufen immer sofort. Nur #code# und Auftraege
+        ohne Markierung gehen an Claude Code und werden vorher durch die
+        Dublettensperre (`_dublette_abgewiesen`) geprueft, dann ueber
         _absenden, mit Art und Inhalt direkt uebergeben statt ueber das
         Eingabefeld neu geparst - sonst ginge die Markierung dabei verloren.
         Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
         ablagewaechter.py)."""
-        if self._dublette_abgewiesen(art, inhalt):
-            return
         if art == "bild":
+            # Keine Dublettenpruefung: siehe _aus_zwischenablage.
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._bild_markierung()
             return
         if art in ("run", "admin"):
+            # Keine Dublettenpruefung: siehe _aus_zwischenablage.
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
+            return
+        if self._dublette_abgewiesen(art, inhalt):
             return
         self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt)
 
@@ -1779,9 +1787,15 @@ class Werkbank(QMainWindow):
         return " ".join(text.split())
 
     def _dublette_abgewiesen(self, art: str, text: str) -> bool:
-        """Die einzige Dublettensperre im ganzen Programm: Waechter, F7 und
-        das normale Absenden ueber das Eingabefeld laufen alle hier durch,
-        bevor irgendetwas ausgefuehrt oder in die Warteschlange gelegt wird.
+        """Die einzige Dublettensperre im ganzen Programm - aber nur fuer
+        Auftraege, die an Claude Code gehen (Art "code" oder ohne
+        Markierung). Waechter, F7 und das normale Absenden ueber das
+        Eingabefeld rufen sie deshalb nur fuer diese beiden Arten auf, bevor
+        irgendetwas ausgefuehrt oder in die Warteschlange gelegt wird. Bei
+        "run", "admin" und "bild" wird gar nicht erst hierher verzweigt:
+        diese Befehle laufen immer sofort, auch wenn derselbe Text kurz
+        zuvor schon kam - ein Bildschirmabzug ohne Inhalt ist zwangslaeufig
+        jedes Mal derselbe Text und darf nie blockieren.
 
         Wahr, wenn `art`/`text` innerhalb von DUBLETTE_FENSTER_SEKUNDEN schon
         einmal angenommen wurden - dann wird "Läuft bereits." (etwas
@@ -1793,8 +1807,7 @@ class Werkbank(QMainWindow):
         Leerzeichen und Zeilenumbrueche werden vor dem Vergleich geglaettet,
         damit ein aus der Zwischenablage neu eingefuegter, inhaltlich
         identischer Text trotzdem erkannt wird. Nur wenn weder eine Art noch
-        ein Text vorliegt, gibt es nichts zu vergleichen - #BILD# hat zwar
-        nie Text, aber immer die Art "bild" und bleibt damit vergleichbar."""
+        ein Text vorliegt, gibt es nichts zu vergleichen."""
         geglaettet = self._text_glaetten(text)
         if not art and not geglaettet:
             return False
@@ -1839,6 +1852,7 @@ class Werkbank(QMainWindow):
             roh = self.eingabe.toPlainText()
             art, text = markierung_erkennen(roh)
             if (text.strip() and not self._holt_vorgemerkten
+                    and art not in ("run", "admin", "bild")
                     and self._dublette_abgewiesen(art, text)):
                 self.eingabe.clear()
                 return
