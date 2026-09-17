@@ -274,7 +274,10 @@ Regeln:
 - Flexible, responsive Raster. Keine festen Pixelgroessen.
 - Jede neue Werkzeugdatei bekommt Fehler-Logging ueber das Modul logging.
 - Lies eine Datei, bevor du sie aenderst.
-- Wenn etwas unklar, unmoeglich oder unlogisch ist: sag es in einem Satz, statt zu raten."""
+- Wenn etwas unklar, unmoeglich oder unlogisch ist: sag es in einem Satz, statt zu raten.
+- Starte keine Hintergrund-Agenten und keine Hintergrund-Befehle. Unteragenten
+  sind erlaubt, aber nur im Vordergrund. Beende deine Antwort erst, wenn alle
+  Ergebnisse vorliegen."""
 
 
 # ---------------------------------------------------------------------------
@@ -405,11 +408,40 @@ class Sitzung:
                 return wert
         return None
 
+    def _ist_hintergrund(self, name: str, eingabe: dict[str, Any]) -> bool:
+        """Erkennt einen Hintergrundstart: das Parameterfeld run_in_background
+        (Bash, Agent) oder das Werkzeug Workflow, das immer im Hintergrund
+        laeuft. Ergebnis kommt dann erst in einer spaeteren Antwortrunde nach,
+        die auftrag() nach der ersten ResultMessage nicht mehr abholt - der
+        Auftrag gilt als fertig, das Ergebnis ist verloren."""
+        if eingabe.get("run_in_background") is True:
+            return True
+        return name == "Workflow"
+
+    def _hintergrund_ablehnen(self, name: str, eingabe: dict[str, Any]) -> None:
+        """Lehnt einen Hintergrundstart ab. Geht nur ins Auftragsprotokoll und
+        nach cwb_fehler.log - bewusst ohne _melde/Ansage, die Ablehnung soll
+        nicht gesprochen werden."""
+        ziel = (
+            self._pfad_aus_eingabe(eingabe)
+            or str(eingabe.get("command") or eingabe.get("prompt") or "")[:200]
+            or name
+        )
+        begruendung = f"Hintergrund gesperrt ({name}), im Vordergrund erneut ausfuehren"
+        log.warning("Hintergrund abgelehnt: %s | Ziel: %s", name, ziel)
+        self._protokoll_ablehnung_erfassen(ziel, begruendung)
+
     async def _darf_werkzeug(
         self, name: str, eingabe: dict[str, Any], kontext: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
         """Wird vom SDK vor jedem Werkzeugaufruf gerufen."""
         try:
+            if self._ist_hintergrund(name, eingabe):
+                self._hintergrund_ablehnen(name, eingabe)
+                return PermissionResultDeny(
+                    message="Hintergrund ist gesperrt, im Vordergrund erneut ausfuehren."
+                )
+
             urteil = self.wache.darf_werkzeug(name)
             if urteil.verboten:
                 ziel = self._pfad_aus_eingabe(eingabe) or name
