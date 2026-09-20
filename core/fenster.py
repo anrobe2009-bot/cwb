@@ -1807,7 +1807,12 @@ class Werkbank(QMainWindow):
         Leerzeichen und Zeilenumbrueche werden vor dem Vergleich geglaettet,
         damit ein aus der Zwischenablage neu eingefuegter, inhaltlich
         identischer Text trotzdem erkannt wird. Nur wenn weder eine Art noch
-        ein Text vorliegt, gibt es nichts zu vergleichen."""
+        ein Text vorliegt, gibt es nichts zu vergleichen.
+
+        Der Schalter "dubletten_pruefung" (Einstellungen, Verhalten) schaltet
+        die ganze Sperre ab - fehlt er in einstellungen.json, gilt aus."""
+        if not einstellungen_lesen().get("dubletten_pruefung", False):
+            return False
         geglaettet = self._text_glaetten(text)
         if not art and not geglaettet:
             return False

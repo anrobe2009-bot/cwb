@@ -1017,6 +1017,16 @@ class EinstellungenFenster(QDialog):
             "gesperrt.",
             bool(werte.get("rueckfrage_bei_befehl", False)),
         )
+        self.dubletten_pruefung = self._schalter(
+            gruppe,
+            "dubletten_pruefung",
+            "Doppelte Aufträge nachfragen",
+            "Steht dieser Schalter an, wird ein Auftrag abgewiesen, der "
+            "innerhalb von zehn Minuten schon einmal genauso ankam. Steht "
+            "er aus, läuft jeder Auftrag durch, auch wenn er einem "
+            "vorherigen aufs Wort gleicht.",
+            bool(werte.get("dubletten_pruefung", False)),
+        )
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe

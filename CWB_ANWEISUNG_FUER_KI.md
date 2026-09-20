@@ -154,8 +154,11 @@ nicht.
   gezeigt. Beim **ersten Auftrag einer Sitzung** wird der Kontextblock aus dem
   Projektgedächtnis vorangestellt (bis 12.000 Zeichen, siehe 7).
 - **Fallstricke aus dem Code:**
-  - *Dublette:* Praktisch gleicher Text (Leerraum geglättet) innerhalb von 10 Minuten →
-    Rückfrage „Auftrag wiederholen?“ statt Ausführung; Eingabe = ja.
+  - *Dublette:* Nur wenn F12 → „Doppelte Aufträge nachfragen“ an ist (Schalter
+    `dubletten_pruefung`, derzeit **aus**) – dann löst praktisch gleicher Text (Leerraum
+    geglättet) innerhalb von 10 Minuten die Rückfrage „Auftrag wiederholen?“ aus statt der
+    Ausführung; Eingabe = ja. Steht der Schalter aus, läuft jede Wiederholung ohne
+    Rückfrage durch.
   - *Projektzuordnung* (`core/zuordnung.py`): Nennt der Text Dateien, die es im offenen
     Projekt nicht gibt, wohl aber in genau einem anderen Projekt der Projektliste – oder
     nennt er den Namen eines anderen Projekts (≥ 3 Zeichen, als eigenes Wort) und nicht den
@@ -440,8 +443,9 @@ ausgeführt.
    Namen anderer Projekte (CWB, hausgemacht, assistenz) und Dateinamen aus anderen
    Projekten im Auftragstext vermeiden, sonst wird der Auftrag vorgemerkt statt ausgeführt.
 7. **Keine Wiederholung** desselben Auftragstexts innerhalb von 10 Minuten ohne Änderung
-   (Dublettenrückfrage). Muss derselbe Auftrag noch einmal laufen, den Text leicht ändern
-   oder Robert bitten, die Rückfrage mit Eingabe zu bestätigen.
+   (Dublettenrückfrage) – nur wenn F12 → „Doppelte Aufträge nachfragen“ an ist, derzeit
+   **aus**. Ist der Schalter an und muss derselbe Auftrag noch einmal laufen, den Text
+   leicht ändern oder Robert bitten, die Rückfrage mit Eingabe zu bestätigen.
 8. **Nichts Vertrauliches in die ersten 120 Zeichen** eines #CODE#-Auftrags – sie werden
    Commit-Nachricht und ggf. gepusht.
 9. **#RUN# ist PowerShell**, Arbeitsverzeichnis Projektordner, 120 s Limit, keine
