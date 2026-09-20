@@ -42,10 +42,17 @@ ARCHIV_AB_TAGEN = 60     # ab diesem Alter wird verdichtet
 ZEILE_MAX_LAENGE = 350   # jede Zeile im Kontextblock wird hierauf gekappt
 BLOCK_MAX_LAENGE = 12000 # Obergrenze für den gesamten Kontextblock
 
+KURZ_TAGEBUCH = 5         # juengste Tagebucheintraege im wiederholten Kurzblock
+BLOCK_KURZ_MAX_LAENGE = 2000  # Obergrenze fuer den wiederholten Kurzblock
+
 HINWEIS_GEKUERZT = "\n(Gekürzt. Mehr ist über die Suche erreichbar.)"
 HINWEIS_GEDAECHTNIS = (
     "\nDies ist Gedächtnis, keine Aufgabe. Arbeite nur an dem, was jetzt "
     "gefragt wird.\n"
+)
+HINWEIS_WERKZEUGE = (
+    "\nErkenntnisse und Entscheidungen mit memory_add sichern, Codestellen "
+    "mit code_suchen suchen - nicht nur beim ersten Auftrag einer Sitzung.\n"
 )
 
 
@@ -410,6 +417,59 @@ class Wissen:
         if gekuerzt:
             teile.append(HINWEIS_GEKUERZT)
         teile.append(HINWEIS_GEDAECHTNIS)
+        return "\n".join(teile)
+
+    def kontextblock_kurz(self) -> str:
+        """Wird in derselben Sitzung in regelmaessigen Abstaenden erneut
+        vorangestellt (siehe sitzung.py, AUFTRAG_KONTEXT_ALLE), nicht nur dem
+        ersten Auftrag: Claude Code ruft memory_search/code_suchen sonst nach
+        dem ersten Auftrag praktisch nie wieder auf, obwohl die Regel dafuer
+        in der globalen CLAUDE.md steht.
+
+        Deutlich kuerzer als `kontextblock()`: nur die offenen Punkte und die
+        juengsten KURZ_TAGEBUCH Tagebucheintraege, gedeckelt auf
+        BLOCK_KURZ_MAX_LAENGE Zeichen statt BLOCK_MAX_LAENGE - kein Hub-Anteil,
+        das waere fuer eine Erinnerung mitten in der Sitzung zu viel."""
+        offen = self.offene_punkte()
+        letzte = self.tagebuch(KURZ_TAGEBUCH)
+        if not offen and not letzte:
+            return ""
+
+        kopf = f"# Projektgedächtnis: {self.name} (Kurzfassung)"
+        teile = [kopf]
+        rest = BLOCK_KURZ_MAX_LAENGE - len(kopf) - len(HINWEIS_WERKZEUGE)
+
+        if offen:
+            ueberschrift = "\n## Offene Punkte"
+            budget = rest - len(ueberschrift)
+            genommen: list[str] = []
+            laenge = 0
+            for e in offen:
+                zeile = _kappen(f"- {e.text}")
+                if laenge + 1 + len(zeile) > budget:
+                    break
+                genommen.append(zeile)
+                laenge += 1 + len(zeile)
+            if genommen:
+                teile += [ueberschrift] + genommen
+                rest -= len(ueberschrift) + laenge
+
+        if letzte:
+            ueberschrift = f"\n## Zuletzt gearbeitet (letzte {len(letzte)} Einträge)"
+            budget = rest - len(ueberschrift)
+            genommen = []
+            laenge = 0
+            for e in reversed(letzte):
+                zeile = _kappen(f"- {e.zeile()}")
+                if laenge + 1 + len(zeile) > budget:
+                    break
+                genommen.append(zeile)
+                laenge += 1 + len(zeile)
+            genommen.reverse()
+            if genommen:
+                teile += [ueberschrift] + genommen
+
+        teile.append(HINWEIS_WERKZEUGE)
         return "\n".join(teile)
 
     # -- Schreiben ----------------------------------------------------------

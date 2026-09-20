@@ -1810,27 +1810,49 @@ class Werkbank(QMainWindow):
         ein Text vorliegt, gibt es nichts zu vergleichen.
 
         Der Schalter "dubletten_pruefung" (Einstellungen, Verhalten) schaltet
-        die ganze Sperre ab - fehlt er in einstellungen.json, gilt aus."""
+        die ganze Sperre ab - fehlt er in einstellungen.json, gilt aus.
+
+        Zusaetzlich zur Zehn-Minuten-Regel (die unveraendert bleibt) wird
+        ohne jedes Zeitfenster auch gegen den Text des gerade laufenden
+        Auftrags und gegen alle in der Warteschlange wartenden Auftraege
+        verglichen: laeuft ein Auftrag laenger als zehn Minuten oder wartet
+        er entsprechend lange in der Warteschlange, faellt er sonst aus dem
+        Fenster der `_auftragsverlauf`-Pruefung und ein doppelt
+        abgeschickter Text wuerde trotzdem angehaengt und ein zweites Mal
+        abgearbeitet."""
         if not einstellungen_lesen().get("dubletten_pruefung", False):
             return False
         geglaettet = self._text_glaetten(text)
         if not art and not geglaettet:
             return False
+
+        if geglaettet and self._auftrag_laeuft and self.letzter_auftrag and (
+                self._text_glaetten(self.letzter_auftrag) == geglaettet):
+            self._dublette_melden("Läuft bereits.", art, "laufender Auftrag")
+            return True
+        if geglaettet:
+            for wartender_text, _ in self._warteschlange:
+                if self._text_glaetten(wartender_text) == geglaettet:
+                    self._dublette_melden("Wartet schon.", art, "Warteschlange")
+                    return True
+
         schluessel = (art, geglaettet)
         jetzt = datetime.now()
         for alte_art, alter_text, zeitpunkt in reversed(self._auftragsverlauf):
             if (alte_art, alter_text) == schluessel:
                 if (jetzt - zeitpunkt).total_seconds() <= self.DUBLETTE_FENSTER_SEKUNDEN:
                     satz = "Läuft bereits." if self._auftrag_laeuft else "Schon erledigt."
-                    log.info("Dublette abgewiesen (%s): %s",
-                             art or "ohne Markierung", satz)
-                    self._verlauf_anhaengen(satz, "hinweis")
-                    self._status_zeigen(satz)
-                    self.sprecher.sprich(satz, art="fehler")
+                    self._dublette_melden(satz, art, "Verlauf")
                     return True
                 break
         self._auftragsverlauf.append((art, geglaettet, jetzt))
         return False
+
+    def _dublette_melden(self, satz: str, art: str, quelle: str) -> None:
+        log.info("Dublette abgewiesen (%s, %s): %s", quelle, art or "ohne Markierung", satz)
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="fehler")
 
     @slot_geschuetzt
     def _absenden(self, vorspann: str = "", *, art: str | None = None,

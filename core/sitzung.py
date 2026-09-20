@@ -158,6 +158,17 @@ STROM_LEEREN_SEKUNDEN = 15
 # tatsaechlich Minuten braucht - aber endlich, damit ein haengender Prozess
 # (z.B. ein Modell-Download ohne Antwort) nicht fuer immer ohne Ergebnis bleibt.
 CODE_INDEX_ZEITLIMIT = 30 * 60
+# Nach so vielen Auftraegen wird der Kontextblock aus dem Projektgedaechtnis
+# erneut vorangestellt (in Kurzfassung, siehe Wissen.kontextblock_kurz).
+# Gemessen am 20.09.2026: nach dem ersten Auftrag ruft Claude Code
+# memory_search/code_suchen praktisch nie mehr auf, obwohl die Regel dafuer
+# in der globalen CLAUDE.md steht - eine feste Auftragszahl ist dafuer
+# einfacher verlaesslich als ein Zeitabstand (Sitzungen ohne Pausen wuerden
+# nie erinnert) oder eine Themenwechsel-Erkennung (bräuchte einen eigenen
+# Modellaufruf je Auftrag). Fuenf ist ein Kompromiss: oft genug, um die
+# Regel wach zu halten, selten genug, um nicht bei jedem Auftrag Platz zu
+# verschwenden.
+AUFTRAG_KONTEXT_ALLE = 5
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +326,10 @@ class Sitzung:
         self.begonnen: datetime | None = None
         self._abbruch = False
         self._kontext_ausstehend = ""
+        # Zaehlt Auftraege seit dem letzten vorangestellten Kontextblock, um
+        # ihn alle AUFTRAG_KONTEXT_ALLE Auftraege in Kurzfassung zu
+        # wiederholen (siehe auftrag()); wird beim Verbinden neu aufgesetzt.
+        self._auftraege_seit_kontext = 0
         self.fehlerstrom = Fehlerstrom("Sitzung")
         self.verbrauch = {
             "eingabe": 0, "cache_gelesen": 0, "cache_erstellt": 0, "ausgabe": 0,
@@ -767,6 +782,7 @@ class Sitzung:
         self.wissen = Wissen(self.wache.projekt.pfad, self.wache.projekt.name)
         self.wissen.einrichten()
         self._kontext_ausstehend = self.wissen.kontextblock()
+        self._auftraege_seit_kontext = 0
 
         self._melde(Zustand.BEREIT, f"Projekt geoeffnet: {self.wache.projekt.name}")
         log.info("Sitzung verbunden fuer %s, Modell %s", self.wache.projekt.pfad, self.modell_name)
@@ -1011,13 +1027,18 @@ class Sitzung:
         verbindung_tot = False
 
         sendetext = text
-        if self._kontext_ausstehend:
+        self._auftraege_seit_kontext += 1
+        block = self._kontext_ausstehend
+        self._kontext_ausstehend = ""
+        if not block and self._auftraege_seit_kontext >= AUFTRAG_KONTEXT_ALLE:
+            block = self.wissen.kontextblock_kurz() if self.wissen else ""
+        if block:
             sendetext = (
                 "[GEDÄCHTNIS – kein Auftrag, nur Hintergrundwissen aus früheren Sitzungen]\n"
-                f"{self._kontext_ausstehend}\n\n"
+                f"{block}\n\n"
                 f"[AUFTRAG]\n{text}"
             )
-            self._kontext_ausstehend = ""
+            self._auftraege_seit_kontext = 0
 
         if self.wache.nur_lesen:
             sendetext = (
