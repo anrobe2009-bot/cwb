@@ -101,7 +101,7 @@ try:
         modell_lesen,
         modell_merken,
     )
-    from .pfade import EINSTELLUNGEN_DATEI, freigaben_lesen, pfade_vollstaendig
+    from .pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache
     from .sprache import FESTE_SAETZE, Sprecher
@@ -155,7 +155,7 @@ except ImportError:
         modell_lesen,
         modell_merken,
     )
-    from pfade import EINSTELLUNGEN_DATEI, freigaben_lesen, pfade_vollstaendig
+    from pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache
     from sprache import FESTE_SAETZE, Sprecher
@@ -555,7 +555,7 @@ class Werkbank(QMainWindow):
             callable(getattr(self, "_aus_zwischenablage", None)),
         )
 
-        self.setWindowTitle(f"CWB — Projekt: {projekt.name}")
+        self.setWindowTitle(f"CWB {VERSION} — Projekt: {projekt.name}")
 
         # Der Faden entsteht vor der Oberflaeche. Sonst kann eine Kachel oder
         # ein Kuerzel schon zuschlagen, waehrend es ihn noch nicht gibt.
@@ -942,7 +942,8 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich(name)
 
     def _hilfe(self) -> None:
-        satz = "Unter dem Balken liegen die Kacheln mit den häufigsten Befehlen. " \
+        satz = f"CWB, Version {VERSION}. " \
+               "Unter dem Balken liegen die Kacheln mit den häufigsten Befehlen. " \
                "Alle Befehle mit Tastenkürzel: " + " ".join(
             f"{taste}: {beschriftung}." for taste, beschriftung, _ in self._leisten_eintraege()
         )
@@ -2363,6 +2364,10 @@ def main() -> None:
     # Muss vor allem anderen stehen: ab hier landet jeder Absturz im Log
     # statt auf dem unsichtbaren stderr von pythonw.
     sys.excepthook = unbehandelte_ausnahme
+
+    # Steht bei jedem Start im Log, damit bei einem Fehlerbericht klar ist,
+    # welche Fassung lief.
+    log.info("CWB startet, Version %s", VERSION)
 
     # Der erhoehte Admin-Worker ist derselbe Prozess, nur mit anderem
     # Kommandozeilenschalter neu gestartet (siehe

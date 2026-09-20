@@ -89,6 +89,7 @@ try:
     )
     from .kopfzeile import zahl_lang
     from .pfade import (
+        VERSION,
         freigabe_entfernen,
         freigabe_hinzufuegen,
         freigaben_lesen,
@@ -120,6 +121,7 @@ except ImportError:
     )
     from kopfzeile import zahl_lang
     from pfade import (
+        VERSION,
         freigabe_entfernen,
         freigabe_hinzufuegen,
         freigaben_lesen,
@@ -539,7 +541,7 @@ class EinstellungenFenster(QDialog):
         self._modell_waehlen = modell_waehlen
 
         self.setObjectName("einstellungen")
-        self.setWindowTitle("CWB — Einstellungen")
+        self.setWindowTitle(f"CWB {VERSION} — Einstellungen")
         self.setAccessibleName("Einstellungen")
         self.setAccessibleDescription(
             "Acht Reiter: Sprache, Töne, Verhalten, Kacheln, Skills, Pfade, "
@@ -592,7 +594,7 @@ class EinstellungenFenster(QDialog):
     def _aufbauen(self) -> None:
         aufbau = QVBoxLayout(self)
 
-        titel = QLabel("Einstellungen")
+        titel = QLabel(f"Einstellungen — CWB {VERSION}")
         titel.setObjectName("einstellungstitel")
         aufbau.addWidget(titel)
 

@@ -4,6 +4,16 @@ Barrierefreie Desktop-Oberfläche (PySide6) für Claude Code, für einen blinden
 Nutzer per Spracheingabe/-ausgabe bedienbar. Jede Funktion ist über F-Taste
 und Schaltfläche erreichbar; gesprochen wird nur, was der Nutzer wissen muss.
 
+## Versionsnummer
+
+Die Version steht als Konstante `VERSION` in `core/pfade.py`; Fenstertitel,
+Einstellungen (F12), Hilfe (F1) und der Start-Logeintrag lesen sie von dort.
+Format `Hauptversion.Nebenversion.Fehlerbehebung`, z. B. `1.2.3`:
+
+- letzte Stelle hochzählen bei einer Fehlerbehebung,
+- mittlere Stelle bei einer neuen Funktion,
+- erste Stelle bei einem großen Umbau.
+
 ## Dateien in core/
 
 - **fenster.py** — Hauptfenster (`Werkbank`), Aktivitätsbalken und `main()`.
