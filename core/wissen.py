@@ -51,9 +51,43 @@ HINWEIS_GEDAECHTNIS = (
     "gefragt wird.\n"
 )
 HINWEIS_WERKZEUGE = (
-    "\nErkenntnisse und Entscheidungen mit memory_add sichern, Codestellen "
-    "mit code_suchen suchen - nicht nur beim ersten Auftrag einer Sitzung.\n"
+    "\ncode_suchen ist bei jeder Codesuche der erste Schritt, nicht nur eine "
+    "Möglichkeit neben Grep - Grep erst, wenn code_suchen nichts Brauchbares "
+    "findet. Erkenntnisse und Entscheidungen sofort mit memory_add sichern, "
+    "nicht nur beim ersten Auftrag einer Sitzung.\n"
 )
+
+# Stichwortsuche je Auftrag (siehe Wissen.auftragsgedaechtnis): CWB sucht
+# selbst im Memory Hub, statt darauf zu warten, dass Claude Code memory_search
+# aufruft - das blieb laut Messung vom 20.09.2026 ab 11 Uhr ganz aus.
+AUFTRAGSUCHE_MAX_TREFFER = 8      # hoechstens so viele Zeilen im Block
+AUFTRAGSUCHE_MAX_LAENGE = 3000    # Obergrenze fuer den gesamten Block
+AUFTRAGSUCHE_MAX_STICHWORTE = 8   # hoechstens so viele Stichworte je Auftrag
+AUFTRAGSUCHE_MIN_WORTLAENGE = 4   # kuerzere Woerter sind meist Fuellwoerter
+
+# Deutsche Fuellwoerter, die als Stichwort nichts taugen. Keine Vollstaendigkeit
+# noetig - sie sollen nur die haeufigsten Woerter aus Auftragstexten aussieben.
+STICHWORT_STOPWORTE = {
+    "aber", "alle", "allen", "aller", "alles", "also", "auch", "auf", "aus",
+    "bei", "beim", "bin", "bis", "bist", "da", "damit", "dann", "das", "dass",
+    "dein", "deine", "dem", "den", "der", "des", "dessen", "dich", "die",
+    "dies", "diese", "diesem", "diesen", "dieser", "dieses", "dir", "doch",
+    "dort", "durch", "eine", "einem", "einen", "einer", "eines", "einige",
+    "euch", "eure", "für", "gegen", "gewesen", "habe", "haben", "hast",
+    "hat", "hatte", "hatten", "hier", "hin", "hinter", "ihm", "ihn", "ihnen",
+    "ihre", "ihrem", "ihren", "ihrer", "ihres", "immer", "ins", "ist", "jede",
+    "jedem", "jeden", "jeder", "jedes", "jener", "jetzt", "kann", "kein",
+    "keine", "keinem", "keinen", "keiner", "können", "könnte", "machen",
+    "mehr", "mein", "meine", "mich", "mir", "mit", "muss", "müssen", "nach",
+    "nicht", "noch", "nun", "nur", "ohne", "schon", "sehr", "sein", "seine",
+    "seinem", "seinen", "seiner", "seit", "sich", "sind", "soll", "sollen",
+    "sollte", "sonst", "soweit", "sowie", "unser", "unter", "viel", "vom",
+    "von", "vor", "wann", "war", "waren", "warum", "was", "weil", "weiter",
+    "weitere", "wenn", "werde", "werden", "wie", "wieder", "will", "wird",
+    "wirst", "wollen", "wollte", "würde", "würden", "zum", "zur", "zwar",
+    "zwischen", "wurde", "wurden", "dabei", "davon", "dafür", "dadurch",
+    "dazu", "etwa", "etwas", "ganz", "genau", "gerade", "gleich",
+}
 
 
 def _kappen(zeile: str, laenge: int = ZEILE_MAX_LAENGE) -> str:
@@ -62,6 +96,26 @@ def _kappen(zeile: str, laenge: int = ZEILE_MAX_LAENGE) -> str:
     if len(zeile) <= laenge:
         return zeile
     return zeile[: laenge - 1].rstrip() + "…"
+
+
+def _stichworte(text: str, projektname: str = "",
+                 hoechstens: int = AUFTRAGSUCHE_MAX_STICHWORTE) -> list[str]:
+    """Zieht die tragenden Stichworte aus einem Auftragstext: Woerter ab
+    AUFTRAGSUCHE_MIN_WORTLAENGE Zeichen, ohne Fuellwoerter und ohne den
+    Projektnamen selbst (der waere als Suchbegriff nur Rauschen, weil ohnehin
+    schon nach dem Projekt gefiltert wird). Laengere Woerter zuerst, weil im
+    Deutschen lange (oft zusammengesetzte) Woerter meist die tragfaehigeren
+    Suchbegriffe sind."""
+    roh = re.findall(r"[A-Za-zÄÖÜäöüß]{" + str(AUFTRAGSUCHE_MIN_WORTLAENGE) + r",}", text)
+    projekt_klein = projektname.strip().lower()
+    gesehen: dict[str, None] = {}
+    for wort in roh:
+        klein = wort.lower()
+        if klein in STICHWORT_STOPWORTE or klein == projekt_klein:
+            continue
+        gesehen.setdefault(klein, None)
+    einzigartig = sorted(gesehen, key=len, reverse=True)
+    return einzigartig[:hoechstens]
 
 GRUNDLAGEN_VORLAGE = """# {name}
 
@@ -470,6 +524,39 @@ class Wissen:
                 teile += [ueberschrift] + genommen
 
         teile.append(HINWEIS_WERKZEUGE)
+        return "\n".join(teile)
+
+    def auftragsgedaechtnis(self, auftragstext: str,
+                             grenze: int = AUFTRAGSUCHE_MAX_TREFFER) -> str:
+        """Sucht selbststaendig im Memory Hub nach Stichworten aus dem
+        Auftragstext, damit das Gedaechtnis auch dann greift, wenn Claude Code
+        memory_search nicht von sich aus aufruft (siehe Messung 20.09.2026 in
+        sitzung.py, AUFTRAG_KONTEXT_ALLE). Nur Treffer aus diesem Projekt und
+        'global' (uebernimmt HubLeser.suchen), hoechstens `grenze` Zeilen,
+        gedeckelt auf AUFTRAGSUCHE_MAX_LAENGE Zeichen. Findet sich nichts,
+        liefert die Methode einen leeren String, damit kein leerer Block
+        vorangestellt wird."""
+        stichworte = _stichworte(auftragstext, self.name)
+        if not stichworte:
+            return ""
+
+        gefunden: dict[str, Eintrag] = {}
+        for wort in stichworte:
+            for eintrag in self.hub.suchen(wort, self.name, grenze=grenze):
+                gefunden.setdefault(eintrag.text, eintrag)
+            if len(gefunden) >= grenze:
+                break
+        if not gefunden:
+            return ""
+
+        teile = ["## Dazu im Gedächtnis gefunden"]
+        laenge = len(teile[0])
+        for eintrag in list(gefunden.values())[:grenze]:
+            zeile = _kappen(f"- {eintrag.zeile()}")
+            if laenge + 1 + len(zeile) > AUFTRAGSUCHE_MAX_LAENGE:
+                break
+            teile.append(zeile)
+            laenge += 1 + len(zeile)
         return "\n".join(teile)
 
     # -- Schreiben ----------------------------------------------------------

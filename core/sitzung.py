@@ -165,10 +165,11 @@ CODE_INDEX_ZEITLIMIT = 30 * 60
 # in der globalen CLAUDE.md steht - eine feste Auftragszahl ist dafuer
 # einfacher verlaesslich als ein Zeitabstand (Sitzungen ohne Pausen wuerden
 # nie erinnert) oder eine Themenwechsel-Erkennung (bräuchte einen eigenen
-# Modellaufruf je Auftrag). Fuenf ist ein Kompromiss: oft genug, um die
-# Regel wach zu halten, selten genug, um nicht bei jedem Auftrag Platz zu
-# verschwenden.
-AUFTRAG_KONTEXT_ALLE = 5
+# Modellaufruf je Auftrag). Fuenf hat die Regel laut derselben Messung nicht
+# wach gehalten (memory_search seit 11 Uhr kein einziges Mal, code_suchen seit
+# 14:41 nicht mehr, bei 789 Grep/Read-Aufrufen); zwei haelt sie deutlich
+# praesenter, auf Kosten von etwas mehr Platz je Sitzung.
+AUFTRAG_KONTEXT_ALLE = 2
 
 
 # ---------------------------------------------------------------------------
@@ -1033,12 +1034,22 @@ class Sitzung:
         if not block and self._auftraege_seit_kontext >= AUFTRAG_KONTEXT_ALLE:
             block = self.wissen.kontextblock_kurz() if self.wissen else ""
         if block:
+            self._auftraege_seit_kontext = 0
+
+        # Stichwortsuche im Memory Hub zu diesem Auftrag - bei jedem Auftrag,
+        # nicht nur im Takt von AUFTRAG_KONTEXT_ALLE: CWB sucht hier selbst
+        # (ueber Wissen.auftragsgedaechtnis/HubLeser), statt darauf zu warten,
+        # dass Claude Code memory_search von sich aus aufruft.
+        treffer = self.wissen.auftragsgedaechtnis(text) if self.wissen else ""
+        if treffer:
+            block = f"{block}\n\n{treffer}" if block else treffer
+
+        if block:
             sendetext = (
                 "[GEDÄCHTNIS – kein Auftrag, nur Hintergrundwissen aus früheren Sitzungen]\n"
                 f"{block}\n\n"
                 f"[AUFTRAG]\n{text}"
             )
-            self._auftraege_seit_kontext = 0
 
         if self.wache.nur_lesen:
             sendetext = (
