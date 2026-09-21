@@ -954,6 +954,14 @@ class EinstellungenFenster(QDialog):
             "Code-Markierung ist. Alles andere bleibt unberührt.",
             bool(werte.get("ablage_waechter", True)),
         )
+        self.pause_screenshot = self._schalter(
+            gruppe,
+            "pause_screenshot",
+            "Pause-Taste holt Screenshot",
+            "Drückst du irgendwo in Windows die Pause-Taste, holt CWB denselben "
+            "Android-Screenshot wie ein #BILD#-Auftrag — ohne Umweg über den Chat.",
+            bool(werte.get("pause_screenshot", True)),
+        )
         self.bericht_kopieren = self._schalter(
             gruppe,
             "bericht_kopieren",

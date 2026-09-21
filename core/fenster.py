@@ -101,6 +101,7 @@ try:
         modell_lesen,
         modell_merken,
     )
+    from .pausetaste import PausenTaste
     from .pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache
@@ -155,6 +156,7 @@ except ImportError:
         modell_lesen,
         modell_merken,
     )
+    from pausetaste import PausenTaste
     from pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache
@@ -605,6 +607,18 @@ class Werkbank(QMainWindow):
         )
         self.ablage_waechter.starten()
 
+        # Systemweiter Hotkey auf die Pause-Taste (core/pausetaste.py): loest
+        # denselben Screenshot-Ablauf wie #BILD# aus, egal welches Fenster
+        # gerade vorn ist. Schlaegt die Registrierung fehl (Taste von einem
+        # anderen Programm belegt), bleibt CWB bedienbar, nur ohne die Taste.
+        self._pausetaste = PausenTaste(QApplication.instance(), self._pause_ausgeloest)
+        if not self._pausetaste.registrieren():
+            self.sprecher.sprich(
+                "Pause-Taste für den Screenshot konnte nicht eingerichtet werden, "
+                "vermutlich von einem anderen Programm belegt.",
+                art="fehler",
+            )
+
         # Der Fensterbeobachter laeuft ab jetzt mit, nicht erst ab dem ersten
         # #run#/#admin#-Auftrag: sonst haette genau der erste Auftrag einer
         # Sitzung noch kein Zielfenster und das Ergebnis laege nur in der
@@ -946,7 +960,7 @@ class Werkbank(QMainWindow):
                "Unter dem Balken liegen die Kacheln mit den häufigsten Befehlen. " \
                "Alle Befehle mit Tastenkürzel: " + " ".join(
             f"{taste}: {beschriftung}." for taste, beschriftung, _ in self._leisten_eintraege()
-        )
+        ) + " Pause: Screenshot vom Telefon, systemweit, unabhängig vom Fenster."
         # Auf Zuruf: eine Vorlesetaste schweigt in keiner Stufe, sonst waere
         # die Taste abgeschaltet statt die Stimme gedaempft.
         self.sprecher.sprich(satz, art="immer")
@@ -1202,6 +1216,19 @@ class Werkbank(QMainWindow):
         self._verlauf_nachtragen()
 
     # -- Bild (#BILD#) --------------------------------------------------------
+
+    @slot_geschuetzt
+    def _pause_ausgeloest(self) -> None:
+        """Aufgerufen vom systemweiten Pause-Hotkey (core/pausetaste.py),
+        egal welches Fenster gerade vorn ist. Ruft exakt denselben Ablauf wie
+        ein #BILD#-Auftrag auf - keine zweite Logik. Ist die Einstellung
+        "Pause-Taste holt Screenshot" (F12 → Verhalten) aus, bleibt die Taste
+        wirkungslos; geprueft wird das bei jedem Tastendruck neu, damit ein
+        Umschalten sofort wirkt."""
+        if not einstellungen_lesen().get("pause_screenshot", True):
+            return
+        log.info("Pause-Taste ausgeloest")
+        self._bild_markierung()
 
     def _bild_markierung(self) -> None:
         """Verarbeitet einen #BILD#-Auftrag: die Markierung allein genuegt,
@@ -2335,6 +2362,9 @@ class Werkbank(QMainWindow):
             waechter = getattr(self, "ablage_waechter", None)
             if waechter is not None:
                 waechter.anhalten()
+            pausetaste = getattr(self, "_pausetaste", None)
+            if pausetaste is not None:
+                pausetaste.abmelden()
             self.faden.beenden()
             self.faden.wait(5000)
             if not self.wechselt:

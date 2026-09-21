@@ -243,6 +243,13 @@ nicht.
   gibt es zusätzlich den alten Weg `#run# python C:\Users\Entwickler\.cwb-werkzeuge\
   android_screenshot.py` (optional `--zwischenablage`); ob die Datei dort liegt, ist aus dem
   CWB-Code nicht prüfbar – **ungeklärt**.
+- **Vierter Weg ohne Chat:** die Pause-Taste (core/pausetaste.py), systemweiter
+  Win32-Hotkey ohne Zusatztaste, unabhängig davon, welches Fenster gerade vorn ist. Löst
+  denselben Ablauf aus wie ein #BILD#-Auftrag (`fenster.py`, `_bild_markierung`), keine
+  eigene Logik. Schaltbar über F12 → Verhalten → „Pause-Taste holt Screenshot“
+  (`pause_screenshot`, Standard an) – die Einstellung wird bei jedem Tastendruck neu
+  gelesen, ein Umschalten wirkt sofort. Ist die Taste von einem anderen Programm belegt,
+  bleibt CWB bedienbar; Fehler stehen im Log und werden beim Start einmal angesagt.
 
 ---
 

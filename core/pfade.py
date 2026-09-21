@@ -42,7 +42,7 @@ LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 # Einzige Stelle, an der die Versionsnummer steht - Fenstertitel, Einstellungen,
 # Hilfe (F1) und der Start-Logeintrag lesen sie von hier. Wie sie kuenftig
 # steigt, steht in CLAUDE.md unter "Versionsnummer".
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Das Log waechst sonst unbegrenzt. Ist die Datei voll, wandert sie nach
 # cwb_fehler.log.1, die aelteren rutschen nach; alles jenseits der dritten
