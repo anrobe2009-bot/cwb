@@ -81,6 +81,13 @@ SKIP_DIRS = {
     ".cwb", ".ablage", ".stimmen", ".toene", ".git_alt", "_backup", "sicherung",
 }
 
+# JSON-Unterordner, die erfahrungsgemaess Daten statt Code enthalten (z.B.
+# Rezept- und Fibel-Dateien in hausgemacht) - nur *innerhalb* des Projekts
+# geprueft (siehe should_index, projekt_wurzel), damit ein Konfigurations-JSON
+# im Projektwurzelordner selbst (z.B. package.json) weiter indiziert wird.
+DATEN_ORDNER_AUSSCHLUSS = {"assets", "raw", "data"}
+DATEN_DATEI_MUSTER = re.compile(r"(rezept|fibel)", re.IGNORECASE)
+
 # Vektordatenbank, Manifeste und Schreibsperre liegen unter %LOCALAPPDATA%\CWB,
 # nicht im Programmordner - damit der fertige Index jeden Programmwechsel
 # ueberlebt. Den Ort kennt core/datenordner.py (frei von Qt und Log-
@@ -196,7 +203,7 @@ def get_collection(project_path: str):
     )
 
 
-def should_index(path: Path) -> bool:
+def should_index(path: Path, projekt_wurzel: Path | None = None) -> bool:
     if path.suffix.lower() == ".md":
         return False
     for part in path.parts:
@@ -209,6 +216,23 @@ def should_index(path: Path) -> bool:
         return False
     if re.search(r"_backup_\d{6,}", name.lower()):
         return False
+    if path.suffix.lower() == ".json":
+        # Datendateien (keine Codestellen) nur anhand des Pfads *innerhalb*
+        # des Projekts erkennen - ein Konfigurations-JSON direkt im
+        # Projektwurzelordner bleibt indiziert.
+        if projekt_wurzel is not None:
+            try:
+                relativ_teile = path.relative_to(projekt_wurzel).parts[:-1]
+            except ValueError:
+                relativ_teile = path.parts[:-1]
+        else:
+            relativ_teile = path.parts[:-1]
+        if {t.lower() for t in relativ_teile} & DATEN_ORDNER_AUSSCHLUSS:
+            return False
+        if "backup" in name.lower():
+            return False
+        if DATEN_DATEI_MUSTER.search(name):
+            return False
     return path.suffix.lower() in EXTENSIONS
 
 
@@ -311,7 +335,7 @@ def index_changed(project_path: str, changed_files: List[str], removed_files: Li
     total = len(changed_files)
     for i, rel in enumerate(changed_files, 1):
         fpath = p / rel
-        if not fpath.is_file() or not should_index(fpath):
+        if not fpath.is_file() or not should_index(fpath, p):
             stats["skipped"] += 1
             continue
         n = index_file(collection, fpath, log_fn)
@@ -355,7 +379,7 @@ def index_aktualisieren(project_path: str, log_fn: Optional[Callable] = None,
                     "uebersprungen_grund": "gesperrt"}
 
         altes_manifest = {} if voll else _manifest_laden(project_path)
-        aktuelle_dateien = [f for f in p.rglob("*") if f.is_file() and should_index(f)]
+        aktuelle_dateien = [f for f in p.rglob("*") if f.is_file() and should_index(f, p)]
         neues_manifest = _manifest_aus_liste(project_path, aktuelle_dateien)
 
         geaendert = [rel for rel, stempel in neues_manifest.items()

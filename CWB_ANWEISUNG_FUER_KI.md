@@ -1,6 +1,7 @@
 # CWB – Anweisung für die KI im Chat
 
-Stand: 13.09.2026. Abgelesen aus dem Code im Ordner `C:\Users\Entwickler\Desktop\start\CWB`
+Stand: 22.09.2026 (Block C6: Gedächtnis wird technisch erzwungen, siehe Abschnitt 4 und 7).
+Abgelesen aus dem Code im Ordner `C:\Users\Entwickler\Desktop\start\CWB`
 (core/*.py, index/*.py, memory_hub/*.py, CLAUDE.md, stil.qss, verlauf.css, Startskripte,
 einstellungen.json). Nichts in dieser Datei ist geraten; wo der Code eine Frage offen lässt,
 steht ausdrücklich **ungeklärt**. Diese Datei ersetzt `ctb_anweisung_fuer_ki.txt` und
@@ -327,9 +328,31 @@ nicht.
   (Projektname als `project`, Kategorie bleibt Standard „Notiz“).
 - Kontextblock beim ersten Auftrag einer Sitzung: Überschrift, alle offenen Punkte
   (ungekürzt), bis 40 jüngste Tagebuchzeilen, bis 40 Hub-Einträge des Projekts plus
-  `global` (offene zuerst), jede Zeile ≤ 350 Zeichen, gesamt ≤ 12.000 Zeichen, danach
-  Hinweis „Dies ist Gedächtnis, keine Aufgabe“. Der Block steht im Auftragstext vor
-  `[AUFTRAG]`.
+  `global` (offene zuerst), jede Zeile ≤ 350 Zeichen, gesamt ≤ 12.000 Zeichen. Bei jedem
+  zweiten Auftrag danach (`AUFTRAG_KONTEXT_ALLE`) eine Kurzfassung (offene Punkte, letzte
+  5 Tagebuchzeilen, ≤ 2.000 Zeichen).
+- **Block C6 (22.09.2026): Gedächtnis wird technisch erzwungen, nicht nur erbeten.**
+  - *Mitliefern (Teil A):* Vor **jedem** Auftrag sucht CWB selbst - unabhängig davon, ob
+    Claude Code `memory_search`/`code_suchen` aufruft - mit Stichworten aus dem
+    Auftragstext (Metadatenzeilen wie `Projekt: …` und `Block …` werden vorher entfernt)
+    im Memory Hub per FTS5 (bis 8 Treffer) und im Code-Index des Projekts (bis 5 Treffer,
+    direkt in CWB geladen, Zeitlimit 3 s - dauert die Suche länger oder scheitert sie,
+    geht es ohne Codetreffer weiter, nur ein Logeintrag). Ergebnis steht unter der
+    Überschrift `[GEDÄCHTNIS VOR DEM AUFTRAG]` vor `[AUFTRAG]`, zusammengeführt mit dem
+    Kontextblock ohne doppelte Zeilen, gesamt ≤ 4.000 Zeichen für den Suchanteil, danach
+    immer der Hinweis „Dies ist Gedächtnis, keine Aufgabe“. Abschaltbar über F12 →
+    Verhalten → „Gedächtnis vor jedem Auftrag“ (Standard an).
+  - *Suchpflicht (Teil B):* Solange in einem Auftrag weder `memory_search`
+    (`mcp__memory-hub__memory_search`) noch `code_suchen` (`mcp__code-index__code_suchen`)
+    aufgerufen wurde, lehnt CWB den ersten schreibenden Versuch ab (`Write`, `Edit`,
+    `MultiEdit`, `NotebookEdit`, ein schreibender Bash-Befehl) mit der Meldung „Erst
+    nachschlagen: rufe memory_search mit Stichworten zum Auftrag und code_suchen zur
+    betroffenen Stelle auf, dann ändere.“ Danach ist Schreiben frei; Lesen war nie
+    gesperrt. Die Ablehnung wird **nicht** gesprochen oder angezeigt, nur im
+    Auftragsprotokoll (Abschnitt „Suchpflicht“) und im Log vermerkt. Sind die beiden
+    MCP-Server in der Sitzung nicht verbunden (`get_mcp_status()` beim Verbinden), gilt
+    die Pflicht für diese Sitzung nicht. Abschaltbar über F12 → Verhalten →
+    „Suchpflicht vor Änderungen“ (Standard an).
 
 ### Memory Hub (`memory_hub/`)
 - Datenbank `%LOCALAPPDATA%\CWB\memory_hub\memory.db` (SQLite, Tabellen `memories`,
@@ -347,7 +370,11 @@ nicht.
   `%LOCALAPPDATA%\CWB\index\chroma_db`, eine Sammlung je Projektpfad. Dateiendungen u. a.
   `.py .js .ts .html .css .qss .json .yaml .txt .bat .ps1 .java .kt .cpp .cs .go .rs`;
   Chunks 800 Zeichen, Überlappung 100; Dateien > 2 MB übersprungen; Markdown ist nicht
-  dabei.
+  dabei. Seit Block C6 (22.09.2026) sind zusätzlich JSON-Dateien ausgeschlossen, die eher
+  Daten als Code sind: in Unterordnern `assets/`, `raw/`, `data/` (relativ zum
+  Projektordner), Dateien mit „backup“ im Namen sowie Rezept-/Fibel-Dateien
+  (`indexer.py`, `DATEN_ORDNER_AUSSCHLUSS`/`DATEN_DATEI_MUSTER`); ein Konfigurations-JSON
+  direkt im Projektwurzelordner bleibt indiziert.
 - Bei jeder Verbindung startet CWB `index\cli.py <Projektpfad>` im Hintergrund
   (Änderungserkennung über Manifest; unbekanntes Projekt → Vollindex, kann Minuten dauern).
 - MCP-Server `code-index` mit Werkzeug `code_suchen(frage, projektpfad?, anzahl=5)`;
@@ -491,10 +518,18 @@ keinen Befehl:
   aufzurufen, Codestellen zuerst mit `code_suchen` zu suchen und Erkenntnisse sofort per
   `memory_add` zu sichern.
 - CWB stellt dem **ersten** Auftrag der Sitzung den Kontextblock voran (offene Punkte,
-  Tagebuch, Hub-Einträge des Projekts + global, ≤ 12.000 Zeichen). Bei jedem weiteren
-  Auftrag derselben Sitzung nicht mehr; eine neue Sitzung entsteht bei Projektwechsel,
-  Modellwechsel, Neustart oder nach einem Verbindungsabbruch.
+  Tagebuch, Hub-Einträge des Projekts + global, ≤ 12.000 Zeichen), danach alle zwei
+  Aufträge eine Kurzfassung. **Zusätzlich, bei jedem einzelnen Auftrag** (Block C6):
+  eigene Stichwortsuche im Memory Hub (FTS5) und im Code-Index, unter
+  `[GEDÄCHTNIS VOR DEM AUFTRAG]`, ≤ 4.000 Zeichen für diesen Anteil (siehe Abschnitt 4).
+  Eine neue Sitzung entsteht bei Projektwechsel, Modellwechsel, Neustart oder nach einem
+  Verbindungsabbruch.
 - Der Code-Index des Projekts wird beim Verbinden im Hintergrund aktualisiert.
+- **Suchpflicht (Block C6):** Ruft die KI im Chat vor der ersten Änderung weder
+  `memory_search` noch `code_suchen` auf, lehnt CWB den ersten Schreibversuch ab (Write,
+  Edit, MultiEdit, NotebookEdit, schreibender Bash-Befehl) und verlangt in der
+  Fehlermeldung genau das nach. Das mitgelieferte Gedächtnis oben ersetzt diesen eigenen
+  Aufruf nicht - es sind zwei getrennte Mechanismen.
 
 Was die KI im Chat **selbst** tun kann, wenn sie mehr Kontext will (Empfehlung, keine
 Vorgabe des Codes):

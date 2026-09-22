@@ -946,6 +946,25 @@ class EinstellungenFenster(QDialog):
         gruppe = Gruppe("Verhalten", "Was CWB von sich aus tut.")
         werte = self._werte_lesen()
 
+        self.gedaechtnis_vor_jedem_auftrag = self._schalter(
+            gruppe,
+            "gedaechtnis_vor_jedem_auftrag",
+            "Gedächtnis vor jedem Auftrag",
+            "CWB sucht vor jedem Auftrag selbst im Memory Hub und im Code-Index "
+            "nach passenden Stichworten und stellt Treffer voran, statt darauf "
+            "zu warten, dass Claude Code memory_search/code_suchen selbst aufruft.",
+            bool(werte.get("gedaechtnis_vor_jedem_auftrag", True)),
+        )
+        self.suchpflicht_vor_aenderungen = self._schalter(
+            gruppe,
+            "suchpflicht_vor_aenderungen",
+            "Suchpflicht vor Änderungen",
+            "Solange Claude Code in einem Auftrag weder memory_search noch "
+            "code_suchen aufgerufen hat, wird der erste Schreibversuch "
+            "abgelehnt (nur im Auftragsprotokoll vermerkt, nicht gesprochen). "
+            "Gilt nur, wenn diese Werkzeuge in der Sitzung verbunden sind.",
+            bool(werte.get("suchpflicht_vor_aenderungen", True)),
+        )
         self.ablage_waechter = self._schalter(
             gruppe,
             "ablage_waechter",

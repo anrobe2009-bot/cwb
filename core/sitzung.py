@@ -47,17 +47,34 @@ from claude_agent_sdk import (
 try:
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
-    from .pfade import INDEX_ORDNER, freigaben_lesen
-    from .sicherheit import Stufe, Urteil, Wache
-    from .wissen import NACHTRAG_ANWEISUNG, Wissen
+    from .pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from .sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
+    from .wissen import (
+        HINWEIS_GEDAECHTNIS,
+        NACHTRAG_ANWEISUNG,
+        Wissen,
+        _ohne_dopplungen,
+        code_index_vorladen,
+    )
 except ImportError:
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
-    from pfade import INDEX_ORDNER, freigaben_lesen
-    from sicherheit import Stufe, Urteil, Wache
-    from wissen import NACHTRAG_ANWEISUNG, Wissen
+    from pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
+    from wissen import (
+        HINWEIS_GEDAECHTNIS,
+        NACHTRAG_ANWEISUNG,
+        Wissen,
+        _ohne_dopplungen,
+        code_index_vorladen,
+    )
 
 log = logging.getLogger("cwb.sitzung")
+
+# Laedt das Embedding-Modell des Code-Index einmal pro CWB-Prozess im
+# Hintergrund vor (Block C6, Teil A Punkt 3), damit die erste Suche vor
+# einem Auftrag nicht auf den Modell-Start warten muss.
+code_index_vorladen()
 
 
 def _unterdruecke_konsolenfenster() -> None:
@@ -259,6 +276,19 @@ TAETIGKEIT_UNBEKANNT = "führt aus"
 # Werkzeuge, die immer eine gesprochene Rueckfrage ausloesen (Git hilft hier nicht)
 NETZ_WERKZEUGE = {"WebFetch", "WebSearch"}
 
+# Suchpflicht vor Aenderungen (Block C6, Teil B): die MCP-Namen der beiden
+# Nachschlage-Werkzeuge, nach dem Muster mcp__<Servername>__<Werkzeug> - die
+# Servernamen stammen aus index/mcp_server.py (SERVER_NAME) und der
+# Registrierung von memory-hub in ~/.claude.json.
+MEMORY_SEARCH_WERKZEUG = "mcp__memory-hub__memory_search"
+CODE_SUCHEN_WERKZEUG = "mcp__code-index__code_suchen"
+NACHSCHLAGE_WERKZEUGE = {MEMORY_SEARCH_WERKZEUG, CODE_SUCHEN_WERKZEUG}
+
+MELDUNG_SUCHPFLICHT = (
+    "Erst nachschlagen: rufe memory_search mit Stichworten zum Auftrag und "
+    "code_suchen zur betroffenen Stelle auf, dann aendere."
+)
+
 
 # Ordner fuer das Auftragsprotokoll, relativ zum Projekt
 PROTOKOLL_UNTERORDNER = Path(".cwb") / "protokoll"
@@ -331,6 +361,14 @@ class Sitzung:
         # ihn alle AUFTRAG_KONTEXT_ALLE Auftraege in Kurzfassung zu
         # wiederholen (siehe auftrag()); wird beim Verbinden neu aufgesetzt.
         self._auftraege_seit_kontext = 0
+        # Suchpflicht vor Aenderungen (Block C6, Teil B): welche der beiden
+        # Nachschlage-Werkzeuge in dieser Sitzung ueberhaupt verbunden sind
+        # (gefuellt beim Verbinden ueber get_mcp_status), ob im laufenden
+        # Auftrag schon eines davon aufgerufen wurde, und ob der Hinweis auf
+        # fehlende MCP-Server schon einmal vermerkt wurde (nur einmal noetig).
+        self._nachschlage_verfuegbar: set[str] = set()
+        self._nachschlage_erfuellt = False
+        self._suchpflicht_hinweis_gegeben = False
         self.fehlerstrom = Fehlerstrom("Sitzung")
         self.verbrauch = {
             "eingabe": 0, "cache_gelesen": 0, "cache_erstellt": 0, "ausgabe": 0,
@@ -447,6 +485,32 @@ class Sitzung:
         log.warning("Hintergrund abgelehnt: %s | Ziel: %s", name, ziel)
         self._protokoll_ablehnung_erfassen(ziel, begruendung)
 
+    def _suchpflicht_verletzt(self, name: str, eingabe: dict[str, Any]) -> bool:
+        """Wahr, wenn dieser Aufruf eine schreibende Aktion ist, die
+        Suchpflicht eingeschaltet ist, in dieser Sitzung mindestens ein
+        Nachschlage-Werkzeug verbunden ist und im laufenden Auftrag noch
+        keines davon aufgerufen wurde (Block C6, Teil B)."""
+        if self._nachschlage_erfuellt or not self._nachschlage_verfuegbar:
+            return False
+        if not einstellungen_lesen().get("suchpflicht_vor_aenderungen", True):
+            return False
+        if name in SCHREIB_WERKZEUGE:
+            return True
+        if name == "Bash":
+            return bool(befehl_schreibt(str(eingabe.get("command", ""))))
+        return False
+
+    def _suchpflicht_ablehnen(self, name: str, eingabe: dict[str, Any]) -> PermissionResultDeny:
+        """Lehnt die erste schreibende Aktion eines Auftrags ab, solange
+        weder memory_search noch code_suchen aufgerufen wurden. Geht bewusst
+        nicht durch `_melde`: die Ablehnung wird nicht gesprochen oder im
+        Ausgabefeld gezeigt (Block C6, Teil B Punkt 8), nur protokolliert."""
+        ziel = self._pfad_aus_eingabe(eingabe) or str(eingabe.get("command", "")) or name
+        log.info("Suchpflicht: Schreiben abgelehnt vor erster Suche (%s): %s", name, ziel)
+        if self._protokoll is not None:
+            self._protokoll["suchpflicht_ablehnungen"] += 1
+        return PermissionResultDeny(message=MELDUNG_SUCHPFLICHT)
+
     async def _darf_werkzeug(
         self, name: str, eingabe: dict[str, Any], kontext: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
@@ -463,6 +527,14 @@ class Sitzung:
                 ziel = self._pfad_aus_eingabe(eingabe) or name
                 return self._ablehnen(urteil, ziel)
 
+            if name in NACHSCHLAGE_WERKZEUGE:
+                self._nachschlage_erfuellt = True
+            elif name in SCHREIB_WERKZEUGE and self._suchpflicht_verletzt(name, eingabe):
+                # Nur-Lesen hat schon vorher (wache.darf_werkzeug) abgelehnt,
+                # falls es zutrifft - hier greift die Suchpflicht nur noch,
+                # wenn das Schreiben sonst erlaubt waere.
+                return self._suchpflicht_ablehnen(name, eingabe)
+
             pfad = self._pfad_aus_eingabe(eingabe)
             if pfad:
                 urteil = self.wache.darf_pfad(pfad)
@@ -476,6 +548,8 @@ class Sitzung:
                 urteil = self.wache.darf_befehl(befehl)
                 if urteil.verboten:
                     return self._ablehnen(urteil, befehl)
+                if self._suchpflicht_verletzt(name, eingabe):
+                    return self._suchpflicht_ablehnen(name, eingabe)
                 if urteil.stufe is Stufe.RUECKFRAGE:
                     return await self._frage(urteil.begruendung, befehl)
 
@@ -724,6 +798,17 @@ class Sitzung:
             zeilen.append("Keine Datei geändert.")
         zeilen.append("")
 
+        zeilen.append("## Suchpflicht")
+        if self._protokoll["suchpflicht_erforderlich"]:
+            erfuellt = "ja" if self._nachschlage_erfuellt else "nein"
+            zeilen.append(f"Erforderlich: ja. Erfüllt: {erfuellt}. "
+                          f"Abgelehnte Schreibversuche: {self._protokoll['suchpflicht_ablehnungen']}.")
+        elif self._nachschlage_verfuegbar:
+            zeilen.append("Erforderlich: nein (Schalter aus).")
+        else:
+            zeilen.append("Erforderlich: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
+        zeilen.append("")
+
         zeilen.append("## Tokenverbrauch")
         zeilen.append(
             f"Eingabe: {self.verbrauch['eingabe']}, "
@@ -779,6 +864,7 @@ class Sitzung:
             self.fehlerstrom.protokollieren("Verbindung gescheitert")
             raise
         await self._modelle_lesen()
+        await self._nachschlage_werkzeuge_lesen()
 
         self.wissen = Wissen(self.wache.projekt.pfad, self.wache.projekt.name)
         self.wissen.einrichten()
@@ -875,6 +961,28 @@ class Sitzung:
                     eintrag.get("resolvedModel") or eintrag.get("displayName") or ziel
                 )
                 return
+
+    async def _nachschlage_werkzeuge_lesen(self) -> None:
+        """Stellt fest, welche der beiden Nachschlage-Werkzeuge (memory_search,
+        code_suchen) in dieser Sitzung ueberhaupt ueber MCP verbunden sind -
+        Grundlage fuer die Suchpflicht (Block C6, Teil B Punkt 5 und 7): sind
+        die MCP-Server nicht verfuegbar, gilt die Pflicht nicht, statt jeden
+        Auftrag in eine Ablehnungsschleife laufen zu lassen. Scheitert die
+        Abfrage selbst, wird sicherheitshalber angenommen, dass nichts
+        verbunden ist - die Pflicht entfaellt dann, statt zu blockieren."""
+        self._nachschlage_verfuegbar = set()
+        try:
+            status = await self.klient.get_mcp_status()
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("MCP-Status nicht abrufbar, Suchpflicht entfaellt diese Sitzung: %s", fehler)
+            return
+        for server in (status or {}).get("mcpServers", []):
+            if server.get("status") != "connected":
+                continue
+            werkzeugnamen = {w.get("name") for w in (server.get("tools") or [])}
+            self._nachschlage_verfuegbar |= (werkzeugnamen & NACHSCHLAGE_WERKZEUGE)
+        if not self._nachschlage_verfuegbar:
+            log.info("Suchpflicht: kein Nachschlage-Werkzeug verbunden, Pflicht entfaellt diese Sitzung")
 
     async def modell_wechseln(self, wert: str) -> str:
         """Legt ein anderes Modell fest und verbindet die Sitzung sofort neu,
@@ -1003,6 +1111,12 @@ class Sitzung:
         self.laeuft = True
         self.begonnen = datetime.now()
         self.schritte.clear()
+        self._nachschlage_erfuellt = False
+        werte = einstellungen_lesen()
+        suchpflicht_erforderlich = (
+            bool(self._nachschlage_verfuegbar)
+            and werte.get("suchpflicht_vor_aenderungen", True)
+        )
         self._protokoll = {
             "auftrag": text,
             "beginn": self.begonnen,
@@ -1011,6 +1125,8 @@ class Sitzung:
             "ablehnungen": [],
             "hinweise": [],
             "rueckfragen": [],
+            "suchpflicht_erforderlich": suchpflicht_erforderlich,
+            "suchpflicht_ablehnungen": 0,
         }
 
         punkt = self.wache.auftrag_beginnen(text)
@@ -1036,17 +1152,24 @@ class Sitzung:
         if block:
             self._auftraege_seit_kontext = 0
 
-        # Stichwortsuche im Memory Hub zu diesem Auftrag - bei jedem Auftrag,
-        # nicht nur im Takt von AUFTRAG_KONTEXT_ALLE: CWB sucht hier selbst
-        # (ueber Wissen.auftragsgedaechtnis/HubLeser), statt darauf zu warten,
-        # dass Claude Code memory_search von sich aus aufruft.
-        treffer = self.wissen.auftragsgedaechtnis(text) if self.wissen else ""
+        # CWB sucht vor JEDEM Auftrag selbst im Memory Hub (FTS5) und im
+        # Code-Index dieses Projekts, statt darauf zu warten, dass Claude Code
+        # memory_search/code_suchen von sich aus aufruft (Block C6, Teil A;
+        # ersetzt die reine Hub-Stichwortsuche aus Block C5). Abschaltbar
+        # ueber F12 -> Verhalten -> "Gedaechtnis vor jedem Auftrag".
+        treffer = ""
+        if self.wissen and werte.get("gedaechtnis_vor_jedem_auftrag", True):
+            treffer, _ = self.wissen.gedaechtnis_vor_auftrag(text)
+        if treffer and block:
+            treffer = _ohne_dopplungen(block, treffer)
         if treffer:
             block = f"{block}\n\n{treffer}" if block else treffer
+        if block and HINWEIS_GEDAECHTNIS.strip() not in block:
+            block = f"{block}\n{HINWEIS_GEDAECHTNIS}"
 
         if block:
             sendetext = (
-                "[GEDÄCHTNIS – kein Auftrag, nur Hintergrundwissen aus früheren Sitzungen]\n"
+                "[GEDÄCHTNIS VOR DEM AUFTRAG]\n"
                 f"{block}\n\n"
                 f"[AUFTRAG]\n{text}"
             )

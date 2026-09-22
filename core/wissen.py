@@ -17,14 +17,16 @@ Eingespeist wird in Schichten und gedeckelt, damit der Kontext nicht zuwächst.
 import logging
 import re
 import sqlite3
+import sys
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from .pfade import HUB_DATENBANK
+    from .pfade import HUB_DATENBANK, INDEX_ORDNER
 except ImportError:
-    from pfade import HUB_DATENBANK
+    from pfade import HUB_DATENBANK, INDEX_ORDNER
 
 log = logging.getLogger("cwb.wissen")
 
@@ -57,13 +59,26 @@ HINWEIS_WERKZEUGE = (
     "nicht nur beim ersten Auftrag einer Sitzung.\n"
 )
 
-# Stichwortsuche je Auftrag (siehe Wissen.auftragsgedaechtnis): CWB sucht
-# selbst im Memory Hub, statt darauf zu warten, dass Claude Code memory_search
-# aufruft - das blieb laut Messung vom 20.09.2026 ab 11 Uhr ganz aus.
-AUFTRAGSUCHE_MAX_TREFFER = 8      # hoechstens so viele Zeilen im Block
-AUFTRAGSUCHE_MAX_LAENGE = 3000    # Obergrenze fuer den gesamten Block
+# Stichwortsuche je Auftrag (siehe Wissen.gedaechtnis_vor_auftrag): CWB sucht
+# selbst im Memory Hub und im Code-Index, statt darauf zu warten, dass Claude
+# Code memory_search/code_suchen aufruft - das blieb laut Messung vom
+# 20.09.2026 ab 11 Uhr ganz aus (Block C6, Teil A; ersetzt den Vorlaeufer aus
+# Block C5).
+GEDAECHTNIS_VOR_AUFTRAG_MAX_LAENGE = 4000  # Obergrenze fuer den gesamten Block
+GEDAECHTNIS_VOR_AUFTRAG_MAX_HUB = 8        # hoechstens so viele Hub-Treffer
+GEDAECHTNIS_VOR_AUFTRAG_MAX_CODE = 5       # hoechstens so viele Code-Treffer
 AUFTRAGSUCHE_MAX_STICHWORTE = 8   # hoechstens so viele Stichworte je Auftrag
 AUFTRAGSUCHE_MIN_WORTLAENGE = 4   # kuerzere Woerter sind meist Fuellwoerter
+
+# Zeilen, die reine Metadaten sind und keine Suchbegriffe liefern sollen:
+# "Projekt: CWB" und Blocktitel wie "Block H12 - ...".
+_MARKER_ZEILEN = re.compile(
+    r"^\s*(projekt\s*:.*|block\s+\S+.*)$", re.IGNORECASE | re.MULTILINE
+)
+
+# Code-Index: gedeckelte Suchzeit, damit ein langsamer oder haengender
+# Modell-Start den Auftrag nie blockiert (Block C6, Teil A Punkt 3).
+CODE_SUCHE_ZEITLIMIT = 3.0
 
 # Deutsche Fuellwoerter, die als Stichwort nichts taugen. Keine Vollstaendigkeit
 # noetig - sie sollen nur die haeufigsten Woerter aus Auftragstexten aussieben.
@@ -117,6 +132,133 @@ def _stichworte(text: str, projektname: str = "",
     einzigartig = sorted(gesehen, key=len, reverse=True)
     return einzigartig[:hoechstens]
 
+
+def _auftragstext_bereinigt(text: str) -> str:
+    """Entfernt Metadatenzeilen ('Projekt: …', 'Block H12 …') aus dem
+    Auftragstext, bevor Stichworte gezogen werden - beides ist Einordnung,
+    kein Suchbegriff."""
+    return _MARKER_ZEILEN.sub("", text)
+
+
+def _ohne_dopplungen(basis: str, neu: str) -> str:
+    """Entfernt aus `neu` jede Aufzaehlungszeile, die (unveraendert) schon in
+    `basis` steht - fuer das Zusammenfuehren von Kontextblock und
+    Gedaechtnis-vor-Auftrag beim ersten Auftrag einer Sitzung (Block C6,
+    Teil A Punkt 2: 'ohne Dopplungen'). Leer gewordene Abschnitte (nur noch
+    eine Ueberschrift) werden anschliessend mit entfernt."""
+    if not basis.strip() or not neu.strip():
+        return neu
+    vorhandene = {z.strip() for z in basis.splitlines() if z.strip().startswith("-")}
+    behalten = [
+        zeile for zeile in neu.splitlines()
+        if not (zeile.strip().startswith("-") and zeile.strip() in vorhandene)
+    ]
+    # Ueberschriften, denen keine Aufzaehlungszeile mehr folgt (weil alle
+    # Zeilen darunter Dopplungen waren), fallen mit weg.
+    bereinigt: list[str] = []
+    for i, zeile in enumerate(behalten):
+        if zeile.strip().startswith("##"):
+            folgt_inhalt = False
+            for weiter in behalten[i + 1:]:
+                if weiter.strip().startswith("##"):
+                    break
+                if weiter.strip().startswith("-"):
+                    folgt_inhalt = True
+                    break
+            if not folgt_inhalt:
+                continue
+        bereinigt.append(zeile)
+    return "\n".join(bereinigt).strip()
+
+
+# ---------------------------------------------------------------------------
+# Code-Index: eigene, direkte Suche vor jedem Auftrag (Block C6, Teil A).
+# Das Embedding-Modell wird einmal pro CWB-Prozess im Hintergrund geladen
+# (code_index_vorladen(), von sitzung.py beim Laden angestossen), damit die
+# erste echte Suche nicht auf den Modell-Start warten muss. Jede Suche selbst
+# laeuft in einem eigenen, daemonischen Faden mit Zeitlimit - haengt sie,
+# blockiert das nie den Auftrag, es gibt nur keine Code-Treffer.
+# ---------------------------------------------------------------------------
+
+_code_index_modul = None  # None = noch nicht versucht, False = gescheitert
+_code_index_lock = threading.Lock()
+_code_index_lade_faden: threading.Thread | None = None
+
+
+def _code_index_laden():
+    global _code_index_modul
+    with _code_index_lock:
+        if _code_index_modul is not None:
+            return _code_index_modul
+        try:
+            pfad = str(INDEX_ORDNER)
+            if pfad not in sys.path:
+                sys.path.insert(0, pfad)
+            import indexer  # noqa: PLC0415
+            indexer._embedding_fn()  # laedt das Modell einmal vor
+            _code_index_modul = indexer
+            log.info("Code-Index-Modell geladen")
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Code-Index nicht ladbar, Suche vor Auftraegen bleibt aus: %s", fehler)
+            _code_index_modul = False
+        return _code_index_modul
+
+
+def code_index_vorladen() -> None:
+    """Stoesst das Laden des Embedding-Modells einmal pro CWB-Prozess im
+    Hintergrund an. Weitere Aufrufe tun nichts, solange der erste noch laeuft
+    oder schon fertig ist."""
+    global _code_index_lade_faden
+    with _code_index_lock:
+        if _code_index_modul is not None or _code_index_lade_faden is not None:
+            return
+        _code_index_lade_faden = threading.Thread(
+            target=_code_index_laden, daemon=True, name="cwb-codeindex-laden"
+        )
+        _code_index_lade_faden.start()
+
+
+def _code_index_suchen(projekt_pfad: Path, frage: str, anzahl: int) -> tuple[list[str], bool]:
+    """Fragt den Code-Index synchron ab, gedeckelt auf CODE_SUCHE_ZEITLIMIT
+    Sekunden (in einem eigenen daemonischen Faden, der bei Zeitueberschreitung
+    einfach weiterlaeuft und verworfen wird). Rueckgabe: (Zeilen, ob der
+    Code-Index in diesem Prozess ueberhaupt verfuegbar ist)."""
+    ergebnis: dict = {}
+
+    def _lauf() -> None:
+        try:
+            modul = _code_index_laden()
+            ergebnis["treffer"] = modul.search(str(projekt_pfad), frage, n_results=anzahl) if modul else []
+        except Exception as fehler:  # noqa: BLE001
+            ergebnis["fehler"] = fehler
+
+    faden = threading.Thread(target=_lauf, daemon=True, name="cwb-codesuche")
+    faden.start()
+    faden.join(CODE_SUCHE_ZEITLIMIT)
+
+    verfuegbar = _code_index_modul is not False
+    if faden.is_alive():
+        log.warning("Code-Index-Suche vor Auftrag laenger als %ss, ohne Treffer weiter",
+                    CODE_SUCHE_ZEITLIMIT)
+        return [], verfuegbar
+    if "fehler" in ergebnis:
+        log.warning("Code-Index-Suche vor Auftrag gescheitert: %s", ergebnis["fehler"])
+        return [], verfuegbar
+
+    zeilen: list[str] = []
+    for treffer in ergebnis.get("treffer") or []:
+        quelle = treffer.get("source") or "?"
+        try:
+            ort = str(Path(quelle).relative_to(projekt_pfad))
+        except ValueError:
+            ort = Path(quelle).name
+        if treffer.get("zeile_von"):
+            ort += f":{treffer['zeile_von']}-{treffer['zeile_bis']}"
+        text = " ".join((treffer.get("text") or "").split())[:160]
+        zeilen.append(f"{ort} — {text}")
+    return zeilen, verfuegbar
+
+
 GRUNDLAGEN_VORLAGE = """# {name}
 
 ## Was das Projekt ist
@@ -140,6 +282,10 @@ GRUNDLAGEN_VORLAGE = """# {name}
 - Offene Punkte stehen in `wissen/offen.md`.
 - Was getan und entschieden wurde, steht in `wissen/tagebuch.md`.
 - Beides wird von CWB gepflegt. Schreib nicht selbst hinein, ausser du wirst gefragt.
+- CWB stellt vor jedem Auftrag selbst Treffer aus Memory Hub und Code-Index voran
+  ("[GEDÄCHTNIS VOR DEM AUFTRAG]"). Das ersetzt eigenes Suchen nicht: rufe vor der
+  ersten Änderung trotzdem memory_search und code_suchen auf - ohne das lehnt CWB
+  den ersten Schreibversuch technisch ab (Suchpflicht, F12 → Verhalten).
 """
 
 # Wird nach jedem Auftrag als Anschlussfrage gestellt
@@ -179,6 +325,8 @@ class HubLeser:
         self.spalte_text: str | None = None
         self.spalte_datum: str | None = None
         self.spalte_aktualisiert: str | None = None
+        self.spalte_pinned: str | None = None
+        self.fts_tabelle: str | None = None
         if self.datenbank is None:
             log.info("Kein Memory Hub eingestellt, es wird keiner gelesen")
         elif self.datenbank.exists():
@@ -221,10 +369,15 @@ class HubLeser:
                             (klein[k] for k in ("updated", "aktualisiert", "geaendert")
                              if k in klein), None
                         )
+                        self.spalte_pinned = klein.get("pinned")
+                        fts_kandidat = f"{tabelle}_fts"
+                        if fts_kandidat in tabellen:
+                            self.fts_tabelle = fts_kandidat
                         log.info(
                             "Hub erkannt: Tabelle %s, Projekt %s, Text %s, Datum %s, "
-                            "Aktualisiert %s",
+                            "Aktualisiert %s, FTS5 %s",
                             tabelle, projekt, text, self.spalte_datum, self.spalte_aktualisiert,
+                            self.fts_tabelle or "nein",
                         )
                         return
             log.warning("Keine passende Tabelle im Hub gefunden: %s", tabellen)
@@ -281,6 +434,51 @@ class HubLeser:
         except sqlite3.Error as fehler:
             log.error("Hub-Suche gescheitert: %s", fehler)
             return []
+        return [Eintrag(str(z[0])[:10], str(z[1]).strip()) for z in zeilen if z[1]]
+
+    def suchen_fts(self, stichworte: list[str], projekt: str, grenze: int = 8) -> list[Eintrag]:
+        """Volltextsuche ueber die FTS5-Tabelle des Memory Hub (memory_hub/
+        memory_db.py legt sie als '<tabelle>_fts' an), angeheftete und dann
+        die besten Treffer zuerst. Ohne FTS5-Tabelle (aeltere oder fremde
+        Datenbank) automatisch die gewoehnliche LIKE-Suche je Stichwort."""
+        if not self.bereit or not stichworte:
+            return []
+        if not self.fts_tabelle:
+            gefunden: dict[str, Eintrag] = {}
+            for wort in stichworte:
+                for eintrag in self.suchen(wort, projekt, grenze=grenze):
+                    gefunden.setdefault(eintrag.text, eintrag)
+                if len(gefunden) >= grenze:
+                    break
+            return list(gefunden.values())[:grenze]
+
+        ausdruck = " OR ".join(f'"{w}"*' for w in stichworte if w)
+        if not ausdruck:
+            return []
+        datum = self.spalte_datum or "rowid"
+        reihenfolge = (
+            f"m.{self.spalte_pinned} DESC, bm25({self.fts_tabelle})"
+            if self.spalte_pinned else f"bm25({self.fts_tabelle})"
+        )
+        befehl = (
+            f"SELECT m.{datum}, m.{self.spalte_text} FROM {self.fts_tabelle} f "
+            f"JOIN {self.tabelle} m ON m.rowid = f.rowid "
+            f"WHERE {self.fts_tabelle} MATCH ? "
+            f"AND lower(m.{self.spalte_projekt}) IN (?, 'global') "
+            f"ORDER BY {reihenfolge} LIMIT ?"
+        )
+        try:
+            with sqlite3.connect(f"file:{self.datenbank}?mode=ro", uri=True) as verbindung:
+                zeilen = verbindung.execute(
+                    befehl, (ausdruck, projekt.lower(), grenze)
+                ).fetchall()
+        except sqlite3.Error as fehler:
+            log.warning("FTS5-Suche gescheitert, weiche auf LIKE aus: %s", fehler)
+            gefunden: dict[str, Eintrag] = {}
+            for wort in stichworte:
+                for eintrag in self.suchen(wort, projekt, grenze=grenze):
+                    gefunden.setdefault(eintrag.text, eintrag)
+            return list(gefunden.values())[:grenze]
         return [Eintrag(str(z[0])[:10], str(z[1]).strip()) for z in zeilen if z[1]]
 
     def eintrag_schreiben(self, projekt: str, text: str, datum: str | None = None) -> bool:
@@ -526,38 +724,50 @@ class Wissen:
         teile.append(HINWEIS_WERKZEUGE)
         return "\n".join(teile)
 
-    def auftragsgedaechtnis(self, auftragstext: str,
-                             grenze: int = AUFTRAGSUCHE_MAX_TREFFER) -> str:
-        """Sucht selbststaendig im Memory Hub nach Stichworten aus dem
-        Auftragstext, damit das Gedaechtnis auch dann greift, wenn Claude Code
-        memory_search nicht von sich aus aufruft (siehe Messung 20.09.2026 in
-        sitzung.py, AUFTRAG_KONTEXT_ALLE). Nur Treffer aus diesem Projekt und
-        'global' (uebernimmt HubLeser.suchen), hoechstens `grenze` Zeilen,
-        gedeckelt auf AUFTRAGSUCHE_MAX_LAENGE Zeichen. Findet sich nichts,
-        liefert die Methode einen leeren String, damit kein leerer Block
-        vorangestellt wird."""
-        stichworte = _stichworte(auftragstext, self.name)
-        if not stichworte:
-            return ""
+    def gedaechtnis_vor_auftrag(self, auftragstext: str) -> tuple[str, bool]:
+        """Sucht selbststaendig im Memory Hub (FTS5) und im Code-Index dieses
+        Projekts nach Stichworten aus dem Auftragstext, damit das Gedaechtnis
+        auch dann greift, wenn Claude Code memory_search/code_suchen nicht
+        von sich aus aufruft (Messung 20./21.09.2026: praktisch nie). Ersetzt
+        die reine Hub-Stichwortsuche aus Block C5.
 
-        gefunden: dict[str, Eintrag] = {}
-        for wort in stichworte:
-            for eintrag in self.hub.suchen(wort, self.name, grenze=grenze):
-                gefunden.setdefault(eintrag.text, eintrag)
-            if len(gefunden) >= grenze:
-                break
-        if not gefunden:
-            return ""
+        Rueckgabe: (Blocktext oder leerer String, ob der Code-Index in diesem
+        Prozess ueberhaupt verfuegbar ist - fuer Protokoll/Selbsttest, nicht
+        sicherheitsrelevant). Gedeckelt auf GEDAECHTNIS_VOR_AUFTRAG_MAX_LAENGE
+        Zeichen."""
+        bereinigt = _auftragstext_bereinigt(auftragstext)
+        stichworte = _stichworte(bereinigt, self.name)
 
-        teile = ["## Dazu im Gedächtnis gefunden"]
-        laenge = len(teile[0])
-        for eintrag in list(gefunden.values())[:grenze]:
-            zeile = _kappen(f"- {eintrag.zeile()}")
-            if laenge + 1 + len(zeile) > AUFTRAGSUCHE_MAX_LAENGE:
-                break
+        teile: list[str] = []
+        laenge = 0
+
+        def _anhaengen(zeile: str) -> bool:
+            nonlocal laenge
+            zeile = _kappen(zeile)
+            if laenge + 1 + len(zeile) > GEDAECHTNIS_VOR_AUFTRAG_MAX_LAENGE:
+                return False
             teile.append(zeile)
             laenge += 1 + len(zeile)
-        return "\n".join(teile)
+            return True
+
+        if stichworte:
+            hub_treffer = self.hub.suchen_fts(stichworte, self.name, GEDAECHTNIS_VOR_AUFTRAG_MAX_HUB)
+            if hub_treffer:
+                _anhaengen("## Aus dem Memory Hub")
+                for eintrag in hub_treffer:
+                    if not _anhaengen(f"- {eintrag.zeile()}"):
+                        break
+
+        code_zeilen, code_verfuegbar = _code_index_suchen(
+            self.pfad, bereinigt.strip() or auftragstext, GEDAECHTNIS_VOR_AUFTRAG_MAX_CODE
+        )
+        if code_zeilen:
+            _anhaengen("\n## Aus dem Code-Index")
+            for zeile in code_zeilen:
+                if not _anhaengen(f"- {zeile}"):
+                    break
+
+        return ("\n".join(teile), code_verfuegbar)
 
     # -- Schreiben ----------------------------------------------------------
 
