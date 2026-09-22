@@ -91,6 +91,13 @@ SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen · Installieren",)
 # wird an einer zweistelligen Zahl gemessen und aendert sich nie.
 FREIGABEN_BEISPIELE = ("Freigaben 99",)
 
+# "Suche gespart" (Block C10): wie viele Lesezugriffe (Read, Grep, Glob,
+# lesende Bash-Befehle) ein Auftrag im Schnitt braucht, bevor die erste
+# Datei geaendert wird, verglichen mit dem Grundwert vom 21.09.2026 - keine
+# Token-Ersparnis. Unter 5 Auftraegen seit Block C6 steht ein Gedankenstrich
+# statt einer Zahl; die Breite wird an beidem gemessen.
+SUCHERSPARNIS_BEISPIELE = ("Suche gespart: –", "Suche gespart: -100 %")
+
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
 # damit sie als gleich grosse Reihe nebeneinander stehen.
@@ -200,6 +207,16 @@ class Ausgabekopf(QWidget):
         self.freigabenanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.freigabenanzeige)
 
+        # "Suche gespart" (Block C10): zwischen Freigaben-Zahl und
+        # Tokenzaehler, wie in der Kopfzeile vereinbart. Nicht gesprochen -
+        # F2 "Wo stehen wir" nennt den Wert stattdessen als Satz.
+        self.suchersparnis = Schrumpffeld("")
+        self.suchersparnis.setObjectName("suchersparnis")
+        self.suchersparnis.setAccessibleName("Suche gespart")
+        self.suchersparnis.setAlignment(Qt.AlignCenter)
+        self.suchersparnis.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.suchersparnis)
+
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
         # Normalfall ruhig bleibt. Geleert wird die Warteschlange mit F4.
@@ -283,6 +300,7 @@ class Ausgabekopf(QWidget):
             felder = (
                 (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
                 (self.freigabenanzeige, FREIGABEN_BEISPIELE),
+                (self.suchersparnis, SUCHERSPARNIS_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
@@ -396,6 +414,32 @@ class Ausgabekopf(QWidget):
             self.freigabenanzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Freigabenanzeige nicht gesetzt: %s", fehler)
+
+    def suchersparnis_zeigen(self, prozent: int | None) -> None:
+        """Zeigt die Kennzahl "Suche gespart" (Block C10): wie viele
+        Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) ein Auftrag im
+        Schnitt braucht, bevor die erste Datei geaendert wird, verglichen
+        mit dem Grundwert vom 21.09.2026. Keine Token-Ersparnis - reines
+        Nachschauen kostet selbst welche. `prozent` ist None, solange
+        weniger als 5 Auftraege seit Block C6 vorliegen; dann steht ein
+        Gedankenstrich da. Nicht gesprochen."""
+        try:
+            if prozent is None:
+                self.suchersparnis.setText("Suche gespart: –")
+                satz = ("Suche gespart: noch nicht ermittelbar, weniger als "
+                        "5 Aufträge seit Block C6.")
+            else:
+                self.suchersparnis.setText(f"Suche gespart: {prozent} %")
+                satz = (
+                    f"Suche gespart: {prozent} Prozent. Gemessen werden "
+                    "Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) "
+                    "vor der ersten Dateiänderung, verglichen mit dem "
+                    "Grundwert vom 21.09.2026 - keine Token-Ersparnis."
+                )
+            self.suchersparnis.setToolTip(satz)
+            self.suchersparnis.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Suchersparnis nicht gesetzt: %s", fehler)
 
     def status_zeichnen(self) -> None:
         """Legt die gemerkte Meldung samt Nur-Lesen-Zustand als Beschreibung

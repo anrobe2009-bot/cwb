@@ -302,7 +302,8 @@ nicht.
 - Je Claude-Code-Auftrag eine Markdown-Datei
   `<Projekt>\.cwb\protokoll\JJJJ-MM-TT_HH-MM-SS.md` mit Auftrag, allen Werkzeugaufrufen
   (Name, Ziel, Ergebnis bis 300 Zeichen), Ablehnungen, Rückfragen samt Antwort, geänderten
-  Dateien, Tokenverbrauch. Nicht für #RUN#/#ADMIN#/#BILD#.
+  Dateien, Suchpflicht, Lesezugriffe vor der ersten Änderung (Grundlage von „Suche
+  gespart“, siehe unten), Tokenverbrauch. Nicht für #RUN#/#ADMIN#/#BILD#.
 
 ### Bericht in der Zwischenablage (`fenster.py`, `_fertig`, `_bericht_*`)
 - Nach jedem Claude-Code-Auftrag baut CWB einen Textbericht: Projekt, Zeit, Auftrag,
@@ -399,6 +400,17 @@ nicht.
   `tokenverbrauch`, 30 Tage aufbewahrt). Nur angezeigt, nicht gesprochen; F2 nennt den
   Sitzungsstand. Der Bericht listet alle Werte einschließlich Cache.
 
+### Suche gespart (`sitzung.py`, `lesezugriffe_vor_aenderung`, `grundlagen.py`)
+- Kennzahl in der Kopfzeile zwischen Freigaben-Zahl und Tokenzähler: wie viele
+  Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) ein Auftrag im Schnitt braucht,
+  bevor die erste Datei geändert wird, verglichen mit dem Grundwert vom 21.09.2026
+  (einmalig aus den Auftragsprotokollen aller Projekte berechnet, `einstellungen.json` →
+  `suche_gespart.grundwert`). „Aktuell“ ist der gleitende Schnitt der letzten 15 Aufträge
+  ab Block C6 (`suche_gespart.verlauf`). **Das ist keine Token-Ersparnis** – reines
+  Nachschauen vor dem Ändern kostet selbst Token, die Zahl sagt nur, ob vor dem Ändern
+  gezielter nachgeschaut wird. Unter 5 Aufträgen seit Block C6 zeigt das Feld „–“ statt
+  einer Zahl. Nicht gesprochen; F2 „Wo stehen wir“ nennt den Wert zusätzlich als Satz.
+
 ### Bildanhänge
 - Strg+B: Dateidialog (png, jpg, jpeg, webp, gif, bmp). Strg+V im Fenster mit Bild in der
   Zwischenablage: Bild wird unter `<CWB-Ordner>\.ablage\ablage_N.png` gespeichert und
@@ -423,6 +435,21 @@ nicht.
   Projektordner wird nicht durchsucht (`projekte_finden`). Derzeit: CWB, hausgemacht,
   assistenz.
 - Fenstergeometrie wird gemerkt (`fenster`), Stilblatt skaliert mit der Fenstergröße.
+
+### Installierte Fassung und Splash (separates Projekt `packer/`, nicht Teil von CWB)
+- Ein eigenes Werkzeug (`packer/packer.py`, Ordner `packer` neben CWB) baut aus dem
+  CWB-Quellordner eine weitergebbare Fassung unter `%LOCALAPPDATA%\Programs\CWB`:
+  `starter.py` als Einstieg, `pakete/` mit den Fremdpaketen, `python/` mit einem
+  eigenen Python von python.org. Welche Datei `starter.py` startet, wird beim Bauen
+  geraten (`_guess_entry`, bevorzugt eine Datei mit `__main__`-Block) – CWBs
+  `paket.json` trägt deshalb `"einstieg": "core/fenster.py"` fest ein, damit das
+  Raten nicht zwischen mehreren eigenständig lauffähigen Dateien schwankt (Block C8:
+  `core/android_screenshot.py` gewann einmal nur durchs Alphabet).
+- Der Splash mit Haftungshinweis und Lizenz („KI Stammtisch Cologne“, MIT, Robert
+  Elbel) ist gewollt und wird beim Bauen direkt vorn in die Startdatei geschrieben
+  (`_copy_sources`, „Bootstrap und Splash in die Startdatei eingesetzt“) – nicht
+  entfernen oder inhaltlich ändern. Er erscheint einmalig, gemerkt über eine Flag-Datei
+  im Installationsordner.
 
 ---
 

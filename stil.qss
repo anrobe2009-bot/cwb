@@ -160,6 +160,14 @@ QToolTip {
     border-radius: 6px;
 }
 
+/* "Suche gespart" (Block C10): eine ruhige Kennzahl zwischen Freigaben- und
+   Tokenzaehler, kein Warnsignal wie die Warteanzeige - deshalb gedeckte
+   Farbe statt Warnton, ohne eigenen Rahmen wie die Freigabenanzeige. */
+#suchersparnis {
+    color: #8fa8c8;
+    font-size: 13pt;
+}
+
 /* Kopieren-Knopf: schwebt als Kind-Widget direkt auf dem Ausgabefeld oben
    rechts (Positionierung in fenster.py), klein und unauffaellig, in der
    Groesse den kleinen Zaehlerfeldern der Kopfzeile angeglichen - keine

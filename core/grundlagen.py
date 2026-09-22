@@ -238,6 +238,98 @@ def tagesverbrauch_erhoehen(anzahl: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# "Suche gespart" (Block C10): wie viele Lesezugriffe (Read, Grep, Glob,
+# lesende Bash-Befehle - siehe core/sitzung.py, lesezugriffe_vor_aenderung)
+# ein Auftrag im Schnitt braucht, bevor die erste Datei geändert wird. Eine
+# sinkende Zahl heißt: Claude Code schaut vor dem Ändern gezielter nach.
+# Das ist kein Maß für gesparte Token - reines Nachschauen vor dem Ändern
+# kostet selbst welche.
+#
+# Grundwert: einmalig aus den Auftragsprotokollen vom 21.09.2026 über alle
+# Projekte berechnet (siehe wissen/tagebuch.md, Block C10) und danach nicht
+# mehr verändert. "Verlauf" sind die Lesezugriffe der letzten bis zu 15
+# Aufträge ab Block C6, ältere fallen beim Anhängen heraus.
+# ---------------------------------------------------------------------------
+
+SUCHE_SCHLUESSEL = "suche_gespart"
+SUCHE_VERLAUF_LAENGE = 15
+SUCHE_MINDEST_AUFTRAEGE = 5
+
+
+def suche_grundwert_lesen() -> float | None:
+    """Der einmalig gemessene Grundwert, oder None, wenn er noch fehlt."""
+    eintrag = einstellungen_lesen().get(SUCHE_SCHLUESSEL)
+    grundwert = eintrag.get("grundwert") if isinstance(eintrag, dict) else None
+    try:
+        return float(grundwert) if grundwert is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def suche_grundwert_setzen(grundwert: float) -> None:
+    """Schreibt den Grundwert. Einmalig gedacht - ein zweiter Aufruf
+    überschreibt den ersten trotzdem, falls er neu gemessen werden muss."""
+    werte = einstellungen_lesen()
+    eintrag = werte.get(SUCHE_SCHLUESSEL)
+    eintrag = dict(eintrag) if isinstance(eintrag, dict) else {}
+    eintrag["grundwert"] = float(grundwert)
+    werte[SUCHE_SCHLUESSEL] = eintrag
+    einstellungen_schreiben(werte)
+
+
+def suche_verlauf_lesen() -> list[int]:
+    """Die Lesezugriffe der letzten (bis zu 15) Aufträge ab Block C6."""
+    eintrag = einstellungen_lesen().get(SUCHE_SCHLUESSEL)
+    verlauf = eintrag.get("verlauf") if isinstance(eintrag, dict) else None
+    if not isinstance(verlauf, list):
+        return []
+    sauber: list[int] = []
+    for wert in verlauf:
+        try:
+            sauber.append(int(wert))
+        except (TypeError, ValueError):
+            continue
+    return sauber[-SUCHE_VERLAUF_LAENGE:]
+
+
+def suche_auftrag_anhaengen(lesezugriffe: int) -> list[int]:
+    """Haengt den Wert eines fertigen Auftrags an, behaelt nur die letzten
+    15. Schlaegt das Schreiben fehl, laeuft CWB weiter - nur ohne den neuen
+    Wert im Verlauf."""
+    try:
+        lesezugriffe = max(0, int(lesezugriffe))
+    except (TypeError, ValueError):
+        return suche_verlauf_lesen()
+    try:
+        werte = einstellungen_lesen()
+        eintrag = werte.get(SUCHE_SCHLUESSEL)
+        eintrag = dict(eintrag) if isinstance(eintrag, dict) else {}
+        verlauf = suche_verlauf_lesen()
+        verlauf.append(lesezugriffe)
+        verlauf = verlauf[-SUCHE_VERLAUF_LAENGE:]
+        eintrag["verlauf"] = verlauf
+        werte[SUCHE_SCHLUESSEL] = eintrag
+        einstellungen_schreiben(werte)
+        return verlauf
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Suchverlauf nicht fortgeschrieben: %s", fehler)
+        return suche_verlauf_lesen()
+
+
+def suche_ersparnis_prozent() -> int | None:
+    """(Grundwert - aktueller Schnitt) / Grundwert in Prozent, ganzzahlig,
+    darf negativ sein. None, solange kein Grundwert gesetzt ist oder weniger
+    als 5 Aufträge seit Block C6 im Verlauf stehen - dann zeigt die
+    Kopfzeile "Suche gespart: –" statt einer Zahl."""
+    grundwert = suche_grundwert_lesen()
+    verlauf = suche_verlauf_lesen()
+    if not grundwert or len(verlauf) < SUCHE_MINDEST_AUFTRAEGE:
+        return None
+    aktuell = sum(verlauf) / len(verlauf)
+    return round((grundwert - aktuell) / grundwert * 100)
+
+
+# ---------------------------------------------------------------------------
 # Fenstergeometrie der Werkbank: Position und Größe merken sich beim
 # Schließen in einstellungen.json unter "fenster", damit das Fenster beim
 # nächsten Start wieder genau dort und genauso groß erscheint.

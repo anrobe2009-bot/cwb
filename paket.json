@@ -1,3 +1,4 @@
 {
-  "datenordner": "CWB"
+  "datenordner": "CWB",
+  "einstieg": "core/fenster.py"
 }

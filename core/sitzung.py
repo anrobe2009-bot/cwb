@@ -45,6 +45,7 @@ from claude_agent_sdk import (
 )
 
 try:
+    from .grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
     from .pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
@@ -57,6 +58,7 @@ try:
         code_index_vorladen,
     )
 except ImportError:
+    from grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
     from pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
@@ -296,6 +298,43 @@ PROTOKOLL_UNTERORDNER = Path(".cwb") / "protokoll"
 # Laenge, ab der ein Werkzeugergebnis im Protokoll abgeschnitten wird
 PROTOKOLL_ERGEBNIS_LAENGE = 300
 
+# Werkzeuge, die die Kennzahl "Suche gespart" als Lesezugriff zaehlt (Block
+# C10). Bash zaehlt nur dazu, wenn befehl_schreibt() nichts findet - dieselbe
+# Pruefung, die core/sicherheit.py schon fuer den Nur-Lesen-Modus benutzt.
+LESE_WERKZEUGE = {"Read", "Grep", "Glob"}
+
+
+def _ist_lesezugriff(name: str, ziel: str) -> bool:
+    if name in LESE_WERKZEUGE:
+        return True
+    if name == "Bash":
+        return not befehl_schreibt(ziel or "")
+    return False
+
+
+def _ist_aenderung(name: str, ziel: str) -> bool:
+    if name in SCHREIB_WERKZEUGE:
+        return True
+    if name == "Bash":
+        return bool(befehl_schreibt(ziel or ""))
+    return False
+
+
+def lesezugriffe_vor_aenderung(werkzeuge: list[dict]) -> int:
+    """Zaehlt Read/Grep/Glob/lesende-Bash-Aufrufe am Anfang eines Auftrags,
+    bis die erste Aenderung kommt (Edit/Write/NotebookEdit oder ein
+    schreibender Bash-Befehl). Kommt nie eine Aenderung, zaehlen alle -
+    Grundlage der Kopfzeilen-Anzeige "Suche gespart" (Block C10)."""
+    zahl = 0
+    for eintrag in werkzeuge:
+        name = eintrag.get("name", "")
+        ziel = eintrag.get("ziel", "")
+        if _ist_aenderung(name, ziel):
+            break
+        if _ist_lesezugriff(name, ziel):
+            zahl += 1
+    return zahl
+
 
 # Rueckrufe, die die Oberflaeche setzt
 EreignisRuf = Callable[[Ereignis], None]
@@ -390,15 +429,24 @@ class Sitzung:
         except Exception as fehler:  # noqa: BLE001
             log.exception("Ereignisrueckruf gescheitert: %s", fehler)
 
+    def _suche_ersparnis_satz(self) -> str:
+        """Fuer 'Wo stehen wir?' (F2) - dieselbe Zahl wie in der Kopfzeile,
+        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py."""
+        prozent = suche_ersparnis_prozent()
+        if prozent is None:
+            return "Suche gespart: noch nicht ermittelbar."
+        return f"Suche gespart: {prozent} Prozent."
+
     def stand(self) -> str:
         """Antwort auf die Taste 'Wo stehen wir?'."""
         if not self.laeuft:
             return (f"Nichts laeuft gerade. {self.verbrauch['sitzung']} Token in dieser Sitzung, "
-                    f"{self.verbrauch['gesamt']} beim letzten Aufruf.")
+                    f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._suche_ersparnis_satz()}")
         anzahl = len(self.schritte)
         dauer = int((datetime.now() - self.begonnen).total_seconds()) if self.begonnen else 0
         letzte = self.schritte[-1].ansage if self.schritte else "gestartet"
-        return f"Schritt {anzahl}, laeuft seit {dauer} Sekunden. Zuletzt: {letzte}."
+        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden. Zuletzt: {letzte}. "
+                f"{self._suche_ersparnis_satz()}")
 
     def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
         """Haelt die Tokenwerte des letzten Auftrags fest und summiert die Sitzung.
@@ -811,6 +859,15 @@ class Sitzung:
             zeilen.append("Pflicht aktiv: nein (Schalter aus).")
         else:
             zeilen.append("Pflicht aktiv: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
+        zeilen.append("")
+
+        # Grundlage der Kopfzeilen-Anzeige "Suche gespart" (Block C10): wird
+        # bei jedem Auftrag an den Verlauf in einstellungen.json angehaengt,
+        # unabhaengig davon, ob etwas geaendert wurde.
+        lesezugriffe = lesezugriffe_vor_aenderung(self._protokoll["werkzeuge"])
+        suche_auftrag_anhaengen(lesezugriffe)
+        zeilen.append("## Suche gespart")
+        zeilen.append(f"Lesezugriffe vor der ersten Aenderung: {lesezugriffe}.")
         zeilen.append("")
 
         zeilen.append("## Tokenverbrauch")

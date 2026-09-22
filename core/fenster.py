@@ -83,6 +83,7 @@ try:
         stil_laden,
         stil_verzoegert,
         stil_wird_angewandt,
+        suche_ersparnis_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -138,6 +139,7 @@ except ImportError:
         stil_laden,
         stil_verzoegert,
         stil_wird_angewandt,
+        suche_ersparnis_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -762,6 +764,9 @@ class Werkbank(QMainWindow):
         # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
         # einstellungen.json und faengt nicht mit jedem Neustart neu an.
         self.ausgabekopf.tag_zeigen(tagesverbrauch_heute())
+        # "Suche gespart" (Block C10) ebenso: der Verlauf steht schon aus
+        # frueheren Auftraegen in einstellungen.json.
+        self.ausgabekopf.suchersparnis_zeigen(suche_ersparnis_prozent())
 
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
@@ -1465,6 +1470,9 @@ class Werkbank(QMainWindow):
         self._auftrag_laeuft = False
         self._auftrags_uhr.stop()
         self.balken.animation_stoppen()
+        # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
+        # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
+        self.ausgabekopf.suchersparnis_zeigen(suche_ersparnis_prozent())
 
         # `satz` steht in der Statuszeile und muss in eine Zeile passen.
         # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
