@@ -492,7 +492,7 @@ class Sitzung:
         keines davon aufgerufen wurde (Block C6, Teil B)."""
         if self._nachschlage_erfuellt or not self._nachschlage_verfuegbar:
             return False
-        if not einstellungen_lesen().get("suchpflicht_vor_aenderungen", True):
+        if not einstellungen_lesen().get("suchpflicht_vor_aenderungen", False):
             return False
         if name in SCHREIB_WERKZEUGE:
             return True
@@ -799,14 +799,18 @@ class Sitzung:
         zeilen.append("")
 
         zeilen.append("## Suchpflicht")
+        # Wird unabhaengig vom Schalter vermerkt (Block C7): so laesst sich
+        # messen, ob das Mitliefern des Gedaechtnisses allein reicht oder ob
+        # Claude Code memory_search/code_suchen von sich aus aufruft.
+        selbst_gesucht = "ja" if self._nachschlage_erfuellt else "nein"
+        zeilen.append(f"Selbst gesucht (memory_search/code_suchen): {selbst_gesucht}.")
         if self._protokoll["suchpflicht_erforderlich"]:
-            erfuellt = "ja" if self._nachschlage_erfuellt else "nein"
-            zeilen.append(f"Erforderlich: ja. Erfüllt: {erfuellt}. "
-                          f"Abgelehnte Schreibversuche: {self._protokoll['suchpflicht_ablehnungen']}.")
+            zeilen.append(f"Pflicht aktiv: ja. Abgelehnte Schreibversuche: "
+                          f"{self._protokoll['suchpflicht_ablehnungen']}.")
         elif self._nachschlage_verfuegbar:
-            zeilen.append("Erforderlich: nein (Schalter aus).")
+            zeilen.append("Pflicht aktiv: nein (Schalter aus).")
         else:
-            zeilen.append("Erforderlich: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
+            zeilen.append("Pflicht aktiv: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
         zeilen.append("")
 
         zeilen.append("## Tokenverbrauch")
@@ -1115,7 +1119,7 @@ class Sitzung:
         werte = einstellungen_lesen()
         suchpflicht_erforderlich = (
             bool(self._nachschlage_verfuegbar)
-            and werte.get("suchpflicht_vor_aenderungen", True)
+            and werte.get("suchpflicht_vor_aenderungen", False)
         )
         self._protokoll = {
             "auftrag": text,

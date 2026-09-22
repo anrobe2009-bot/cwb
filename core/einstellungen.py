@@ -962,8 +962,11 @@ class EinstellungenFenster(QDialog):
             "Solange Claude Code in einem Auftrag weder memory_search noch "
             "code_suchen aufgerufen hat, wird der erste Schreibversuch "
             "abgelehnt (nur im Auftragsprotokoll vermerkt, nicht gesprochen). "
-            "Gilt nur, wenn diese Werkzeuge in der Sitzung verbunden sind.",
-            bool(werte.get("suchpflicht_vor_aenderungen", True)),
+            "Gilt nur, wenn diese Werkzeuge in der Sitzung verbunden sind. Ob "
+            "Claude Code selbst gesucht hat, steht im Auftragsprotokoll auch "
+            "bei ausgeschaltetem Schalter (Block C7: Messung, ob das "
+            "Mitliefern des Gedächtnisses allein reicht).",
+            bool(werte.get("suchpflicht_vor_aenderungen", False)),
         )
         self.ablage_waechter = self._schalter(
             gruppe,
