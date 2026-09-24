@@ -80,26 +80,31 @@ code_index_vorladen()
 
 
 def _unterdruecke_konsolenfenster() -> None:
-    """Verhindert, dass die Claude-Code-CLI unter Windows ein eigenes
-    Konsolenfenster oeffnet. Das SDK bietet dafuer keine Option in
-    ClaudeAgentOptions, daher wird anyio.open_process (das die CLI als
-    Unterprozess startet) einmalig um CREATE_NO_WINDOW ergaenzt."""
+    """Verhindert, dass unter Windows bei jedem Auftrag ein Konsolenfenster
+    aufblitzt oder in den Vordergrund springt. Betrifft nicht nur die
+    Claude-Code-CLI (gestartet ueber anyio.open_process, das intern auf
+    asyncio.create_subprocess_exec und damit auf subprocess.Popen zurueckfaellt),
+    sondern auch SDK-interne Git-Aufrufe wie _get_worktree_paths in
+    claude_agent_sdk._internal.sessions, die subprocess.run direkt aufrufen -
+    ohne CREATE_NO_WINDOW und bei praktisch jedem Auftrag, weil das SDK vor
+    jeder Anfrage den Sitzungsstand mit git abgleicht. ClaudeAgentOptions
+    bietet dafuer keine eigene Option, daher wird subprocess.Popen selbst
+    (die gemeinsame Grundlage von Popen/run/call/check_output ueberall im
+    Prozess, auch in Fremdcode) einmalig um das Erstellungsflag ergaenzt."""
     if sys.platform != "win32":
         return
-    import anyio
-
-    if getattr(anyio.open_process, "_cwb_patched", False):
+    if getattr(subprocess.Popen.__init__, "_cwb_patched", False):
         return
 
-    original = anyio.open_process
+    original_init = subprocess.Popen.__init__
     creationflags = subprocess.CREATE_NO_WINDOW
 
-    async def open_process_ohne_fenster(*args: Any, **kwargs: Any) -> Any:
+    def init_ohne_fenster(self, *args: Any, **kwargs: Any) -> None:
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | creationflags
-        return await original(*args, **kwargs)
+        original_init(self, *args, **kwargs)
 
-    open_process_ohne_fenster._cwb_patched = True  # type: ignore[attr-defined]
-    anyio.open_process = open_process_ohne_fenster
+    init_ohne_fenster._cwb_patched = True  # type: ignore[attr-defined]
+    subprocess.Popen.__init__ = init_ohne_fenster
 
 
 _unterdruecke_konsolenfenster()

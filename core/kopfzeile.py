@@ -343,9 +343,11 @@ class Ausgabekopf(QWidget):
             if anzahl == 0:
                 satz = "Warteschlange leer, es wartet kein Auftrag."
             elif anzahl == 1:
-                satz = "Ein Auftrag wartet. Warteschlange leeren mit F4."
+                satz = ("Ein Auftrag wartet. Warteschlange leeren mit F4, "
+                         "einzeln verwalten mit Umschalt+F4.")
             else:
-                satz = f"{anzahl} Aufträge warten. Warteschlange leeren mit F4."
+                satz = (f"{anzahl} Aufträge warten. Warteschlange leeren mit F4, "
+                         "einzeln verwalten mit Umschalt+F4.")
             self.warteanzeige.setToolTip(satz)
             self.warteanzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001

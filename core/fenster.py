@@ -52,10 +52,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
@@ -470,6 +472,70 @@ class Aktivitaetsbalken(QFrame):
 
 
 # ---------------------------------------------------------------------------
+# Warteschlange einzeln verwalten
+# ---------------------------------------------------------------------------
+
+class WarteschlangenFenster(QDialog):
+    """Zeigt jeden wartenden Auftrag als eigene Zeile und entfernt einen
+    einzelnen daraus - anders als F4/Umschalt+F4 zusammen: F4 leert die
+    ganze Warteschlange, dieses Fenster (Umschalt+F4) nimmt nur den
+    ausgewaehlten Eintrag heraus. Die Liste ist eine per QListWidget
+    normal mit Pfeiltasten navigierbare, vom Bildschirmleser vorgelesene
+    Auswahl - kein eigener Zustand hier, `warteschlange` wird direkt
+    veraendert und wirkt sofort im aufrufenden Fenster."""
+
+    def __init__(self, warteschlange: list[tuple[str, list[Path]]], eltern=None):
+        super().__init__(eltern)
+        self._warteschlange = warteschlange
+        self.setWindowTitle("Warteschlange verwalten")
+        self.setAccessibleName("Warteschlange verwalten")
+
+        aufbau = QVBoxLayout(self)
+        self.liste = QListWidget(self)
+        self.liste.setAccessibleName("Wartende Aufträge")
+        aufbau.addWidget(self.liste)
+
+        knopfreihe = QHBoxLayout()
+        self.entfernen = QPushButton("Entfernen")
+        self.entfernen.setAccessibleName("Ausgewählten Auftrag entfernen")
+        self.entfernen.clicked.connect(self._entfernen)
+        self.schliessen = QPushButton("Schließen")
+        self.schliessen.setAccessibleName("Schließen")
+        self.schliessen.clicked.connect(self.accept)
+        knopfreihe.addWidget(self.entfernen)
+        knopfreihe.addWidget(self.schliessen)
+        aufbau.addLayout(knopfreihe)
+
+        self._liste_fuellen()
+        self.liste.setFocus()
+
+    def _liste_fuellen(self) -> None:
+        self.liste.clear()
+        for nummer, (text, _bilder) in enumerate(self._warteschlange, start=1):
+            kurz = " ".join(text.split())[:80]
+            self.liste.addItem(f"Platz {nummer}: {kurz}")
+        if self._warteschlange:
+            self.liste.setCurrentRow(0)
+        else:
+            self.accept()
+
+    def keyPressEvent(self, ereignis) -> None:
+        if ereignis.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self._entfernen()
+            return
+        super().keyPressEvent(ereignis)
+
+    def _entfernen(self) -> None:
+        zeile = self.liste.currentRow()
+        if zeile < 0 or zeile >= len(self._warteschlange):
+            return
+        log.info("Auftrag einzeln aus der Warteschlange entfernt, Platz %d: %s",
+                  zeile + 1, self._warteschlange[zeile][0][:120])
+        del self._warteschlange[zeile]
+        self._liste_fuellen()
+
+
+# ---------------------------------------------------------------------------
 # Hauptfenster
 # ---------------------------------------------------------------------------
 
@@ -665,6 +731,7 @@ class Werkbank(QMainWindow):
             ("F1", "Hilfe vorlesen", self._hilfe),
             ("F9", "Projekt wechseln", self._projekt_wechseln),
             ("F4", "Warteschlange leeren", self._warteschlange_leeren),
+            ("Umschalt+F4", "Warteschlange einzeln verwalten", self._warteschlange_verwalten),
             ("Strg+F4", "Kompletter Neustart", self._neustart),
             ("F12", "Einstellungen", self._einstellungen_zeigen),
         ]
@@ -848,6 +915,7 @@ class Werkbank(QMainWindow):
             ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
             ("F8", self._not_aus),
             ("F4", self._warteschlange_leeren),
+            ("Shift+F4", self._warteschlange_verwalten),
             ("Ctrl+F4", self._neustart),
             ("F7", self._aus_zwischenablage),
             ("Ctrl+Z", self._zuruecknehmen),
@@ -2095,6 +2163,31 @@ class Werkbank(QMainWindow):
         else:
             satz = f"Warteschlange geleert, {anzahl} Aufträge verworfen."
         log.info("Warteschlange geleert: %d Auftraege verworfen", anzahl)
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz)
+
+    @slot_geschuetzt
+    def _warteschlange_verwalten(self) -> None:
+        """Umschalt+F4: oeffnet die Warteschlange als Liste, damit ein
+        einzelner wartender Auftrag entfernt werden kann - ohne wie F4 alle
+        auf einmal zu verwerfen. Robert reiht z.B. versehentlich einen
+        zweiten Auftrag ein, waehrend ein anderer laeuft, und will nur
+        diesen einen wieder herausnehmen."""
+        if not self._warteschlange:
+            satz = "Warteschlange ist leer."
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="fehler")
+            return
+        vorher = len(self._warteschlange)
+        dialog = WarteschlangenFenster(self._warteschlange, self)
+        dialog.exec()
+        self._warteschlange_zeigen()
+        entfernt = vorher - len(self._warteschlange)
+        if entfernt <= 0:
+            return
+        satz = ("Ein Auftrag aus der Warteschlange entfernt." if entfernt == 1
+                else f"{entfernt} Aufträge aus der Warteschlange entfernt.")
         self._verlauf_anhaengen(satz, "hinweis")
         self._status_zeigen(satz)
         self.sprecher.sprich(satz)
