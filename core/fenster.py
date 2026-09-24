@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMainWindow,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -478,11 +479,14 @@ class Aktivitaetsbalken(QFrame):
 class WarteschlangenFenster(QDialog):
     """Zeigt jeden wartenden Auftrag als eigene Zeile und entfernt einen
     einzelnen daraus - anders als F4/Umschalt+F4 zusammen: F4 leert die
-    ganze Warteschlange, dieses Fenster (Umschalt+F4) nimmt nur den
-    ausgewaehlten Eintrag heraus. Die Liste ist eine per QListWidget
-    normal mit Pfeiltasten navigierbare, vom Bildschirmleser vorgelesene
-    Auswahl - kein eigener Zustand hier, `warteschlange` wird direkt
-    veraendert und wirkt sofort im aufrufenden Fenster."""
+    ganze Warteschlange, dieses Fenster (Umschalt+F4 oder Antippen der
+    Warteanzeige in der Kopfzeile) nimmt nur den ausgewaehlten Eintrag
+    heraus. Die Liste ist eine per QListWidget normal mit Pfeiltasten
+    navigierbare, vom Bildschirmleser vorgelesene Auswahl - kein eigener
+    Zustand hier, `warteschlange` wird direkt veraendert und wirkt sofort
+    im aufrufenden Fenster. Rechtsklick auf einen Eintrag oeffnet zusaetzlich
+    ein Kontextmenue mit "Löschen" (Block 60) - Entf/Rueckschritt bleiben
+    daneben bestehen."""
 
     def __init__(self, warteschlange: list[tuple[str, list[Path]]], eltern=None):
         super().__init__(eltern)
@@ -491,8 +495,20 @@ class WarteschlangenFenster(QDialog):
         self.setAccessibleName("Warteschlange verwalten")
 
         aufbau = QVBoxLayout(self)
+
+        hinweis = QLabel(
+            "Zahl in der Kopfzeile antippen öffnet dieses Fenster. "
+            "Rechtsklick auf einen Eintrag löscht ihn, ebenso Entf oder "
+            "die Schaltfläche „Entfernen“."
+        )
+        hinweis.setObjectName("warteschlange_hinweis")
+        hinweis.setWordWrap(True)
+        aufbau.addWidget(hinweis)
+
         self.liste = QListWidget(self)
         self.liste.setAccessibleName("Wartende Aufträge")
+        self.liste.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.liste.customContextMenuRequested.connect(self._kontextmenue)
         aufbau.addWidget(self.liste)
 
         knopfreihe = QHBoxLayout()
@@ -533,6 +549,20 @@ class WarteschlangenFenster(QDialog):
                   zeile + 1, self._warteschlange[zeile][0][:120])
         del self._warteschlange[zeile]
         self._liste_fuellen()
+
+    def _kontextmenue(self, position) -> None:
+        """Rechtsklick auf einen Eintrag (Block 60): waehlt ihn aus und
+        bietet "Löschen" an, statt nur die Pfeiltasten-/Entf-Bedienung zu
+        verlangen."""
+        eintrag = self.liste.itemAt(position)
+        if eintrag is None:
+            return
+        self.liste.setCurrentItem(eintrag)
+        menue = QMenu(self.liste)
+        loeschen = menue.addAction("Löschen")
+        gewaehlt = menue.exec(self.liste.mapToGlobal(position))
+        if gewaehlt == loeschen:
+            self._entfernen()
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +853,10 @@ class Werkbank(QMainWindow):
         # Stand der Arbeit gehoert (core/kopfzeile.py).
         self.ausgabekopf = Ausgabekopf()
         aufbau.addWidget(self.ausgabekopf)
+        # Antippen/Anklicken der Warteanzeige oeffnet direkt "Warteschlange
+        # verwalten" (Block 60) - derselbe Weg wie Umschalt+F4, nur ohne
+        # Tastatur erreichbar.
+        self.ausgabekopf.warteanzeige.geklickt.connect(self._warteschlange_verwalten)
         # Merkt sich Schriftart und -groesse, mit der die Kopfzeile zuletzt
         # ausgemessen wurde (siehe changeEvent): so wird bei Stil-Ereignissen
         # ohne echte Schriftaenderung nicht unnoetig neu gemessen.

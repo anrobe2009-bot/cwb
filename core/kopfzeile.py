@@ -38,7 +38,7 @@ Aussehen kommt vollstaendig aus stil.qss. Im Python steht keine Gestaltung.
 
 import logging
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -165,6 +165,19 @@ class Schrumpffeld(QLabel):
         return QSize(self._wunschbreite, masse.height())
 
 
+class KlickbaresFeld(Schrumpffeld):
+    """Wie Schrumpffeld, zusaetzlich mit einem Klick-Signal - fuer die
+    Warteanzeige (Block 60): Antippen oder Anklicken der Zahl oeffnet
+    "Warteschlange verwalten" direkt, ohne den Umweg ueber Umschalt+F4."""
+
+    geklickt = Signal()
+
+    def mousePressEvent(self, ereignis) -> None:
+        if ereignis.button() == Qt.LeftButton:
+            self.geklickt.emit()
+        super().mousePressEvent(ereignis)
+
+
 class Ausgabekopf(QWidget):
     """Die Kopfzeile ueber dem Ausgabefeld. Sie zeigt nur an; entschieden wird
     nichts hier. Das Fenster setzt die Werte, die Kopfzeile stellt sie dar."""
@@ -220,11 +233,15 @@ class Ausgabekopf(QWidget):
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
         # Normalfall ruhig bleibt. Geleert wird die Warteschlange mit F4.
-        self.warteanzeige = Schrumpffeld("")
+        self.warteanzeige = KlickbaresFeld("")
         self.warteanzeige.setObjectName("warteanzeige")
         self.warteanzeige.setAccessibleName("Warteschlange")
         self.warteanzeige.setAlignment(Qt.AlignCenter)
         self.warteanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Antippen/Anklicken oeffnet "Warteschlange verwalten" (Block 60) -
+        # der Zeigerwechsel zeigt sehenden Nutzern, dass die Zahl klickbar
+        # ist; das Signal `geklickt` verbindet fenster.py.
+        self.warteanzeige.setCursor(Qt.PointingHandCursor)
         # Verborgen, solange keiner wartet: die feste Breite aus
         # masse_festlegen wuerde sonst als leere Box zwischen Freigaben- und
         # Zaehlerreihe stehen bleiben.
@@ -344,10 +361,12 @@ class Ausgabekopf(QWidget):
                 satz = "Warteschlange leer, es wartet kein Auftrag."
             elif anzahl == 1:
                 satz = ("Ein Auftrag wartet. Warteschlange leeren mit F4, "
-                         "einzeln verwalten mit Umschalt+F4.")
+                         "einzeln verwalten mit Umschalt+F4 oder durch "
+                         "Antippen dieser Zahl.")
             else:
                 satz = (f"{anzahl} Aufträge warten. Warteschlange leeren mit F4, "
-                         "einzeln verwalten mit Umschalt+F4.")
+                         "einzeln verwalten mit Umschalt+F4 oder durch "
+                         "Antippen dieser Zahl.")
             self.warteanzeige.setToolTip(satz)
             self.warteanzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
