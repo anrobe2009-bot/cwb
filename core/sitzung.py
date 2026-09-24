@@ -305,8 +305,9 @@ NETZ_WERKZEUGE = {"WebFetch", "WebSearch"}
 
 # Suchpflicht vor Aenderungen (Block C6, Teil B): die MCP-Namen der beiden
 # Nachschlage-Werkzeuge, nach dem Muster mcp__<Servername>__<Werkzeug> - die
-# Servernamen stammen aus index/mcp_server.py (SERVER_NAME) und der
-# Registrierung von memory-hub in ~/.claude.json.
+# Servernamen stammen aus index/mcp_server.py (SERVER_NAME) und aus
+# memory_hub/sdk_werkzeuge.py (SERVER_NAME, seit Block 61 eingebettet statt
+# extern in ~/.claude.json registriert).
 MEMORY_SEARCH_WERKZEUG = "mcp__memory-hub__memory_search"
 CODE_SUCHEN_WERKZEUG = "mcp__code-index__code_suchen"
 NACHSCHLAGE_WERKZEUGE = {MEMORY_SEARCH_WERKZEUG, CODE_SUCHEN_WERKZEUG}
@@ -315,6 +316,14 @@ MELDUNG_SUCHPFLICHT = (
     "Erst nachschlagen: rufe memory_search mit Stichworten zum Auftrag und "
     "code_suchen zur betroffenen Stelle auf, dann aendere."
 )
+
+# Wie oft und wie lange _nachschlage_werkzeuge_lesen auf get_mcp_status()
+# wartet (Block 63): direkt nach connect() melden MCP-Server sich noch als
+# "pending", das Verbinden laeuft im Hintergrund weiter - gemessen rund eine
+# halbe Sekunde fuer memory-hub/code-index. Ohne kurzes Nachfragen waere die
+# Liste bei jeder Verbindung leer.
+NACHSCHLAGE_STATUS_VERSUCHE = 6
+NACHSCHLAGE_STATUS_WARTEZEIT = 0.5
 
 
 # Ordner fuer das Auftragsprotokoll, relativ zum Projekt
@@ -456,10 +465,14 @@ class Sitzung:
 
     def _suche_ersparnis_satz(self) -> str:
         """Fuer 'Wo stehen wir?' (F2) - dieselbe Zahl wie in der Kopfzeile,
-        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py."""
+        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py. Ein
+        negativer Wert heisst "teurer als Volltext", nicht "negativ gespart"
+        (Block 63, wie core/kopfzeile.py::suchersparnis_zeigen)."""
         prozent = suche_ersparnis_prozent()
         if prozent is None:
             return "Suche gespart: noch nicht ermittelbar."
+        if prozent < 0:
+            return f"Suche {abs(prozent)} Prozent teurer als Volltext."
         return f"Suche gespart: {prozent} Prozent."
 
     def stand(self) -> str:
@@ -1065,18 +1078,44 @@ class Sitzung:
         die MCP-Server nicht verfuegbar, gilt die Pflicht nicht, statt jeden
         Auftrag in eine Ablehnungsschleife laufen zu lassen. Scheitert die
         Abfrage selbst, wird sicherheitshalber angenommen, dass nichts
-        verbunden ist - die Pflicht entfaellt dann, statt zu blockieren."""
+        verbunden ist - die Pflicht entfaellt dann, statt zu blockieren.
+
+        Zwei behobene Ursachen (Block 63), warum diese Pruefung bislang immer
+        leer blieb und die Suchpflicht wirkungslos war:
+        1. get_mcp_status() nennt Werkzeuge unpraefixiert (z.B.
+           "memory_search"), NACHSCHLAGE_WERKZEUGE dagegen mit dem Praefix,
+           unter dem Claude Code sie beim Aufruf tatsaechlich nennt
+           ("mcp__<Server>__<Werkzeug>", siehe can_use_tool) - das Praefigieren
+           fehlte hier komplett.
+        2. Direkt nach connect() melden die MCP-Server sich noch als
+           "pending" (der Verbindungsaufbau laeuft im Hintergrund weiter);
+           eine einzelne Abfrage ohne kurzes Nachfragen traf so gut wie immer
+           auf eine noch leere Liste."""
         self._nachschlage_verfuegbar = set()
-        try:
-            status = await self.klient.get_mcp_status()
-        except Exception as fehler:  # noqa: BLE001
-            log.warning("MCP-Status nicht abrufbar, Suchpflicht entfaellt diese Sitzung: %s", fehler)
-            return
-        for server in (status or {}).get("mcpServers", []):
-            if server.get("status") != "connected":
-                continue
-            werkzeugnamen = {w.get("name") for w in (server.get("tools") or [])}
-            self._nachschlage_verfuegbar |= (werkzeugnamen & NACHSCHLAGE_WERKZEUGE)
+        for versuch in range(NACHSCHLAGE_STATUS_VERSUCHE):
+            try:
+                status = await self.klient.get_mcp_status()
+            except Exception as fehler:  # noqa: BLE001
+                log.warning("MCP-Status nicht abrufbar, Suchpflicht entfaellt diese Sitzung: %s", fehler)
+                return
+            for server in (status or {}).get("mcpServers", []):
+                if server.get("status") != "connected":
+                    continue
+                server_name = server.get("name") or ""
+                werkzeugnamen = {
+                    f"mcp__{server_name}__{w.get('name')}"
+                    for w in (server.get("tools") or [])
+                    if w.get("name")
+                }
+                # Vereinigen statt ersetzen: ein in einem frueheren Versuch
+                # bereits gefundenes Werkzeug bleibt erhalten, auch wenn ein
+                # spaeterer Versuch (anderer Server, andere Reihenfolge) es
+                # nicht erneut liefert.
+                self._nachschlage_verfuegbar |= (werkzeugnamen & NACHSCHLAGE_WERKZEUGE)
+            if self._nachschlage_verfuegbar >= NACHSCHLAGE_WERKZEUGE:
+                return  # beide bekannten Werkzeuge gefunden, kein weiteres Warten noetig
+            if versuch < NACHSCHLAGE_STATUS_VERSUCHE - 1:
+                await asyncio.sleep(NACHSCHLAGE_STATUS_WARTEZEIT)
         if not self._nachschlage_verfuegbar:
             log.info("Suchpflicht: kein Nachschlage-Werkzeug verbunden, Pflicht entfaellt diese Sitzung")
 

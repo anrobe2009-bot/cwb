@@ -95,8 +95,13 @@ FREIGABEN_BEISPIELE = ("Freigaben 99",)
 # lesende Bash-Befehle) ein Auftrag im Schnitt braucht, bevor die erste
 # Datei geaendert wird, verglichen mit dem Grundwert vom 21.09.2026 - keine
 # Token-Ersparnis. Unter 5 Auftraegen seit Block C6 steht ein Gedankenstrich
-# statt einer Zahl; die Breite wird an beidem gemessen.
-SUCHERSPARNIS_BEISPIELE = ("Suche gespart: –", "Suche gespart: -100 %")
+# statt einer Zahl. Ein negativer Wert heisst: mehr Lesezugriffe als frueher,
+# nicht "negativ gespart" - dafuer steht seit Block 63 ein eigener Text statt
+# einer verwirrenden negativen Prozentzahl (siehe suchersparnis_zeigen); die
+# Breite wird an allen drei Beispielen gemessen.
+SUCHERSPARNIS_BEISPIELE = (
+    "Suche gespart: –", "Suche gespart: 100 %", "Suche: 999 % teurer als Volltext",
+)
 
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
@@ -443,12 +448,25 @@ class Ausgabekopf(QWidget):
         mit dem Grundwert vom 21.09.2026. Keine Token-Ersparnis - reines
         Nachschauen kostet selbst welche. `prozent` ist None, solange
         weniger als 5 Auftraege seit Block C6 vorliegen; dann steht ein
-        Gedankenstrich da. Nicht gesprochen."""
+        Gedankenstrich da. Ein negativer Wert heisst: der aktuelle Schnitt
+        liegt UEBER dem Grundwert, es wird also nichts gespart, sondern mehr
+        gelesen als frueher - seit Block 63 steht dafuer "Suche: N % teurer
+        als Volltext" statt einer verwirrenden negativen Prozentzahl wie
+        "gespart: -126 %". Nicht gesprochen."""
         try:
             if prozent is None:
                 self.suchersparnis.setText("Suche gespart: –")
                 satz = ("Suche gespart: noch nicht ermittelbar, weniger als "
                         "5 Aufträge seit Block C6.")
+            elif prozent < 0:
+                teurer = abs(prozent)
+                self.suchersparnis.setText(f"Suche: {teurer} % teurer als Volltext")
+                satz = (
+                    f"Suche {teurer} Prozent teurer als reine Volltextsuche: "
+                    "mehr Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) "
+                    "vor der ersten Dateiänderung als der Grundwert vom "
+                    "21.09.2026 - keine Token-Ersparnis."
+                )
             else:
                 self.suchersparnis.setText(f"Suche gespart: {prozent} %")
                 satz = (
