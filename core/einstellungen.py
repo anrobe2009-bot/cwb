@@ -1130,7 +1130,10 @@ class EinstellungenFenster(QDialog):
     def _gruppe_modell(self) -> Gruppe:
         """Welches Modell Claude Code fuer Auftraege in diesem Projekt
         benutzt. Die Liste kommt von Claude Code selbst (core/modelle.py);
-        vor der ersten Verbindung steht hier nur die Rueckfallliste."""
+        vor der ersten Verbindung steht hier nur die Rueckfallliste. Jeder
+        Eintrag nennt neben dem deutschen Kurznamen zusaetzlich die genaue
+        Modellkennung (Feld 'voll', z.B. 'claude-opus-5[1m]'), wie sie auch
+        im Log steht (Block 61, Teil C)."""
         gruppe = Gruppe(
             "Modell", "Wirkt sofort, die laufende Sitzung wird neu verbunden."
         )
@@ -1144,11 +1147,13 @@ class EinstellungenFenster(QDialog):
         for eintrag in self._modelle:
             name = eintrag.get("name") or eintrag.get("wert", "")
             hinweis = eintrag.get("hinweis", "")
-            self.modell_wahl.addItem(name, eintrag.get("wert", ""))
+            voll = eintrag.get("voll") or eintrag.get("wert", "")
+            anzeige = f"{name} — {voll}" if voll and voll != name else name
+            self.modell_wahl.addItem(anzeige, eintrag.get("wert", ""))
             stelle = self.modell_wahl.count() - 1
             self.modell_wahl.setItemData(stelle, hinweis, Qt.ToolTipRole)
             self.modell_wahl.setItemData(
-                stelle, f"{name}. {hinweis}", Qt.AccessibleDescriptionRole
+                stelle, f"{anzeige}. {hinweis}", Qt.AccessibleDescriptionRole
             )
         stelle = (
             self.modell_wahl.findData(self._modell_aktuell)
@@ -1157,6 +1162,31 @@ class EinstellungenFenster(QDialog):
         self.modell_wahl.setCurrentIndex(max(0, stelle))
         self.modell_wahl.currentIndexChanged.connect(self._modell_gewechselt)
         gruppe.zeile("Modell", self.modell_wahl)
+
+        # Eigene Modellkennung von Hand (Block 61, Teil C): fuer Modelle, die
+        # Claude Code in seiner Liste nicht anbietet. Geht denselben Weg wie
+        # die Combobox-Auswahl - fenster.py._modell_waehlen nimmt jede
+        # Kennung entgegen, auch eine unbekannte (core/modelle.py,
+        # eintrag_suchen liefert dann einen Rueckfall-Eintrag).
+        self.modell_frei_feld = QLineEdit()
+        self.modell_frei_feld.setObjectName("modellfreifeld")
+        self.modell_frei_feld.setAccessibleName("Eigene Modellkennung")
+        self.modell_frei_feld.setAccessibleDescription(
+            "Modellkennung von Hand eintragen, für Modelle, die Claude Code "
+            "in seiner Liste nicht anbietet, z.B. claude-opus-5[1m]"
+        )
+        self.modell_frei_feld.setPlaceholderText("z. B. claude-opus-5[1m]")
+        self.modell_frei_feld.returnPressed.connect(self._modell_frei_uebernehmen)
+        gruppe.zeile("Eigene Kennung", self.modell_frei_feld)
+
+        modell_uebernehmen = QPushButton("Übernehmen")
+        modell_uebernehmen.setObjectName("probe")
+        modell_uebernehmen.setAccessibleName("Eigene Modellkennung übernehmen")
+        modell_uebernehmen.setAccessibleDescription(
+            "Verbindet die Sitzung neu mit der eingetragenen Modellkennung"
+        )
+        modell_uebernehmen.clicked.connect(self._modell_frei_uebernehmen)
+        gruppe.feld(modell_uebernehmen)
         return gruppe
 
     def _modell_gewechselt(self, stelle: int) -> None:
@@ -1169,6 +1199,17 @@ class EinstellungenFenster(QDialog):
                 self._modell_waehlen(self._modell_aktuell)
             except Exception as fehler:  # noqa: BLE001
                 log.exception("Modellwechsel nicht weitergereicht: %s", fehler)
+
+    def _modell_frei_uebernehmen(self) -> None:
+        wert = self.modell_frei_feld.text().strip()
+        if not wert or wert == self._modell_aktuell:
+            return
+        self._modell_aktuell = wert
+        if callable(self._modell_waehlen):
+            try:
+                self._modell_waehlen(self._modell_aktuell)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Eigene Modellkennung nicht weitergereicht: %s", fehler)
 
     # -- Bereich Kacheln ------------------------------------------------------
 

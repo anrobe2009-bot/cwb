@@ -32,6 +32,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    McpSdkServerConfig,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -48,7 +49,7 @@ try:
     from .grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
-    from .pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from .pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
     from .sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
     from .wissen import (
         HINWEIS_GEDAECHTNIS,
@@ -61,7 +62,7 @@ except ImportError:
     from grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
-    from pfade import INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
     from sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
     from wissen import (
         HINWEIS_GEDAECHTNIS,
@@ -108,6 +109,25 @@ def _unterdruecke_konsolenfenster() -> None:
 
 
 _unterdruecke_konsolenfenster()
+
+
+def _memory_hub_server() -> McpSdkServerConfig | None:
+    """Baut den eingebetteten Memory-Hub-Server (Block 61, Teil A): die
+    sechs Werkzeuge memory_search/memory_add/memory_list/memory_forget/
+    memory_aufraeumen/memory_projects laufen seither im selben Prozess wie
+    CWB (memory_hub/sdk_werkzeuge.py, claude_agent_sdk.create_sdk_mcp_server)
+    statt als externer, in ~/.claude.json registrierter MCP-Server. Scheitert
+    das Laden, verbindet die Sitzung ohne diese Werkzeuge weiter - CWB bleibt
+    in jedem Fall bedienbar, nur das Gedaechtnis fehlt dann diese Sitzung."""
+    try:
+        pfad = str(HUB_ORDNER)
+        if pfad not in sys.path:
+            sys.path.insert(0, pfad)
+        import sdk_werkzeuge  # noqa: PLC0415
+        return sdk_werkzeuge.server()
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Memory Hub nicht eingebettet, Sitzung verbindet ohne: %s", fehler)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -443,14 +463,17 @@ class Sitzung:
         return f"Suche gespart: {prozent} Prozent."
 
     def stand(self) -> str:
-        """Antwort auf die Taste 'Wo stehen wir?'."""
+        """Antwort auf die Taste 'Wo stehen wir?'. Nennt seit Block 61 (Teil
+        C) den genauen, aufgeloesten Modellnamen (z.B. 'claude-opus-5[1m]'),
+        nicht nur den Familiennamen der Auswahl."""
+        modell = f" Modell {self.modell_name}." if self.modell_name else ""
         if not self.laeuft:
-            return (f"Nichts laeuft gerade. {self.verbrauch['sitzung']} Token in dieser Sitzung, "
+            return (f"Nichts laeuft gerade.{modell} {self.verbrauch['sitzung']} Token in dieser Sitzung, "
                     f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._suche_ersparnis_satz()}")
         anzahl = len(self.schritte)
         dauer = int((datetime.now() - self.begonnen).total_seconds()) if self.begonnen else 0
         letzte = self.schritte[-1].ansage if self.schritte else "gestartet"
-        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden. Zuletzt: {letzte}. "
+        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden.{modell} Zuletzt: {letzte}. "
                 f"{self._suche_ersparnis_satz()}")
 
     def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
@@ -902,6 +925,12 @@ class Sitzung:
         # geht als Startparameter an den CLI-Unterprozess und laesst sich dort
         # nicht nachtraeglich erweitern.
         zusatzordner = [eintrag["pfad"] for eintrag in freigaben_lesen()]
+        # Memory Hub eingebettet statt als externer, in ~/.claude.json
+        # registrierter Prozess (Block 61, Teil A). Scheitert das Laden,
+        # verbindet die Sitzung ohne diese Werkzeuge weiter (siehe
+        # _memory_hub_server).
+        mcp_server = _memory_hub_server()
+        mcp_servers = {"memory-hub": mcp_server} if mcp_server else {}
         return ClaudeAgentOptions(
             cwd=str(self.wache.projekt.pfad),
             add_dirs=zusatzordner,
@@ -912,6 +941,7 @@ class Sitzung:
             model=self.modell,
             include_partial_messages=False,
             stderr=self.fehlerstrom.aufnehmen,
+            mcp_servers=mcp_servers,
             # Werkzeugergebnisse mit eingebetteten Bildern ueberschreiten die
             # Vorgabe des SDK (1 MB) leicht; dann stirbt dessen Lesefaden
             # und die Sitzung liefert still nichts mehr (siehe auftrag()).

@@ -231,11 +231,14 @@ DATENORDNER = _datenordner.datenordner()
 
 # -- Memory Hub ---------------------------------------------------------------
 # Festes Werkzeug, braucht keine Einstellung und keinen Vorschlag. Der Code
-# liegt in memory_hub/, die Datenbank im Datenordner. `memory.db` legt
-# core/wissen.py bzw. memory_hub/memory_db.py selbst an, wenn sie fehlt
+# liegt in memory_hub/ (HUB_ORDNER), die Datenbank im Datenordner. `memory.db`
+# legt core/wissen.py bzw. memory_hub/memory_db.py selbst an, wenn sie fehlt
 # (siehe dort, CREATE TABLE IF NOT EXISTS) - ein frischer CWB-Start ohne
-# Datei ist der Normalfall bei einer verschenkten Kopie.
+# Datei ist der Normalfall bei einer verschenkten Kopie. Seit Block 61 bietet
+# core/sitzung.py die Werkzeuge (memory_hub/sdk_werkzeuge.py) direkt beim
+# Verbinden ueber das Agent SDK an, kein externer MCP-Prozess mehr noetig.
 
+HUB_ORDNER = CWB_WURZEL / "memory_hub"
 HUB_DATENBANK = _datenordner.hub_datenbank()
 
 
