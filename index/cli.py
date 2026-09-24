@@ -2,11 +2,19 @@
 # Keine feste Projektliste: CWB ruft das mit dem gerade offenen Projektpfad
 # auf, egal ob der schon einmal gesehen wurde oder brandneu ist.
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
-import indexer
+# Noetig, weil core/sitzung.py diese Datei per sys.executable als Unterprozess
+# startet: das eingebettete Python der installierten Fassung liest seinen
+# Suchpfad ausschliesslich aus pythonXXX._pth und haengt dabei - anders als
+# ein normaler Python-Start - den Ordner des Skripts selbst nicht an
+# sys.path, wodurch "import indexer" mit ModuleNotFoundError scheitert
+# (gleiches Muster wie mcp_server.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import indexer  # noqa: E402
 
 
 def _drucken(zeile: str) -> None:

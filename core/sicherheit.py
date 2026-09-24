@@ -668,16 +668,29 @@ class GitNetz:
         return any(t in ERZEUGTE_ORDNER for t in teile)
 
     def zuruecksetzen(self, punkt: Sicherungspunkt) -> Urteil:
-        """Stellt den Stand des Sicherungspunkts wieder her."""
+        """Stellt den Stand des Sicherungspunkts wieder her.
+
+        `git clean` ist reine Aufraeumarbeit nach dem eigentlichen Rollback
+        (`git reset --hard`, versionierte Dateien). Scheitert `clean` an
+        einem einzelnen Pfad (z.B. gesperrt von einem anderen Prozess), war
+        der Rollback selbst trotzdem erfolgreich - das darf nicht als
+        gescheitert gemeldet werden, nur der betroffene Pfad wird genannt."""
         if not self.ist_repository():
             return Urteil(Stufe.VERBOTEN, "Kein Repository vorhanden")
         try:
             self._git("reset", "--hard", punkt.kennung)
-            self._git("clean", "-fd")
         except RuntimeError as fehler:
             log.error("Rollback gescheitert: %s", fehler)
             return Urteil(Stufe.VERBOTEN, f"Zuruecksetzen gescheitert: {fehler}")
         log.info("Zurueckgesetzt auf %s", punkt.kennung[:8])
+        ergebnis = self._git("clean", "-fd", pruefen=False)
+        if ergebnis.returncode != 0:
+            meldung = ergebnis.stderr.strip() or "unbekannter Grund"
+            log.warning("Aufraeumen nach Rollback unvollstaendig: %s", meldung)
+            return Urteil(
+                Stufe.FREI,
+                f"Stand wiederhergestellt: {punkt.ansage()}. Nicht aufgeraeumt: {meldung}",
+            )
         return Urteil(Stufe.FREI, f"Stand wiederhergestellt: {punkt.ansage()}")
 
 

@@ -533,8 +533,26 @@ class Wissen:
 
     # -- Einrichten ---------------------------------------------------------
 
+    def _verschachtelter_vorfahr(self) -> Path | None:
+        """Findet einen Vorfahrenordner mit eigenem wissen/tagebuch.md und
+        CLAUDE.md. Verhindert, dass ein falsch übergebener Unterordner
+        (z.B. core/ statt des Projektwurzelordners) ein eigenes, verwaistes
+        Wissen bekommt - so entstand am 09.09.2026 core/wissen."""
+        for vorfahr in self.pfad.parents:
+            if (vorfahr / "wissen" / "tagebuch.md").exists() and (vorfahr / "CLAUDE.md").exists():
+                return vorfahr
+        return None
+
     def einrichten(self) -> bool:
         """Legt Ordner und Dateien an, falls sie fehlen. Ändert nichts Bestehendes."""
+        vorfahr = self._verschachtelter_vorfahr()
+        if vorfahr is not None:
+            log.error(
+                "Projektpfad %s liegt unter dem bestehenden Projekt %s - "
+                "kein eigenes Wissen angelegt (vermutlich falscher Projektpfad)",
+                self.pfad, vorfahr,
+            )
+            return False
         try:
             self.archiv.mkdir(parents=True, exist_ok=True)
             if not self.grundlagen_datei.exists():
