@@ -47,6 +47,7 @@ from claude_agent_sdk import (
 
 try:
     from .grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
+    from .landkarte import landkarte_erzeugen
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
     from .pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
@@ -60,6 +61,7 @@ try:
     )
 except ImportError:
     from grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
+    from landkarte import landkarte_erzeugen
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
     from pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
@@ -984,6 +986,22 @@ class Sitzung:
         log.info("Sitzung verbunden fuer %s, Modell %s", self.wache.projekt.pfad, self.modell_name)
 
         self._code_index_anstossen()
+        self._landkarte_anstossen()
+
+    def _landkarte_anstossen(self) -> None:
+        """Erzeugt/aktualisiert wissen/landkarte.md im Hintergrund (core/
+        landkarte.py), ohne die Sitzung zu blockieren. Anders als beim
+        Code-Index gibt es hier keine Ansage und keinen Log-Eintrag im
+        Ausgabefeld: Zeilen zaehlen und die erste Kommentarzeile lesen
+        braucht keine schweren Abhaengigkeiten, ein eigener Prozess waere
+        hier nur Overhead, und eine zusaetzliche Stimme neben "Projekt
+        geoeffnet" und der Index-Ansage waere nur Laerm. Fehler landen
+        ausschliesslich im Log (core/landkarte.py faengt sie ohnehin ab)."""
+        threading.Thread(
+            target=landkarte_erzeugen,
+            args=(self.wache.projekt.pfad, self.wache.projekt.name),
+            daemon=True,
+        ).start()
 
     def _code_index_anstossen(self) -> None:
         """Stoesst das Nachindizieren des offenen Projekts an, ohne die

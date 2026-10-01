@@ -24,8 +24,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:
+    from .landkarte import claude_md_hinweis_sicherstellen
     from .pfade import HUB_DATENBANK, INDEX_ORDNER
 except ImportError:
+    from landkarte import claude_md_hinweis_sicherstellen
     from pfade import HUB_DATENBANK, INDEX_ORDNER
 
 log = logging.getLogger("cwb.wissen")
@@ -568,6 +570,11 @@ class Wissen:
                 self.offen_datei.write_text(
                     f"# Offene Punkte {self.name}\n\n", encoding="utf-8"
                 )
+            # Ergaenzt den Landkarte-Hinweis (core/landkarte.py) in jeder
+            # CLAUDE.md, die schon existiert - egal ob gerade erst angelegt
+            # oder ein Zusatzprojekt mit eigener, bestehender CLAUDE.md. Tut
+            # nichts, wenn der Hinweis schon drinsteht.
+            claude_md_hinweis_sicherstellen(self.pfad)
             return True
         except OSError as fehler:
             log.error("Wissensordner nicht anlegbar: %s", fehler)

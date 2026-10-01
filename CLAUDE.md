@@ -147,3 +147,5 @@ Einstiegspunkt ist `fenster.main()`.
 ## Landkarte
 Vor jeder Suche im Code zuerst wissen/landkarte.md lesen: Sie sagt, welche Datei wofür zuständig ist. Neue Dateien dort mit einer Zeile eintragen.
 
+## Landkarte
+Vor jeder Suche im Code zuerst wissen/landkarte.md lesen. Neue Dateien dort mit einer Zeile eintragen.

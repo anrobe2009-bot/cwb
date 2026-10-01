@@ -251,6 +251,15 @@ INDEX_ORDNER = CWB_WURZEL / "index"
 INDEX_DATEN = _datenordner.index_datenordner()
 
 
+# -- Landkarte ------------------------------------------------------------------
+# core/landkarte.py erzeugt pro Projekt wissen/landkarte.md (welche Datei
+# wofuer). Das Manifest zur Aenderungserkennung - dieselbe Methode wie beim
+# Code-Index, Datei-Stat statt Inhalts-Hash - liegt hier im Datenordner,
+# nicht im Projekt selbst.
+
+LANDKARTE_DATEN = DATENORDNER / "landkarte"
+
+
 # -- Eingangsordner -----------------------------------------------------------
 # Aufträge, die nicht über die Zwischenablage hereinkommen, sondern als Datei
 # abgelegt werden (Zeitschaltung, später die Brücke zu claude.ai im Browser -
