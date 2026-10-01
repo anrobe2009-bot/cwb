@@ -105,5 +105,60 @@ class KontingentAusLimitTest(unittest.TestCase):
         self.assertIsNone(ergebnis["rate_limit_type"])
 
 
+class SparmodusErforderlichTest(unittest.TestCase):
+    """Block 77, Punkt 3: core/sitzung.py, _sparmodus_erforderlich()."""
+
+    def test_keine_meldung_kein_sparmodus(self):
+        self.assertFalse(sitzung._sparmodus_erforderlich(None))
+
+    def test_allowed_kein_sparmodus(self):
+        self.assertFalse(sitzung._sparmodus_erforderlich({"status": "allowed"}))
+
+    def test_allowed_warning_loest_sparmodus_aus(self):
+        self.assertTrue(sitzung._sparmodus_erforderlich({"status": "allowed_warning"}))
+
+    def test_rejected_ist_kein_sparmodus_sondern_kontingent_pause(self):
+        self.assertFalse(sitzung._sparmodus_erforderlich({"status": "rejected"}))
+
+
+class KontingentZustandBerechnenTest(unittest.TestCase):
+    """Block 77, Punkt 4: core/sitzung.py, _kontingent_zustand_berechnen()."""
+
+    def test_ohne_jede_meldung_ist_normal_mit_leerem_text(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(None, None)
+        self.assertEqual(ergebnis["stufe"], "normal")
+        self.assertEqual(ergebnis["text"], "")
+
+    def test_beide_allowed_ist_normal(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed"}, {"status": "allowed"})
+        self.assertEqual(ergebnis["stufe"], "normal")
+        self.assertIn("normal", ergebnis["text"].lower())
+
+    def test_woche_knapp_ergibt_knapp(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed"}, {"status": "allowed_warning"})
+        self.assertEqual(ergebnis["stufe"], "knapp")
+        self.assertIn("knapp", ergebnis["text"].lower())
+
+    def test_funf_stunden_knapp_ergibt_ebenfalls_knapp(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed_warning"}, None)
+        self.assertEqual(ergebnis["stufe"], "knapp")
+
+    def test_rejected_geht_vor_knapp_und_nennt_uhrzeit(self):
+        freigabe = datetime(2026, 10, 1, 18, 30).timestamp()
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed_warning"}, {"status": "rejected", "resets_at": freigabe})
+        self.assertEqual(ergebnis["stufe"], "erschoepft")
+        self.assertIn("18:30", ergebnis["text"])
+
+    def test_rejected_ohne_freigabezeit_ohne_uhrzeit_im_text(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            None, {"status": "rejected", "resets_at": None})
+        self.assertEqual(ergebnis["stufe"], "erschoepft")
+        self.assertNotIn(":", ergebnis["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

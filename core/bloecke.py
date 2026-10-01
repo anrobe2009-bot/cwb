@@ -37,6 +37,18 @@ _ENDE_MUSTER = re.compile(r"^#?\s*Ende\s+Block\s+(\d+)\s*$", re.IGNORECASE)
 
 BLOCK_ZAEHLER_SCHLUESSEL = "block_zaehler"
 
+# Block 77, Punkt 1 und 3: "Modell: Opus/Sonnet/Haiku" und "Dringend: ja" -
+# eigene Zeilen direkt unter "Block N" bzw. "Projekt: X" (core/zuordnung.py,
+# bleibt unberuehrt). Gross-/Kleinschreibung egal, wie bei den Block-Zeilen.
+_MODELL_MUSTER = re.compile(r"^Modell:\s*(Opus|Sonnet|Haiku)\s*$", re.IGNORECASE)
+_DRINGEND_MUSTER = re.compile(r"^Dringend:\s*ja\s*$", re.IGNORECASE)
+
+# Nur innerhalb der ersten KOPF_ZEILEN_MAX Zeilen (nach block_erkennen, die
+# Block-Zeile ist dann schon weg) wird nach "Modell:"/"Dringend:" gesucht -
+# weiter unten im eigentlichen Auftragstext koennte ein aehnlicher Satz
+# faelschlich als Metadatenzeile gelesen werden.
+KOPF_ZEILEN_MAX = 6
+
 
 def block_erkennen(art: str, inhalt: str) -> tuple[int | None, str, bool]:
     """Zerlegt `inhalt` (bereits ohne die #CODE#/#RUN#/#ADMIN#/#BILD#-Zeile,
@@ -76,6 +88,32 @@ def block_erkennen(art: str, inhalt: str) -> tuple[int | None, str, bool]:
         return nummer, "\n".join(rest).strip("\n"), False
     bereinigt = rest[:ende_index] + rest[ende_index + 1:]
     return nummer, "\n".join(bereinigt).strip("\n"), True
+
+
+def kopf_metadaten_entfernen(inhalt: str) -> tuple[str, str | None, bool]:
+    """Erkennt und entfernt die Zeilen 'Modell: Opus/Sonnet/Haiku' und
+    'Dringend: ja' aus den ersten KOPF_ZEILEN_MAX Zeilen von `inhalt` (Block
+    77, Punkte 1 und 3) - unabhaengig von ihrer Reihenfolge und ob
+    "Projekt: X" (core/zuordnung.py) dazwischensteht; diese Zeile bleibt
+    unangetastet, sie wird fuer Claude Code gebraucht.
+
+    Rueckgabe: (Inhalt ohne die beiden Zeilen, Modellwunsch als CLI-Kurzname
+    "opus"/"sonnet"/"haiku" oder None ohne Zeile, Dringend ja/nein)."""
+    zeilen = inhalt.split("\n")
+    modell_wunsch: str | None = None
+    dringend = False
+    behalten: list[str] = []
+    for index, zeile in enumerate(zeilen):
+        if index < KOPF_ZEILEN_MAX:
+            treffer = _MODELL_MUSTER.match(zeile.strip())
+            if treffer:
+                modell_wunsch = treffer.group(1).lower()
+                continue
+            if _DRINGEND_MUSTER.match(zeile.strip()):
+                dringend = True
+                continue
+        behalten.append(zeile)
+    return "\n".join(behalten), modell_wunsch, dringend
 
 
 def naechste_block_nummer(projekt: str) -> int:

@@ -404,6 +404,20 @@ def platzwort(platz: int) -> str:
     return PLATZWOERTER.get(int(platz), str(platz))
 
 
+# Block 77, Punkt 2: ab wie vielen Fehlschlaegen eines Auftrags aus Eingang/
+# Bruecke/Leitstand in Folge der naechste (dritte) Versuch mit Opus laeuft.
+HOCHSTUFUNG_AB_FEHLSCHLAEGEN = 2
+
+
+def _modell_ist_opus(wert: str) -> bool:
+    """Block 77, Punkt 2: ob der in F12 gewaehlte Standard (CLI-Kurzname wie
+    "default"/"opus[1m]"/"opus"/"sonnet"/"haiku") schon Opus ist - dann
+    hochstuft nichts mehr. "default"/leer zaehlt mit: core/modelle.py loest
+    ihn (Stand 05.09.2026) auf Opus auf."""
+    wert = (wert or "default").lower()
+    return wert in ("", "default") or "opus" in wert
+
+
 def datei_in_zwischenablage(pfad: Path) -> bool:
     """Legt eine Datei als Dateiverweis in die Windows-Zwischenablage
     (CF_HDROP) - so, wie beim Kopieren einer Datei im Explorer. Andere
@@ -534,7 +548,7 @@ class WarteschlangenFenster(QDialog):
     daneben bestehen."""
 
     def __init__(self, warteschlange: list[tuple[str, list[Path], int | None, int | None,
-                                                  Path | None]],
+                                                  Path | None, str | None, str | None]],
                  eltern=None):
         super().__init__(eltern)
         self._warteschlange = warteschlange
@@ -574,7 +588,8 @@ class WarteschlangenFenster(QDialog):
 
     def _liste_fuellen(self) -> None:
         self.liste.clear()
-        for nummer, (text, _bilder, _bruecke_nummer, _block_nummer, _eingang_datei) in enumerate(
+        for nummer, (text, _bilder, _bruecke_nummer, _block_nummer, _eingang_datei,
+                     _modell_wunsch, _modell_grund) in enumerate(
                 self._warteschlange, start=1):
             kurz = " ".join(text.split())[:80]
             self.liste.addItem(f"Platz {nummer}: {kurz}")
@@ -683,6 +698,14 @@ class Werkbank(QMainWindow):
         # wartenden #CODE#-Auftrags, bis _fertig() sie in den Bericht
         # uebernimmt - None, wenn der Auftrag keine Nummer trug.
         self._aktueller_block_nummer: int | None = None
+        # Block 77, Punkte 1/2: der einmalige Modellwunsch (CLI-Kurzname wie
+        # "opus") des gerade laufenden oder wartenden Auftrags sowie, nur bei
+        # einer Hochstufung nach Fehlschlaegen (nicht bei einer ausdruecklichen
+        # "Modell:"-Zeile), ein kurzer Grund fuer Ansage und Bericht - beide
+        # None im Regelfall. Gesetzt in _auftrag_starten, verbraucht in
+        # _fertig (Bericht) bzw. _kontingent_pause_behandeln (Fortsetzung).
+        self._laufender_modell_wunsch: str | None = None
+        self._laufender_modell_grund: str | None = None
         # Block 70, Teil A: die laeuft/-Datei (core/eingangsordner.py) eines
         # laufenden oder wartenden Auftrags aus dem Eingangsordner - None,
         # wenn der Auftrag ueber die Zwischenablage oder das Eingabefeld kam.
@@ -729,6 +752,26 @@ class Werkbank(QMainWindow):
         # aufbau mit unveraendertem Modell (z.B. nach einer Kontingent-Pause)
         # dieselbe Ansage wiederholt.
         self._modell_angesagt: tuple | None = None
+        # Block 77, Punkt 1: haelt mit, wieviele der naechsten Meldungen aus
+        # _modell_verbunden zu einem einmaligen Modellwechsel fuer genau
+        # einen Auftrag gehoeren (Hinwechsel und Ruecklwechsel zum Standard,
+        # siehe _auftrag_starten) - sie werden dort stumm gehalten, die eigene
+        # Ansage ("Modell X für Block N.") uebernimmt _auftrag_starten selbst.
+        self._modell_eigenauftrag_rest = 0
+        # Block 77, Punkt 2: wieviele Auftraege aus Eingang/Bruecke/Leitstand
+        # (also mit gesetzter eingang_datei, siehe _absenden) in Folge mit
+        # einem Fehler endeten - ab 2 laeuft der naechste (dritte) mit Opus,
+        # siehe _absenden und _fertig. Ein manuell abgeschickter Auftrag
+        # (Zwischenablage/Eingabefeld) zaehlt nicht mit und setzt ihn auch
+        # nicht zurueck.
+        self._fehlschlaege_eingang_folge = 0
+        # Block 77, Punkt 3: Sparmodus bei knappem Wochenkontingent -
+        # solange an, laufen nur noch Auftraege mit der Zeile "Dringend: ja"
+        # (siehe _absenden), alle anderen sammeln sich in
+        # self._sparmodus_wartend statt in self._warteschlange und werden
+        # erst eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
+        self._sparmodus_aktiv = False
+        self._sparmodus_wartend: list[tuple] = []
         # Auftraege, die abgeschickt wurden, bevor der Arbeitsfaden stand.
         # Sie gehen nicht verloren, sondern laufen los, sobald er da ist.
         self._wartende_auftraege: list[tuple[str, list[Path]]] = []
@@ -741,9 +784,13 @@ class Werkbank(QMainWindow):
         # fuenfte die laeuft/-Datei aus dem Eingangsordner (core/
         # eingangsordner.py, Block 70 Teil A, None ausser bei einem Auftrag
         # von dort) - erst abschliessen() auf diese Datei macht den Auftrag
-        # endgueltig erledigt, nicht schon das Einreihen hier.
+        # endgueltig erledigt, nicht schon das Einreihen hier. Das sechste und
+        # siebte Glied sind Modellwunsch und -grund fuer genau diesen einen
+        # Auftrag (Block 77, Punkt 1/2, core/bloecke.py "Modell: …" bzw.
+        # Hochstufung nach Fehlschlaegen) - beide None ohne Wunsch.
         self._warteschlange: list[
-            tuple[str, list[Path], int | None, int | None, Path | None]
+            tuple[str, list[Path], int | None, int | None, Path | None,
+                  str | None, str | None]
         ] = []
         # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
         # erkennt _absenden, ob der neue Auftrag warten muss.
@@ -1713,6 +1760,15 @@ class Werkbank(QMainWindow):
         ausdruecklich statt nur den neuen Namen zu nennen."""
         lang, kurz = anzeige_name(modell_name)
         self.ausgabekopf.modell_zeigen(lang, kurz)
+        if self._modell_eigenauftrag_rest > 0:
+            # Block 77, Punkte 1/2: Hin- oder Rueckwechsel eines einmaligen
+            # Modellwechsels fuer genau einen Auftrag (_auftrag_starten) -
+            # die Kopfzeile zeigt das neue Modell, angesagt wird nichts
+            # zusaetzlich: entweder hat _auftrag_starten den Satz schon
+            # gesprochen (ausdruecklicher Wunsch), oder es war eine stille
+            # Hochstufung.
+            self._modell_eigenauftrag_rest -= 1
+            return
         erwartet_voll = eintrag_suchen(self.modelle, self.modell).get("voll") or ""
         abweichend = bool(erwartet_voll) and erwartet_voll != modell_name
         erwartet_lang = anzeige_name(erwartet_voll)[0] if erwartet_voll else ""
@@ -1999,6 +2055,11 @@ class Werkbank(QMainWindow):
                 "bruecke_nummer": bruecke_nummer,
                 "block_nummer": block_nummer,
                 "eingang_datei": eingang_datei,
+                # Block 77: ein einmaliger Modellwunsch fuer diesen Auftrag
+                # (Punkt 1) bzw. eine Hochstufung (Punkt 2) gilt auch fuer
+                # den Fortsetzungsversuch nach der Pause.
+                "modell_wunsch": self._laufender_modell_wunsch,
+                "modell_grund": self._laufender_modell_grund,
             }
         else:
             log.info("Kontingent weiterhin erschöpft, neue Freigabezeit übernommen")
@@ -2064,6 +2125,7 @@ class Werkbank(QMainWindow):
             f"{KONTINGENT_VORSPANN}{info['text']}", info["bilder"], ansagen=False,
             bruecke_nummer=info["bruecke_nummer"], block_nummer=info["block_nummer"],
             eingang_datei=info.get("eingang_datei"),
+            modell_wunsch=info.get("modell_wunsch"), modell_grund=info.get("modell_grund"),
         )
 
     def _bericht_bauen(self, bilanz: dict, block_nummer: int | None = None) -> str:
@@ -3003,6 +3065,24 @@ class Werkbank(QMainWindow):
                 art="fehler",
             )
             return
+
+        # Block 77, Punkte 1 und 3: "Modell: …" und "Dringend: ja" gelten nur
+        # fuer Auftraege, die tatsaechlich an Claude Code gehen (#RUN#/
+        # #ADMIN#/#BILD# sind hier laengst per return verlassen, siehe oben).
+        text, modell_wunsch, dringend = kopf_metadaten_entfernen(text)
+        modell_grund: str | None = None
+        # Punkt 2: Hochstufung nach Fehlschlaegen - nur fuer Auftraege aus
+        # Eingang, Bruecke oder Leitstand (erkennbar an eingang_datei, siehe
+        # core/eingangsordner.py) und nur ohne ausdruecklichen Modellwunsch,
+        # der geht immer vor.
+        if (modell_wunsch is None and eingang_datei is not None
+                and self._fehlschlaege_eingang_folge >= HOCHSTUFUNG_AB_FEHLSCHLAEGEN
+                and not _modell_ist_opus(self.modell)):
+            modell_wunsch = "opus"
+            modell_grund = (
+                f"nach {self._fehlschlaege_eingang_folge} Fehlschlägen in Folge hochgestuft"
+            )
+
         if not self._holt_vorgemerkten:
             # Zwei Regeln halten einen Auftrag hier auf: er nennt Dateien, die
             # es hier nicht gibt, wohl aber in einem anderen Projekt - oder er
@@ -3048,13 +3128,36 @@ class Werkbank(QMainWindow):
         self.bilder.clear()
         self.eingabe.clear()
 
+        if self._sparmodus_aktiv and not dringend:
+            # Block 77, Punkt 3: Sparmodus bei knappem Wochenkontingent -
+            # nur Auftraege mit "Dringend: ja" laufen, alle anderen sammeln
+            # sich hier statt in self._warteschlange und werden erst
+            # eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
+            self._sparmodus_wartend.append(
+                (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
+                 modell_wunsch, modell_grund))
+            satz = "Wochenkontingent knapp, Auftrag wartet, bis das nicht mehr gilt."
+            if vorspann:
+                satz = f"{vorspann} {satz}"
+            log.info("Auftrag im Sparmodus zurueckgestellt: %s", text[:120])
+            self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
+            self._status_zeigen(satz)
+            if block_angesagt:
+                self.sprecher.sprich("Er wartet wegen des Sparmodus.", art="auftrag")
+            else:
+                self.sprecher.sprich(
+                    "Auftrag erhalten, er wartet wegen des Sparmodus.", art="auftrag")
+            return
+
         if self._auftrag_laeuft or self._kontingent_info is not None:
             # Es laeuft schon einer - oder die Sitzung wartet gerade auf ein
             # erschoepftes Kontingent (core/sitzung.py, auftrag(),
             # "kontingent"). Der neue geht nicht verloren und blockiert
             # nichts, sondern reiht sich ein und laeuft los, sobald der
             # vorherige fertig ist.
-            self._warteschlange.append((text, bilder, bruecke_nummer, block_nummer, eingang_datei))
+            self._warteschlange.append(
+                (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
+                 modell_wunsch, modell_grund))
             self._warteschlange_zeigen()
             satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
             if vorspann:
@@ -3081,7 +3184,9 @@ class Werkbank(QMainWindow):
                           ansagen: bool = True, block_angesagt: bool = False,
                           bruecke_nummer: int | None = None,
                           block_nummer: int | None = None,
-                          eingang_datei: Path | None = None) -> None:
+                          eingang_datei: Path | None = None,
+                          modell_wunsch: str | None = None,
+                          modell_grund: str | None = None) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
@@ -3097,11 +3202,25 @@ class Werkbank(QMainWindow):
         gesetzt (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) - gemerkt, bis
         `_fertig()` den Bericht dorthin hochlaedt. `block_nummer` ist die
         Blocknummer (core/bloecke.py, "Block N", None ohne Nummer) - gemerkt,
-        bis `_fertig()` sie in den Bericht schreibt."""
+        bis `_fertig()` sie in den Bericht schreibt.
+
+        `modell_wunsch` (Block 77, Punkte 1/2) ist ein CLI-Kurzname ("opus",
+        "sonnet", "haiku") - verbindet die Sitzung ueber den Arbeitsfaden fuer
+        GENAU diesen Auftrag mit diesem Modell und direkt danach wieder mit
+        dem in F12 gewaehlten Standard (`self.modell`): core/faden.py
+        verarbeitet "modell"- und "auftrag"-Eintraege streng der Reihe nach,
+        darum reicht es, Hin- und Rueckwechsel unmittelbar vor bzw. nach
+        `auftrag_geben` einzureihen. `modell_grund` ist nur bei einer
+        Hochstufung nach Fehlschlaegen gesetzt (Punkt 2) - dann bleibt die
+        Ansage aus (Robert ist in dieser Lage oft nicht am Platz), nur der
+        Bericht bekommt den Vermerk; ohne Grund (ausdruecklicher Wunsch per
+        "Modell: …"-Zeile) wird die Umstellung angesagt."""
         self._auftrag_laeuft = True
         self._bruecke_code_nummer = bruecke_nummer
         self._aktueller_block_nummer = block_nummer
         self._eingang_code_datei = eingang_datei
+        self._laufender_modell_wunsch = modell_wunsch
+        self._laufender_modell_grund = modell_grund
         # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
         # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
         # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
@@ -3122,6 +3241,30 @@ class Werkbank(QMainWindow):
         self.balken.animation_starten()
 
         faden = getattr(self, "faden", None)
+        # Block 77: ein Modellwunsch braucht den Arbeitsfaden, um die Sitzung
+        # umzuschalten - ohne ihn (siehe "faden is None" unten) entfaellt er,
+        # das ist der seltene Fall ganz am Anfang, bevor der erste Faden steht.
+        einmal_modell = modell_wunsch if (faden is not None and modell_wunsch) else None
+        if einmal_modell:
+            lang, _kurz = anzeige_name(einmal_modell)
+            if modell_grund:
+                satz_modell = f"Modell {lang}, {modell_grund}"
+            else:
+                ziel = f"für Block {block_nummer}." if block_nummer is not None \
+                    else "für diesen Auftrag."
+                satz_modell = f"Modell {lang} {ziel}"
+            # Die naechsten zwei Meldungen von _modell_verbunden (Hin- und
+            # Rueckwechsel) bleiben stumm, siehe dort - die Ansage uebernimmt
+            # hier direkt dieser eine Satz.
+            self._modell_eigenauftrag_rest = 2
+            faden.modell_setzen(einmal_modell)
+            log.info("Einmaliger Modellwechsel fuer diesen Auftrag: %s (%s)",
+                     einmal_modell, modell_grund or "ausdruecklicher Wunsch")
+            if modell_grund:
+                self._verlauf_anhaengen(satz_modell, "hinweis")
+            else:
+                self.sprecher.sprich(satz_modell, art="immer")
+                self._verlauf_anhaengen(satz_modell, "hinweis")
         if faden is None:
             # Der Arbeitsfaden steht noch nicht. Der Auftrag wird gemerkt und
             # in _wartende_absenden nachgereicht, sobald es ihn gibt.
@@ -3136,6 +3279,8 @@ class Werkbank(QMainWindow):
         if faden.sitzung is None:
             self._taetigkeit_zeigen("verbindet")
             faden.auftrag_geben(text, bilder)
+            if einmal_modell:
+                faden.modell_setzen(self.modell)
             self._status_zeigen(
                 f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
             if ansagen and not block_angesagt:
@@ -3144,6 +3289,8 @@ class Werkbank(QMainWindow):
         if ansagen and not block_angesagt:
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
         faden.auftrag_geben(text, bilder)
+        if einmal_modell:
+            faden.modell_setzen(self.modell)
 
     def _warteschlange_zeigen(self) -> None:
         """Bringt die Zahl der wartenden Auftraege in die Kopfzeile."""
@@ -3158,7 +3305,8 @@ class Werkbank(QMainWindow):
         self._warteschlange_zeigen()
         if not self._warteschlange:
             return
-        text, bilder, bruecke_nummer, block_nummer, eingang_datei = self._warteschlange.pop(0)
+        text, bilder, bruecke_nummer, block_nummer, eingang_datei, modell_wunsch, \
+            modell_grund = self._warteschlange.pop(0)
         self._warteschlange_zeigen()
         log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
         rest = len(self._warteschlange)
@@ -3169,14 +3317,16 @@ class Werkbank(QMainWindow):
         # nicht abgeschnitten werden.
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
         self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer,
-                               block_nummer=block_nummer, eingang_datei=eingang_datei)
+                               block_nummer=block_nummer, eingang_datei=eingang_datei,
+                               modell_wunsch=modell_wunsch, modell_grund=modell_grund)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
         """F4: verwirft alle wartenden Auftraege. Der gerade laufende bleibt -
         den beendet der Not-Aus (F8)."""
         anzahl = len(self._warteschlange)
-        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei in self._warteschlange:
+        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
+                _modell_grund in self._warteschlange:
             if eingang_datei is not None:
                 verwerfen(eingang_datei, "Warteschlange geleert")
         self._warteschlange.clear()
@@ -3339,7 +3489,8 @@ class Werkbank(QMainWindow):
         Schaltet zusaetzlich die Bruecke aus, falls sie an war
         (wissen/plan_bruecke.md, Stufe B3)."""
         verworfen = len(self._warteschlange)
-        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei in self._warteschlange:
+        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
+                _modell_grund in self._warteschlange:
             if eingang_datei is not None:
                 verwerfen(eingang_datei, "Not-Aus")
         self._warteschlange.clear()

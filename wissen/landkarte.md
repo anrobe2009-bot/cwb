@@ -1,12 +1,12 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 18:38.
+Automatisch erzeugt am 01.10.2026 18:52.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 3646 |  |
+| core\fenster.py | 3797 |  |
 | core\einstellungen.py | 1893 |  |
-| core\sitzung.py | 1722 |  |
+| core\sitzung.py | 1807 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
 | core\sprache.py | 853 |  |
@@ -30,11 +30,11 @@ Automatisch erzeugt am 01.10.2026 18:38.
 | core\zeigeransage.py | 259 |  |
 | core\ersteinrichtung.py | 258 |  |
 | index\mcp_server.py | 182 | Code-Index - MCP-Server, Teil von CWB. |
+| core\bloecke.py | 175 |  |
 | core\modelle.py | 173 |  |
 | core\projektwahl.py | 166 |  |
 | core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
-| core\bloecke.py | 137 |  |
 | core\pausetaste.py | 84 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |
 | memory_hub\sdk_werkzeuge.py | 73 |  |

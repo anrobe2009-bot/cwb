@@ -77,6 +77,62 @@ class BlockErkennenTest(unittest.TestCase):
         self.assertEqual(bereinigt, "")
 
 
+class KopfMetadatenEntfernenTest(unittest.TestCase):
+    """Block 77, Punkte 1 und 3: 'Modell: …' und 'Dringend: ja'."""
+
+    def test_ohne_zeilen_bleibt_unveraendert(self):
+        inhalt = "Projekt: CWB\nTu etwas."
+        bereinigt, modell, dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertEqual(bereinigt, inhalt)
+        self.assertIsNone(modell)
+        self.assertFalse(dringend)
+
+    def test_modell_zeile_erkannt_und_entfernt(self):
+        inhalt = "Projekt: CWB\nModell: Opus\nTu etwas."
+        bereinigt, modell, dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertEqual(bereinigt, "Projekt: CWB\nTu etwas.")
+        self.assertEqual(modell, "opus")
+        self.assertFalse(dringend)
+
+    def test_modell_gross_klein_und_leerraum_egal(self):
+        inhalt = "modell:   SONNET  \nTu etwas."
+        _bereinigt, modell, _dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertEqual(modell, "sonnet")
+
+    def test_unbekanntes_modell_bleibt_unerkannt(self):
+        inhalt = "Modell: Fable\nTu etwas."
+        bereinigt, modell, _dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertIsNone(modell)
+        self.assertEqual(bereinigt, inhalt)
+
+    def test_dringend_ja_erkannt_und_entfernt(self):
+        inhalt = "Projekt: CWB\nDringend: ja\nTu etwas."
+        bereinigt, _modell, dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertEqual(bereinigt, "Projekt: CWB\nTu etwas.")
+        self.assertTrue(dringend)
+
+    def test_dringend_nein_zaehlt_nicht_als_dringend(self):
+        inhalt = "Dringend: nein\nTu etwas."
+        bereinigt, _modell, dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertFalse(dringend)
+        self.assertIn("Dringend: nein", bereinigt)
+
+    def test_beide_zeilen_zusammen(self):
+        inhalt = "Projekt: CWB\nModell: Haiku\nDringend: ja\nTu etwas."
+        bereinigt, modell, dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertEqual(bereinigt, "Projekt: CWB\nTu etwas.")
+        self.assertEqual(modell, "haiku")
+        self.assertTrue(dringend)
+
+    def test_ausserhalb_des_kopfs_bleibt_stehen(self):
+        zeilen = ["Zeile %d" % i for i in range(bloecke.KOPF_ZEILEN_MAX)]
+        zeilen.append("Modell: Opus")
+        inhalt = "\n".join(zeilen)
+        bereinigt, modell, _dringend = bloecke.kopf_metadaten_entfernen(inhalt)
+        self.assertIsNone(modell)
+        self.assertEqual(bereinigt, inhalt)
+
+
 class BlockZaehlerTest(unittest.TestCase):
 
     def setUp(self):

@@ -448,6 +448,57 @@ def _kontingent_aus_limit(info: Any) -> dict[str, Any] | None:
     }
 
 
+# Block 77, Punkt 3: Typen des Wochenfensters (claude_agent_sdk.types.
+# RateLimitType) - "seven_day" sowie die beiden modellbezogenen Varianten.
+# Alle drei zaehlen hier gleich als "das Wochenkontingent".
+WOCHENFENSTER_TYPEN = {"seven_day", "seven_day_opus", "seven_day_sonnet"}
+
+
+def _limit_eintrag(info: Any) -> dict[str, Any] | None:
+    """Macht aus einer RateLimitInfo (oder ihrer Nachbildung in Tests,
+    core/test_kontingent.py) ein einfaches dict mit den drei gebrauchten
+    Feldern - None ohne Meldung."""
+    if info is None:
+        return None
+    return {
+        "status": getattr(info, "status", None),
+        "resets_at": getattr(info, "resets_at", None),
+        "rate_limit_type": getattr(info, "rate_limit_type", None),
+    }
+
+
+def _sparmodus_erforderlich(limit_woche: dict | None) -> bool:
+    """Block 77, Punkt 3: wahr, wenn die zuletzt gemeldete Meldung zum
+    Wochenfenster status="allowed_warning" traegt - das Wochenkontingent wird
+    knapp, ohne schon erschoepft zu sein (status="rejected" meldet weiterhin
+    _kontingent_aus_limit, dort laeuft der laufende Auftrag auf eine Pause)."""
+    return bool(limit_woche) and limit_woche.get("status") == "allowed_warning"
+
+
+def _kontingent_zustand_berechnen(limit_funf_stunden: dict | None,
+                                   limit_woche: dict | None) -> dict:
+    """Block 77, Punkt 4: baut aus den zuletzt gemeldeten RateLimitEvent-
+    Meldungen beider Fenster einen kurzen Zustand fuer Kopfzeile und F2 -
+    "normal" (keine Meldung oder keine davon warnt/ist erschoepft), "knapp"
+    (mindestens eine status="allowed_warning") oder "erschoepft" (mindestens
+    eine status="rejected", mit der spaetesten bekannten Freigabezeit). Ohne
+    jede Meldung (beide None) bleibt der Text leer - das SDK hat in dieser
+    Sitzung noch nichts gemeldet, siehe Docstring von Sitzung.kontingent_zustand."""
+    eintraege = [e for e in (limit_funf_stunden, limit_woche) if e]
+    if not eintraege:
+        return {"stufe": "normal", "text": ""}
+    erschoepft = [e for e in eintraege if e.get("status") == "rejected"]
+    if erschoepft:
+        zeiten = [e.get("resets_at") for e in erschoepft if e.get("resets_at")]
+        if zeiten:
+            uhrzeit = datetime.fromtimestamp(max(zeiten)).strftime("%H:%M")
+            return {"stufe": "erschoepft", "text": f"Kontingent erschöpft bis {uhrzeit} Uhr."}
+        return {"stufe": "erschoepft", "text": "Kontingent erschöpft."}
+    if any(e.get("status") == "allowed_warning" for e in eintraege):
+        return {"stufe": "knapp", "text": "Kontingent knapp."}
+    return {"stufe": "normal", "text": "Kontingent normal."}
+
+
 # ---------------------------------------------------------------------------
 # Sitzung
 # ---------------------------------------------------------------------------
@@ -508,6 +559,15 @@ class Sitzung:
         # des SDK (Max-Kontingent) - status="rejected" heisst erschoepft,
         # siehe auftrag() und _kontingent_aus_limit().
         self._limit_erkannt = None
+        # Block 77: die zuletzt gemeldete RateLimitEvent-Meldung je Fenster
+        # (Fuenf-Stunden- bzw. Wochenfenster), unabhaengig vom einzelnen
+        # Auftrag - anders als _limit_erkannt NICHT in auftrag() zurueckgesetzt,
+        # sie gilt fuer die ganze Sitzung weiter, bis eine neuere Meldung zum
+        # selben Fenster eintrifft. Grundlage fuer kontingent_zustand() (F2,
+        # Kopfzeile) und sparmodus_aktiv() (Punkt 3: Sparmodus bei knappem
+        # Wochenkontingent).
+        self.limit_funf_stunden: dict[str, Any] | None = None
+        self.limit_woche: dict[str, Any] | None = None
         self.verbrauch = {
             "eingabe": 0, "cache_gelesen": 0, "cache_erstellt": 0, "ausgabe": 0,
             "gesamt": 0, "sitzung": 0,
@@ -541,16 +601,33 @@ class Sitzung:
     def stand(self) -> str:
         """Antwort auf die Taste 'Wo stehen wir?'. Nennt seit Block 61 (Teil
         C) den genauen, aufgeloesten Modellnamen (z.B. 'claude-opus-5[1m]'),
-        nicht nur den Familiennamen der Auswahl."""
+        nicht nur den Familiennamen der Auswahl. Block 77, Punkt 4: zusaetzlich
+        der Kontingent-Zustand, sofern das SDK in dieser Sitzung schon eine
+        RateLimitEvent-Meldung geschickt hat - sonst entfaellt der Satz."""
         modell = f" Modell {self.modell_name}." if self.modell_name else ""
+        kontingent_text = self.kontingent_zustand().get("text", "")
+        kontingent = f" {kontingent_text}" if kontingent_text else ""
         if not self.laeuft:
-            return (f"Nichts laeuft gerade.{modell} {self.verbrauch['sitzung']} Token in dieser Sitzung, "
+            return (f"Nichts laeuft gerade.{modell}{kontingent} "
+                    f"{self.verbrauch['sitzung']} Token in dieser Sitzung, "
                     f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._such_effizienz_satz()}")
         anzahl = len(self.schritte)
         dauer = int((datetime.now() - self.begonnen).total_seconds()) if self.begonnen else 0
         letzte = self.schritte[-1].ansage if self.schritte else "gestartet"
-        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden.{modell} Zuletzt: {letzte}. "
-                f"{self._such_effizienz_satz()}")
+        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden.{modell}{kontingent} "
+                f"Zuletzt: {letzte}. {self._such_effizienz_satz()}")
+
+    def kontingent_zustand(self) -> dict:
+        """Block 77, Punkt 4: kurzer Kontingent-Zustand fuer Kopfzeile und F2
+        - {"stufe": "normal"|"knapp"|"erschoepft", "text": "..."}, Text leer
+        ohne jede bisherige RateLimitEvent-Meldung dieser Sitzung."""
+        return _kontingent_zustand_berechnen(self.limit_funf_stunden, self.limit_woche)
+
+    def sparmodus_aktiv(self) -> bool:
+        """Block 77, Punkt 3: wahr, wenn das Wochenkontingent laut der
+        zuletzt gemeldeten RateLimitEvent-Meldung knapp wird
+        (status="allowed_warning")."""
+        return _sparmodus_erforderlich(self.limit_woche)
 
     def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
         """Haelt die Tokenwerte des letzten Auftrags fest und summiert die Sitzung.
@@ -1458,6 +1535,14 @@ class Sitzung:
                         self._limit_erkannt.status, self._limit_erkannt.rate_limit_type,
                         self._limit_erkannt.utilization, self._limit_erkannt.resets_at,
                     )
+                    # Block 77: unabhaengig vom Auftrag je Fenster gemerkt,
+                    # siehe Docstring von self.limit_funf_stunden.
+                    eintrag = _limit_eintrag(self._limit_erkannt)
+                    typ = (eintrag or {}).get("rate_limit_type")
+                    if typ == "five_hour":
+                        self.limit_funf_stunden = eintrag
+                    elif typ in WOCHENFENSTER_TYPEN:
+                        self.limit_woche = eintrag
 
                 elif isinstance(nachricht, ResultMessage):
                     ergebnis_da = True
