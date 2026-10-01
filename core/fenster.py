@@ -72,6 +72,7 @@ try:
     from .ablagewaechter import Zwischenablagewaechter
     from .android_screenshot import screenshot_ablegen
     from .bloecke import block_erkennen, block_zaehler_aktualisieren
+    from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden
     from .datenordner import erstuebernahme
     from .eingangsordner import AuftragSpaeter, Eingangswaechter
     from .einstellungen import EinstellungenFenster
@@ -130,6 +131,7 @@ except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from android_screenshot import screenshot_ablegen
     from bloecke import block_erkennen, block_zaehler_aktualisieren
+    from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden
     from datenordner import erstuebernahme
     from eingangsordner import AuftragSpaeter, Eingangswaechter
     from einstellungen import EinstellungenFenster
@@ -211,6 +213,15 @@ ZUGRIFF_SATZ_SCHREIBEN = "Lesen und Schreiben erlaubt."
 TROTZDEM_KENNUNG = "Trotzdem hier ausführen"
 TROTZDEM_SYMBOL = "⤓"
 TROTZDEM_FARBE = "1"
+
+# Kachel fuer den Schalter "Bruecke" (Vorhaben "Bruecke" Stufe B3, siehe
+# wissen/plan_bruecke.md). Die Aufschrift beim Aufbau dient zugleich als
+# Kennung zum Wiederfinden, genau wie bei TROTZDEM_KENNUNG/ZUGRIFF_KENNUNG.
+BRUECKE_KENNUNG = "Brücke"
+BRUECKE_SYMBOL_AUS = "🌉"
+BRUECKE_SYMBOL_AN = "🛰"
+BRUECKE_FARBE_AUS = "1"
+BRUECKE_FARBE_AN = "4"
 
 # Ordner fuer die Berichtdateien, relativ zum Projekt. Der Bericht liegt schon
 # in der Zwischenablage; fuer den Fall, dass daraus beim Einfuegen im Chat nur
@@ -492,7 +503,7 @@ class WarteschlangenFenster(QDialog):
     ein Kontextmenue mit "Löschen" (Block 60) - Entf/Rueckschritt bleiben
     daneben bestehen."""
 
-    def __init__(self, warteschlange: list[tuple[str, list[Path]]], eltern=None):
+    def __init__(self, warteschlange: list[tuple[str, list[Path], int | None]], eltern=None):
         super().__init__(eltern)
         self._warteschlange = warteschlange
         self.setWindowTitle("Warteschlange verwalten")
@@ -531,7 +542,7 @@ class WarteschlangenFenster(QDialog):
 
     def _liste_fuellen(self) -> None:
         self.liste.clear()
-        for nummer, (text, _bilder) in enumerate(self._warteschlange, start=1):
+        for nummer, (text, _bilder, _bruecke_nummer) in enumerate(self._warteschlange, start=1):
             kurz = " ".join(text.split())[:80]
             self.liste.addItem(f"Platz {nummer}: {kurz}")
         if self._warteschlange:
@@ -617,6 +628,18 @@ class Werkbank(QMainWindow):
         self._terminal_faden: TerminalFaden | None = None
         # Haelt den laufenden #BILD#-Auftrag, aus demselben Grund.
         self._bild_faden: BildFaden | None = None
+        # Bruecke zu claude.ai im Browser (core/bruecke.py, Vorhaben
+        # "Bruecke" Stufe B3): laeuft nur, solange der Schalter an ist
+        # (siehe _bruecke_zustand_anwenden). Die drei Nummer-Felder tragen
+        # die auftrag_nummer eines laufenden Bruecken-Auftrags vom Eingang
+        # bis zum Abschluss mit - None heisst "kein Bruecken-Auftrag". Ein
+        # #CODE#-Auftrag kann in der Warteschlange stehen, darum traegt dort
+        # jeder Eintrag seine eigene Nummer mit (siehe _warteschlange).
+        self.bruecke_faden: BrueckenFaden | None = None
+        self._bruecke_berichte: list[BerichtFaden] = []
+        self._bruecke_code_nummer: int | None = None
+        self._terminal_bruecke_nummer: int | None = None
+        self._bild_bruecke_nummer: int | None = None
         # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
         # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
         self._terminal_ziel: tuple | None = None
@@ -642,8 +665,10 @@ class Werkbank(QMainWindow):
         self._wartende_auftraege: list[tuple[str, list[Path]]] = []
         # Warteschlange: Auftraege, die abgeschickt wurden, waehrend schon
         # einer lief. Sie werden der Reihe nach abgearbeitet, einer nach dem
-        # anderen - nichts geht verloren, nichts blockiert. F4 leert sie.
-        self._warteschlange: list[tuple[str, list[Path]]] = []
+        # anderen - nichts geht verloren, nichts blockiert. F4 leert sie. Das
+        # dritte Tupelglied ist die Bruecken-auftrag_nummer (None ausser bei
+        # einem #CODE#-Auftrag aus der Bruecke, core/bruecke.py).
+        self._warteschlange: list[tuple[str, list[Path], int | None]] = []
         # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
         # erkennt _absenden, ob der neue Auftrag warten muss.
         self._auftrag_laeuft = False
@@ -729,6 +754,13 @@ class Werkbank(QMainWindow):
         )
         self.eingang_waechter.starten()
 
+        # Bruecke zu claude.ai im Browser (core/bruecke.py, Vorhaben
+        # "Bruecke" Stufe B3): laeuft nur, solange der Schalter "bruecke_aktiv"
+        # an ist (F12 -> Verhalten, Kachel/Umschalt+F8). Ab Werk aus - dieser
+        # Aufruf bringt Thread, Kachel und Kopfzeile von Anfang an auf den
+        # gemerkten Stand, auch wenn er aus einer frueheren Sitzung noch an war.
+        self._bruecke_zustand_anwenden()
+
         # Systemweiter Hotkey auf die Pause-Taste (core/pausetaste.py): loest
         # denselben Screenshot-Ablauf wie #BILD# aus, egal welches Fenster
         # gerade vorn ist. Schlaegt die Registrierung fehl (Taste von einem
@@ -788,6 +820,7 @@ class Werkbank(QMainWindow):
             ("Umschalt+F4", "Warteschlange einzeln verwalten", self._warteschlange_verwalten),
             ("Strg+F4", "Kompletter Neustart", self._neustart),
             ("F12", "Einstellungen", self._einstellungen_zeigen),
+            ("Umschalt+F8", "Brücke ein- oder ausschalten", self._bruecke_umschalten),
         ]
 
     def _kachel_eintraege(self) -> list[tuple[str, str, str, str, object]]:
@@ -806,6 +839,10 @@ class Werkbank(QMainWindow):
             # so, wie das Schreibrecht gerade steht.
             (ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_KENNUNG, "F10",
              ZUGRIFF_FARBE_SCHREIBEN, self._nur_lesen_umschalten),
+            # Zeigt den Zustand des Schalters "Bruecke" (F12 -> Verhalten),
+            # ab Werk aus.
+            (BRUECKE_SYMBOL_AUS, BRUECKE_KENNUNG, "Umschalt+F8",
+             BRUECKE_FARBE_AUS, self._bruecke_umschalten),
             # Steht nur da, solange ein Auftrag vorgemerkt ist; sonst
             # ausgeblendet (_vormerkung_zeigen).
             (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
@@ -984,6 +1021,7 @@ class Werkbank(QMainWindow):
             ("F10", self._nur_lesen_umschalten),
             ("F9", self._projekt_wechseln),
             ("F12", self._einstellungen_zeigen),
+            ("Shift+F8", self._bruecke_umschalten),
             ("Return", self._enter),
         ]
         # Alle Kuerzel gelten nur im eigenen Fenster, nicht in anderen.
@@ -1119,6 +1157,7 @@ class Werkbank(QMainWindow):
         fenster.exec()
         self._sicherheitshinweis_aktualisieren()
         self._kacheln_sichtbarkeit_anwenden()
+        self._bruecke_zustand_anwenden()
 
     def _wo_stehen_wir(self) -> None:
         if self.faden.sitzung:
@@ -1214,19 +1253,23 @@ class Werkbank(QMainWindow):
         if self._pending_terminal is not None:
             wartend, self._pending_terminal = self._pending_terminal, None
             if ja:
-                self._terminal_starten(wartend["befehl"], wartend["admin"])
+                self._terminal_starten(wartend["befehl"], wartend["admin"],
+                                        bruecke_nummer=wartend.get("bruecke_nummer"))
             return
         self.faden.frage_beantworten(ja)
 
     # -- Terminal (#run# und #admin#) ---------------------------------------
 
-    def _terminal_markierung(self, art: str, befehl: str) -> None:
+    def _terminal_markierung(self, art: str, befehl: str, *,
+                              bruecke_nummer: int | None = None) -> None:
         """Verarbeitet einen #run#- oder #admin#-Auftrag. Laeuft nie ueber
         Claude Code: kein Modellaufruf, kein Tokenverbrauch. Ordnergrenze,
         verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
         unveraendert; #admin# fragt mit dem vollen Befehl zurueck, bevor er
         mit erhoehten Rechten laeuft - aber nur, wenn der Schalter
-        rueckfrage_bei_befehl an ist."""
+        rueckfrage_bei_befehl an ist. `bruecke_nummer` kommt nur aus der
+        Bruecke (core/bruecke.py) und wird bis zum Abschluss mitgefuehrt,
+        auch ueber eine Rueckfrage hinweg (siehe _pending_terminal)."""
         # Das fremde Fenster, aus dem der Auftrag kam (Zwischenablage,
         # Waechter oder das Fenster, aus dem gerade zu CWB gewechselt wurde),
         # steht jetzt fest - CWB selbst ist zu diesem Zeitpunkt im
@@ -1252,15 +1295,18 @@ class Werkbank(QMainWindow):
             grund = "Admin-Befehl mit erhöhten Rechten" if admin else urteil.begruendung
             satz = f"{grund}: {befehl}. Fortfahren?"
             kurz_satz = f"{grund}. Fortfahren?"
-            self._pending_terminal = {"befehl": befehl, "admin": admin}
+            self._pending_terminal = {"befehl": befehl, "admin": admin,
+                                       "bruecke_nummer": bruecke_nummer}
             self._frage(satz, kurz_satz)
             return
-        self._terminal_starten(befehl, admin)
+        self._terminal_starten(befehl, admin, bruecke_nummer=bruecke_nummer)
 
-    def _terminal_starten(self, befehl: str, admin: bool) -> None:
+    def _terminal_starten(self, befehl: str, admin: bool, *,
+                           bruecke_nummer: int | None = None) -> None:
         if self._terminal_faden is not None and self._terminal_faden.isRunning():
             self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="fehler")
             return
+        self._terminal_bruecke_nummer = bruecke_nummer
         art = "admin" if admin else "run"
         satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
         log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
@@ -1298,6 +1344,10 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _terminal_fertig(self, ergebnis) -> None:
+        # Gehoerte der Befehl zur Bruecke (core/bruecke.py, Vorhaben
+        # "Bruecke" Stufe B3), wird die Ausgabe weiter unten dorthin
+        # hochgeladen statt per Strg+V in ein Fenster eingefuegt zu werden.
+        bruecke_nummer, self._terminal_bruecke_nummer = self._terminal_bruecke_nummer, None
         # Das Ausgabefeld ist ab hier wieder frei: der Befehl ist fertig, das
         # Ergebnis kommt gleich hinein - danach darf auch Zurueckgehaltenes
         # aus einem parallel laufenden Auftrag nachruecken.
@@ -1329,11 +1379,17 @@ class Werkbank(QMainWindow):
                 "BEFEHLE_OHNE_TEXT_RUECKSPIELUNG im Befehl gefunden: %s",
                 befehl_lief,
             )
+        if bruecke_nummer is not None:
+            # Ausgabe aus der Bruecke wird NIE per Strg+V eingefuegt, nur
+            # hochgeladen (wissen/plan_bruecke.md, Stufe B3).
+            self._bruecke_bericht_hochladen(bruecke_nummer, text)
         if bild_bleibt:
             # Das Skript hat sein Bild schon selbst in die Zwischenablage
             # gelegt - die Text-Rueckspielung wuerde es sofort wieder mit der
             # gedruckten Meldung ueberschreiben, darum bleibt sie hier aus.
             satz += " Bild liegt in der Zwischenablage."
+        elif bruecke_nummer is not None:
+            satz += " Ergebnis an Brücke hochgeladen."
         # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
         # Auftrag kam (siehe zielfenster.py). Ist beim Auftragsstart keins
         # gemerkt worden, nimmt zielfenster.einfuegen() das zuletzt bekannte
@@ -1364,16 +1420,20 @@ class Werkbank(QMainWindow):
         log.info("Pause-Taste ausgeloest")
         self._bild_markierung()
 
-    def _bild_markierung(self) -> None:
+    def _bild_markierung(self, *, bruecke_nummer: int | None = None) -> None:
         """Verarbeitet einen #BILD#-Auftrag: die Markierung allein genuegt,
         es gehoert kein Befehlstext dahinter. Laeuft nie ueber Claude Code
         und nie ueber das Terminal - kein Ausgabefeld wird belegt, keine
         Zwischenablage mit Text ueberschrieben, kein Ergebnis in ein fremdes
         Fenster zurueckgespielt. Danach steht nur ein Dateiverweis auf den
-        Screenshot in der Zwischenablage (core/android_screenshot.py)."""
+        Screenshot in der Zwischenablage (core/android_screenshot.py).
+        `bruecke_nummer` kommt nur aus der Bruecke (core/bruecke.py) - die
+        Bilddatei selbst laesst sich darueber nicht hochladen (die Brücke
+        kennt nur Text), darum bekommt sie dort nur eine kurze Textmeldung."""
         if self._bild_faden is not None and self._bild_faden.isRunning():
             self.sprecher.sprich("Es läuft schon ein Screenshot-Auftrag.", art="fehler")
             return
+        self._bild_bruecke_nummer = bruecke_nummer
         log.info("Bild-Auftrag gestartet (#BILD#)")
         self._status_zeigen("Screenshot wird geholt…")
         self.sprecher.sprich("Screenshot wird geholt…", art="meldung")  # stumm: Zwischenmeldung
@@ -1383,6 +1443,11 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _bild_fertig(self, ergebnis) -> None:
+        # Gehoerte der Auftrag zur Bruecke (core/bruecke.py): die Bilddatei
+        # selbst kann dorthin nicht hochgeladen werden (nur Text), darum nur
+        # eine kurze Textmeldung - der lokale Ablauf (Zwischenablage, Ansage)
+        # bleibt unveraendert, ein blinder Nutzer am PC profitiert ja genauso.
+        bruecke_nummer, self._bild_bruecke_nummer = self._bild_bruecke_nummer, None
         if ergebnis.erfolg:
             log.info(
                 "Screenshot bereit: %s (%dx%d)", ergebnis.pfad, ergebnis.breite, ergebnis.hoehe
@@ -1396,18 +1461,33 @@ class Werkbank(QMainWindow):
                 self.sprecher.sprich(
                     "Screenshot bereit, aber nicht in die Zwischenablage gelegt.", art="fehler"
                 )
+                if bruecke_nummer is not None:
+                    self._bruecke_bericht_hochladen(
+                        bruecke_nummer,
+                        f"Screenshot bereit, aber nicht in die Zwischenablage gelegt: "
+                        f"{ergebnis.pfad}",
+                    )
                 return
             self._status_zeigen(f"Screenshot bereit: {ergebnis.pfad}")
             # Die eine kurze Ansage - kein Text geht ins Ausgabefeld, die
             # Zwischenablage traegt schon den Dateiverweis und bleibt
             # unangetastet.
             self.sprecher.sprich("Screenshot bereit.", art="fertig")
+            if bruecke_nummer is not None:
+                self._bruecke_bericht_hochladen(
+                    bruecke_nummer,
+                    f"Screenshot bereit ({ergebnis.breite}x{ergebnis.hoehe}). Die Bilddatei "
+                    f"selbst lässt sich über die Brücke nicht hochladen, nur diese Meldung.",
+                )
         else:
             log.error("Screenshot fehlgeschlagen: %s", ergebnis.fehler)
             self._status_zeigen(f"Screenshot fehlgeschlagen: {ergebnis.fehler}")
             self.sprecher.sprich(
                 kurzfassen(ergebnis.fehler) or "Screenshot fehlgeschlagen.", art="fehler"
             )
+            if bruecke_nummer is not None:
+                self._bruecke_bericht_hochladen(
+                    bruecke_nummer, f"Screenshot fehlgeschlagen: {ergebnis.fehler}")
 
     # -- Modellwahl ---------------------------------------------------------
 
@@ -1594,6 +1674,11 @@ class Werkbank(QMainWindow):
     @slot_geschuetzt
     def _fertig(self, bilanz: dict) -> None:
         self.letzte_antwort = bilanz.get("antwort", "")
+        # Gehoerte der gerade beendete Auftrag zur Bruecke (core/bruecke.py,
+        # Vorhaben "Bruecke" Stufe B3), wird der Bericht weiter unten dorthin
+        # hochgeladen - sofort geleert, damit der naechste Auftrag (ohne
+        # Bruecke) nicht faelschlich mithochlaedt.
+        bruecke_nummer, self._bruecke_code_nummer = self._bruecke_code_nummer, None
         # Der Platz beim Arbeitsfaden ist wieder frei; die Bilder wurden schon
         # beim Abschicken uebergeben.
         self._auftrag_laeuft = False
@@ -1646,6 +1731,11 @@ class Werkbank(QMainWindow):
         )
         if self._letzter_bericht_pfad:
             hinweis += f" Bericht auch gespeichert unter {self._letzter_bericht_pfad}."
+
+        if bruecke_nummer is not None:
+            self._bruecke_bericht_hochladen(
+                bruecke_nummer, self._letzter_bericht or ansage)
+            hinweis += " Bericht an Brücke hochgeladen."
 
         self._status_zeigen(satz)
         self._verlauf_anhaengen(satz + hinweis,
@@ -1982,29 +2072,113 @@ class Werkbank(QMainWindow):
         @slot_geschuetzt wie jeder andere Qt-Slot - die Belegt-Pruefung dafuer
         steht in `_eingang_auftrag` davor (siehe dort). Sonst identisch zu
         `_ablage_auftrag`: gleiche Blocknummern-, Dubletten- und
-        Projektpruefung; nur `vorspann` nennt zusaetzlich die Quelle."""
+        Projektpruefung; nur `vorspann` nennt zusaetzlich die Quelle.
+
+        Kommt der Auftrag von der Bruecke (core/bruecke.py, Vorhaben
+        "Bruecke" Stufe B3, `auftrag.quelle == "bruecke"`), wird zusaetzlich
+        seine `auftrag_nummer` mitgefuehrt - sie kommt am Ende bei
+        `_fertig`/`_terminal_fertig`/`_bild_fertig` wieder heraus und sorgt
+        dort fuer den Bericht-Upload - und die Blockansage nennt "Claude" als
+        Quelle, weil sie es dort tatsaechlich ist."""
         art, inhalt = auftrag.art, auftrag.inhalt
+        von_bruecke = auftrag.quelle == QUELLE_BRUECKE
+        bruecke_nummer = auftrag.auftrag_nummer if von_bruecke else None
         log.info(
             "Eingangsordner: Auftrag erhalten (Quelle %s, Projekt %r, Art %s, %d Zeichen)",
             auftrag.quelle, auftrag.projekt, art or "ohne Markierung", len(inhalt),
         )
-        inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+        inhalt, weiter, block_angesagt = self._block_verarbeiten(
+            art, inhalt, herkunft="von Claude" if von_bruecke else "")
         if not weiter:
             return
         if art == "bild":
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._bild_markierung()
+            self._bild_markierung(bruecke_nummer=bruecke_nummer)
             return
         if art in ("run", "admin"):
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._terminal_markierung(art, inhalt)
+            self._terminal_markierung(art, inhalt, bruecke_nummer=bruecke_nummer)
             return
         if self._dublette_abgewiesen(art, inhalt):
             return
         self._absenden(vorspann=f"Auftrag aus dem Eingangsordner ({auftrag.quelle}).",
-                        art=art, inhalt=inhalt, block_angesagt=block_angesagt)
+                        art=art, inhalt=inhalt, block_angesagt=block_angesagt,
+                        bruecke_nummer=bruecke_nummer)
+
+    # -- Bruecke (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) ----------------
+
+    def _bruecke_zustand_anwenden(self) -> None:
+        """Bringt Thread, Kachel und Kopfzeile auf den Stand des Schalters
+        "bruecke_aktiv" (einstellungen.json). Aufgerufen beim Start, nach
+        jedem Schliessen der Einstellungen (F12) und von
+        `_bruecke_umschalten` (Kachel/Umschalt+F8)."""
+        an = bool(einstellungen_lesen().get("bruecke_aktiv", False))
+        self.ausgabekopf.bruecke_zeigen(an)
+        text = "Brücke an" if an else "Brücke aus"
+        symbol = BRUECKE_SYMBOL_AN if an else BRUECKE_SYMBOL_AUS
+        self.kacheln.kachel_beschriften(BRUECKE_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(BRUECKE_KENNUNG,
+                                    BRUECKE_FARBE_AN if an else BRUECKE_FARBE_AUS)
+        if an:
+            self._bruecke_starten()
+        else:
+            self._bruecke_stoppen()
+
+    def _bruecke_starten(self) -> None:
+        if self.bruecke_faden is not None and self.bruecke_faden.isRunning():
+            return
+        self.bruecke_faden = BrueckenFaden(markierung_erkennen, self)
+        self.bruecke_faden.nicht_erreichbar.connect(self._bruecke_nicht_erreichbar)
+        self.bruecke_faden.start()
+        log.info("Brücke gestartet")
+
+    def _bruecke_stoppen(self) -> None:
+        if self.bruecke_faden is None:
+            return
+        self.bruecke_faden.anhalten()
+        self.bruecke_faden.wait(2000)
+        self.bruecke_faden = None
+        log.info("Brücke angehalten")
+
+    @slot_geschuetzt
+    def _bruecke_umschalten(self) -> None:
+        """Kachel "Brücke" / Umschalt+F8: schaltet den persistierten Schalter
+        um - dieselbe Einstellung wie die Kachel in F12 → Verhalten, nur ohne
+        den Umweg über das Einstellungsfenster."""
+        werte = einstellungen_lesen()
+        an = not bool(werte.get("bruecke_aktiv", False))
+        werte["bruecke_aktiv"] = an
+        einstellungen_schreiben(werte)
+        self._bruecke_zustand_anwenden()
+        self.sprecher.sprich(f"Brücke: {'an' if an else 'aus'}.")
+
+    @slot_geschuetzt
+    def _bruecke_nicht_erreichbar(self) -> None:
+        """Kommt vom BrueckenFaden, nachdem fünf Minuten lang kein
+        Abholversuch gelang (wissen/plan_bruecke.md, Stufe B3) - genau einmal
+        pro Ausfallphase, nicht bei jedem einzelnen Fehlschlag."""
+        self._status_zeigen("Brücke nicht erreichbar.")
+        self.sprecher.sprich("Brücke nicht erreichbar.", art="fehler")
+
+    def _bruecke_bericht_hochladen(self, auftrag_nummer, text: str) -> None:
+        """Laedt den Bericht/die Ausgabe eines Bruecken-Auftrags hoch, ohne
+        die Oberflaeche zu blockieren - eigener Thread pro Hochladung
+        (core/bruecke.py.BerichtFaden), wie beim Terminal- oder
+        Bild-Auftrag. Ein Fehlschlag bleibt still (nur Log), passend zu
+        "Netzfehler still" aus wissen/plan_bruecke.md."""
+        faden = BerichtFaden(auftrag_nummer, text, self)
+        faden.fertig_da.connect(functools.partial(self._bruecke_bericht_fertig, faden))
+        self._bruecke_berichte.append(faden)
+        faden.start()
+
+    @slot_geschuetzt
+    def _bruecke_bericht_fertig(self, faden, erfolg: bool) -> None:
+        if faden in self._bruecke_berichte:
+            self._bruecke_berichte.remove(faden)
+        if not erfolg:
+            log.info("Bruecken-Bericht nicht hochgeladen (Netzfehler, bleibt stumm)")
 
     # -- Dublettensperre ------------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
@@ -2060,7 +2234,7 @@ class Werkbank(QMainWindow):
             self._dublette_melden("Läuft bereits.", art, "laufender Auftrag")
             return True
         if geglaettet:
-            for wartender_text, _ in self._warteschlange:
+            for wartender_text, _bilder, _bruecke_nummer in self._warteschlange:
                 if self._text_glaetten(wartender_text) == geglaettet:
                     self._dublette_melden("Wartet schon.", art, "Warteschlange")
                     return True
@@ -2086,12 +2260,13 @@ class Werkbank(QMainWindow):
     # -- Blocknummern ---------------------------------------------------------
 
     def _block_verarbeiten(self, art: str, inhalt: str,
-                            bilder: list[Path] | None = None) -> tuple[str, bool, bool]:
+                            bilder: list[Path] | None = None, *,
+                            herkunft: str = "") -> tuple[str, bool, bool]:
         """Erkennt und entfernt eine Blocknummer am Anfang/Ende von `inhalt`
         (core/bloecke.py, Block 56) und sagt Annahme, Luecke oder
-        Unvollstaendigkeit an. Wird fuer alle drei Wege (Waechter, F7,
-        Eingabefeld) und alle vier Markierungen aufgerufen, jeweils bevor der
-        Inhalt an Claude Code oder das Terminal geht.
+        Unvollstaendigkeit an. Wird fuer alle vier Wege (Waechter, F7,
+        Eingabefeld, Eingangsordner) und alle vier Markierungen aufgerufen,
+        jeweils bevor der Inhalt an Claude Code oder das Terminal geht.
 
         Rueckgabe: (bereinigter Inhalt, ausfuehren, schon_angesagt).
 
@@ -2102,7 +2277,12 @@ class Werkbank(QMainWindow):
         Fehlt die Zeile "Ende Block N" (bei #BILD# gibt es dafuer keine
         Pruefung), wird NICHT ausgefuehrt (`ausfuehren`=False), sondern als
         `self._pending_block` vorgemerkt - F5 fuehrt ihn aus, Escape
-        verwirft ihn (siehe _f5, _escape)."""
+        verwirft ihn (siehe _f5, _escape).
+
+        `herkunft` (z.B. "von Claude") haengt sich nur an die
+        Annahme-Ansage - fuer Auftraege aus der Bruecke (core/bruecke.py,
+        Vorhaben "Bruecke" Stufe B3, `_eingang_auftrag_geschuetzt`), sonst
+        bleibt die Ansage wie bisher ohne Quellenangabe."""
         nummer, bereinigt, vollstaendig = block_erkennen(art, inhalt)
         if nummer is None:
             return inhalt, True, False
@@ -2124,7 +2304,8 @@ class Werkbank(QMainWindow):
             self._status_zeigen(satz)
             self.sprecher.sprich(satz, art="fehler")
             return bereinigt, False, True
-        satz = f"Block {nummer} erhalten."
+        mitte = f" {herkunft}" if herkunft else ""
+        satz = f"Block {nummer}{mitte} erhalten."
         if luecke:
             satz += f" {luecke}"
         log.info("Block %d erkannt und angenommen (Art %s)", nummer, art or "code")
@@ -2133,7 +2314,8 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _absenden(self, vorspann: str = "", *, art: str | None = None,
-                  inhalt: str | None = None, block_angesagt: bool = False) -> None:
+                  inhalt: str | None = None, block_angesagt: bool = False,
+                  bruecke_nummer: int | None = None) -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
@@ -2236,7 +2418,7 @@ class Werkbank(QMainWindow):
             # Es laeuft schon einer. Der neue geht nicht verloren und blockiert
             # nichts, sondern reiht sich ein und laeuft los, sobald der
             # vorherige fertig ist.
-            self._warteschlange.append((text, bilder))
+            self._warteschlange.append((text, bilder, bruecke_nummer))
             self._warteschlange_zeigen()
             satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
             if vorspann:
@@ -2255,10 +2437,12 @@ class Werkbank(QMainWindow):
                 self.sprecher.sprich("Auftrag erhalten, er wartet noch.", art="auftrag")
             return
 
-        self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt)
+        self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt,
+                               bruecke_nummer=bruecke_nummer)
 
     def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
-                          ansagen: bool = True, block_angesagt: bool = False) -> None:
+                          ansagen: bool = True, block_angesagt: bool = False,
+                          bruecke_nummer: int | None = None) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
@@ -2268,8 +2452,13 @@ class Werkbank(QMainWindow):
         und in der Statuszeile - gesprochen wuerden sie sich mit der naechsten
         Ansage ueberlagern. `ansagen=False` schweigt hier ganz, weil
         `_naechsten_starten` den Auftrag aus der Warteschlange holt, dessen
-        Annahme beim Abschicken schon bestaetigt wurde."""
+        Annahme beim Abschicken schon bestaetigt wurde.
+
+        `bruecke_nummer` ist nur bei einem #CODE#-Auftrag aus der Bruecke
+        gesetzt (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) - gemerkt, bis
+        `_fertig()` den Bericht dorthin hochlaedt."""
         self._auftrag_laeuft = True
+        self._bruecke_code_nummer = bruecke_nummer
         # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
         # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
         # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
@@ -2325,7 +2514,7 @@ class Werkbank(QMainWindow):
         self._warteschlange_zeigen()
         if not self._warteschlange:
             return
-        text, bilder = self._warteschlange.pop(0)
+        text, bilder, bruecke_nummer = self._warteschlange.pop(0)
         self._warteschlange_zeigen()
         log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
         rest = len(self._warteschlange)
@@ -2335,7 +2524,7 @@ class Werkbank(QMainWindow):
         # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
         # nicht abgeschnitten werden.
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
-        self._auftrag_starten(text, bilder, ansagen=False)
+        self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
@@ -2498,7 +2687,9 @@ class Werkbank(QMainWindow):
     def _not_aus(self) -> None:
         """F8: bricht den laufenden Auftrag ab. Wartende Auftraege werden
         dabei mit verworfen - sonst liefe nach dem Not-Aus der naechste von
-        allein los, was niemand erwartet, der eben alles gestoppt hat."""
+        allein los, was niemand erwartet, der eben alles gestoppt hat.
+        Schaltet zusaetzlich die Bruecke aus, falls sie an war
+        (wissen/plan_bruecke.md, Stufe B3)."""
         verworfen = len(self._warteschlange)
         self._warteschlange.clear()
         self._warteschlange_zeigen()
@@ -2507,6 +2698,13 @@ class Werkbank(QMainWindow):
             satz += " Ein wartender Auftrag verworfen."
         elif verworfen > 1:
             satz += f" {verworfen} wartende Aufträge verworfen."
+        werte = einstellungen_lesen()
+        if bool(werte.get("bruecke_aktiv", False)):
+            werte["bruecke_aktiv"] = False
+            einstellungen_schreiben(werte)
+            self._bruecke_zustand_anwenden()
+            satz += " Brücke aus."
+            log.info("Not-Aus: Brücke zusätzlich ausgeschaltet")
         log.info("Not-Aus, wartende Auftraege verworfen: %d", verworfen)
         # "Abgebrochen." kommt gleich ueber _fertig - diese Zwischenmeldung
         # bleibt still, sonst spricht CWB zweimal fuer denselben Abbruch.
@@ -2696,6 +2894,7 @@ class Werkbank(QMainWindow):
             eingang_waechter = getattr(self, "eingang_waechter", None)
             if eingang_waechter is not None:
                 eingang_waechter.anhalten()
+            self._bruecke_stoppen()
             pausetaste = getattr(self, "_pausetaste", None)
             if pausetaste is not None:
                 pausetaste.abmelden()

@@ -115,6 +115,52 @@ class LesenTest(EingangsordnerTestBasis):
         self.assertEqual(auftrag.inhalt, "x")
 
 
+class AuftragNummerTest(EingangsordnerTestBasis):
+
+    def test_auftrag_nummer_wird_gelesen(self):
+        pfad = self._datei_anlegen(
+            "a.json", {"quelle": "bruecke", "text": "x", "auftrag_nummer": 42}
+        )
+        auftrag = eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
+        self.assertEqual(auftrag.auftrag_nummer, 42)
+
+    def test_auftrag_nummer_ist_optional(self):
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        auftrag = eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
+        self.assertIsNone(auftrag.auftrag_nummer)
+
+    def test_ungueltige_auftrag_nummer_wird_ignoriert(self):
+        pfad = self._datei_anlegen(
+            "a.json", {"quelle": "lokal", "text": "x", "auftrag_nummer": "nicht_numerisch"}
+        )
+        auftrag = eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
+        self.assertIsNone(auftrag.auftrag_nummer)
+
+
+class AblegenTest(EingangsordnerTestBasis):
+
+    def test_ablegen_legt_lesbare_datei_an(self):
+        ziel = eingangsordner.ablegen("bruecke", "#CODE#\nTu etwas.", projekt="CWB",
+                                       auftrag_nummer=7)
+        self.assertTrue(ziel.is_file())
+        self.assertEqual(ziel.suffix, ".json")
+        auftrag = eingangsordner.auftrag_lesen(ziel, markierung_erkennen)
+        self.assertEqual(auftrag.quelle, "bruecke")
+        self.assertEqual(auftrag.projekt, "CWB")
+        self.assertEqual(auftrag.art, "code")
+        self.assertEqual(auftrag.auftrag_nummer, 7)
+
+    def test_ablegen_ohne_auftrag_nummer(self):
+        ziel = eingangsordner.ablegen("zeitschaltung", "x")
+        auftrag = eingangsordner.auftrag_lesen(ziel, markierung_erkennen)
+        self.assertIsNone(auftrag.auftrag_nummer)
+
+    def test_ablegen_wird_vom_waechter_gefunden(self):
+        eingangsordner.ablegen("bruecke", "x")
+        self.assertEqual(len(eingangsordner.wartende_dateien()), 1)
+        self.assertFalse(list(self._ordner.glob("*.teil")))
+
+
 class AdminSperreTest(unittest.TestCase):
 
     def test_admin_von_fremder_quelle_gesperrt(self):

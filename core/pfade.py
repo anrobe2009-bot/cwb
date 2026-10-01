@@ -269,6 +269,15 @@ LANDKARTE_DATEN = DATENORDNER / "landkarte"
 EINGANG_ORDNER = DATENORDNER / "eingang"
 
 
+# -- Bruecke -------------------------------------------------------------------
+# Vorhaben "Bruecke" Stufe B3 (siehe wissen/plan_bruecke.md, core/bruecke.py):
+# Zugangsdaten fuer den Connector-Dienst aus dem Projekt max-friends. Liegt
+# im Datenordner statt im Programmordner, weil die Datei das PC-Token
+# enthaelt und nie in Git landen darf; core/bruecke.py loggt ihren Inhalt nie.
+
+BRUECKE_ZUGANG_DATEI = DATENORDNER / "bruecke_zugang.txt"
+
+
 # -- Zusatzprojekte ----------------------------------------------------------
 # Projekte ausserhalb der Projektwurzel: von Hand eingetragen im Reiter
 # "Projekte" der Einstellungen, mit frei waehlbarem Anzeigenamen. Sie stehen

@@ -91,6 +91,11 @@ SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen · Installieren",)
 # wird an einer zweistelligen Zahl gemessen und aendert sich nie.
 FREIGABEN_BEISPIELE = ("Freigaben 99",)
 
+# Statushinweis fuer den Schalter "Bruecke" (Einstellungen, Reiter Verhalten,
+# Umschalt+F8, core/fenster.py, Vorhaben "Bruecke" Stufe B3). Bleibt leer,
+# solange die Bruecke aus ist - ab Werk der Fall.
+BRUECKE_BEISPIELE = ("Brücke an",)
+
 # "Suche gespart" (Block C10): wie viele Lesezugriffe (Read, Grep, Glob,
 # lesende Bash-Befehle) ein Auftrag im Schnitt braucht, bevor die erste
 # Datei geaendert wird, verglichen mit dem Grundwert vom 21.09.2026 - keine
@@ -225,6 +230,16 @@ class Ausgabekopf(QWidget):
         self.freigabenanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.freigabenanzeige)
 
+        # Statushinweis, solange die Bruecke zu claude.ai im Browser an ist
+        # (Einstellungen, Reiter Verhalten, Umschalt+F8). Aus ist der
+        # Normalfall, dann bleibt das Feld leer.
+        self.bruecke_anzeige = Schrumpffeld("")
+        self.bruecke_anzeige.setObjectName("brueckenanzeige")
+        self.bruecke_anzeige.setAccessibleName("Brücken-Status")
+        self.bruecke_anzeige.setAlignment(Qt.AlignCenter)
+        self.bruecke_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.bruecke_anzeige)
+
         # "Suche gespart" (Block C10): zwischen Freigaben-Zahl und
         # Tokenzaehler, wie in der Kopfzeile vereinbart. Nicht gesprochen -
         # F2 "Wo stehen wir" nennt den Wert stattdessen als Satz.
@@ -322,6 +337,7 @@ class Ausgabekopf(QWidget):
             felder = (
                 (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
                 (self.freigabenanzeige, FREIGABEN_BEISPIELE),
+                (self.bruecke_anzeige, BRUECKE_BEISPIELE),
                 (self.suchersparnis, SUCHERSPARNIS_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
@@ -424,6 +440,19 @@ class Ausgabekopf(QWidget):
             self.sicherheitshinweis.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Sicherheitshinweis nicht gesetzt: %s", fehler)
+
+    def bruecke_zeigen(self, an: bool) -> None:
+        """Zeigt "Brücke an", solange der Schalter an ist (Einstellungen,
+        Reiter Verhalten, Umschalt+F8). Aus bleibt das Feld leer - das ist
+        der Normalfall."""
+        try:
+            self.bruecke_anzeige.setText("Brücke an" if an else "")
+            satz = "Brücke an: Claude im Browser kann Aufträge schicken." if an \
+                else "Brücke aus."
+            self.bruecke_anzeige.setToolTip(satz)
+            self.bruecke_anzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Brücken-Statushinweis nicht gesetzt: %s", fehler)
 
     def freigaben_zeigen(self, namen: list) -> None:
         """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage

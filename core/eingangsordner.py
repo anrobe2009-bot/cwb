@@ -36,6 +36,7 @@ jedes offene Fenster holen.
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -105,6 +106,12 @@ class EingangsAuftrag:
     art: str
     inhalt: str
     datei: Path
+    # Nur bei quelle == "bruecke" gesetzt (core/bruecke.py, Vorhaben
+    # "Bruecke" Stufe B3): die Nummer, unter der der Connector-Dienst diesen
+    # Auftrag fuehrt - nicht zu verwechseln mit der Blocknummer aus dem Text
+    # (core/bloecke.py). Wird bis zum Abschluss mitgefuehrt, damit core/
+    # fenster.py den Bericht an die richtige Nummer hochladen kann.
+    auftrag_nummer: int | None = None
 
 
 def _daten_lesen(pfad: Path) -> dict:
@@ -135,7 +142,33 @@ def auftrag_lesen(pfad: Path, markierung_erkennen) -> EingangsAuftrag:
         raise EingangsFehler("Feld 'text' fehlt oder ist leer")
     projekt = str(daten.get("projekt", "")).strip()
     art, inhalt = markierung_erkennen(text)
-    return EingangsAuftrag(quelle=quelle, projekt=projekt, art=art, inhalt=inhalt, datei=pfad)
+    try:
+        auftrag_nummer = int(daten["auftrag_nummer"]) if "auftrag_nummer" in daten else None
+    except (TypeError, ValueError):
+        auftrag_nummer = None
+    return EingangsAuftrag(quelle=quelle, projekt=projekt, art=art, inhalt=inhalt, datei=pfad,
+                            auftrag_nummer=auftrag_nummer)
+
+
+def ablegen(quelle: str, text: str, projekt: str = "",
+            auftrag_nummer: int | None = None) -> Path:
+    """Legt einen Auftrag als Datei in den Eingangsordner, genau wie
+    werkzeuge/in_eingang.ps1: erst unter ".json.teil" geschrieben, dann per
+    Path.replace() umbenannt - auf demselben Laufwerk atomar, damit der
+    Waechter nie eine halb geschriebene Datei zu sehen bekommt. Gedacht fuer
+    core/bruecke.py (Vorhaben "Bruecke" Stufe B3): jeder vom Connector-Dienst
+    abgeholte Auftrag landet so im selben Eingangsordner wie eine
+    Zeitschaltung und durchlaeuft dieselbe Pruefung."""
+    sicherstellen()
+    daten: dict = {"quelle": quelle, "projekt": projekt, "text": text}
+    if auftrag_nummer is not None:
+        daten["auftrag_nummer"] = auftrag_nummer
+    name = f"eingang_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.json"
+    teil = EINGANG_ORDNER / f"{name}.teil"
+    ziel = EINGANG_ORDNER / name
+    teil.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
+    teil.replace(ziel)
+    return ziel
 
 
 def admin_gesperrt(art: str, quelle: str) -> bool:

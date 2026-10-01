@@ -1059,6 +1059,19 @@ class EinstellungenFenster(QDialog):
             "vorherigen aufs Wort gleicht.",
             bool(werte.get("dubletten_pruefung", False)),
         )
+        self.bruecke_aktiv = self._schalter(
+            gruppe,
+            "bruecke_aktiv",
+            "Brücke zu claude.ai im Browser",
+            "Fragt alle fünf Sekunden einen eigenen Server-Dienst ab und "
+            "nimmt so Aufträge von Claude im Browser an, ohne dass Blöcke "
+            "von Hand kopiert werden müssen (Vorhaben „Brücke“, siehe "
+            "wissen/plan_bruecke.md). #ADMIN# ist über die Brücke immer "
+            "gesperrt. Auch über die Kachel „Brücke“ und Umschalt+F8 "
+            "schaltbar; Not-Aus (F8) schaltet die Brücke zusätzlich aus. "
+            "Ab Werk aus.",
+            bool(werte.get("bruecke_aktiv", False)),
+        )
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe
