@@ -1,10 +1,10 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 06:27.
+Automatisch erzeugt am 01.10.2026 06:38.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 2766 |  |
+| core\fenster.py | 2783 |  |
 | core\einstellungen.py | 1734 |  |
 | core\sitzung.py | 1592 |  |
 | core\wissen.py | 963 |  |
@@ -22,9 +22,9 @@ Automatisch erzeugt am 01.10.2026 06:27.
 | core\android_screenshot.py | 384 |  |
 | core\landkarte.py | 351 |  |
 | core\tastenleiste.py | 343 |  |
+| core\eingangsordner.py | 315 |  |
 | core\zuordnung.py | 301 |  |
 | memory_hub\memory_mcp.py | 296 | Memory Hub - MCP-Server. |
-| core\eingangsordner.py | 286 |  |
 | core\zeigeransage.py | 259 |  |
 | core\ersteinrichtung.py | 258 |  |
 | index\mcp_server.py | 182 | Code-Index - MCP-Server, Teil von CWB. |

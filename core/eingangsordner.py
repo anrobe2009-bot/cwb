@@ -88,6 +88,16 @@ class EingangsFehler(Exception):
     """Eine Datei im Eingangsordner ist kein gültiger Auftrag."""
 
 
+class AuftragSpaeter(Exception):
+    """`ausfuehren` wirft das, wenn eine belegte Ressource (Terminal oder
+    Screenshot-Weg) den Auftrag gerade nicht annehmen kann. Die Datei geht
+    dadurch nicht verloren: `verarbeiten()` legt sie unverändert in den
+    Eingangsordner zurück, statt sie nach erledigt/ zu verschieben - der
+    nächste Blick des Wächters (Dateisystem-Ereignis oder spätestens nach
+    PRUEF_ABSTAND_MS) versucht sie erneut, in derselben Reihenfolge wie beim
+    ersten Mal."""
+
+
 @dataclass
 class EingangsAuftrag:
     quelle: str
@@ -98,7 +108,10 @@ class EingangsAuftrag:
 
 
 def _daten_lesen(pfad: Path) -> dict:
-    rohtext = pfad.read_text(encoding="utf-8")
+    # utf-8-sig statt utf-8: PowerShell 5.1 (Set-Content -Encoding UTF8, siehe
+    # werkzeuge/in_eingang.ps1) schreibt eine UTF-8-BOM. json.loads lehnt eine
+    # BOM als "Unexpected UTF-8 BOM" ab - utf-8-sig liest mit und ohne BOM.
+    rohtext = pfad.read_text(encoding="utf-8-sig")
     daten = json.loads(rohtext)
     if not isinstance(daten, dict):
         raise EingangsFehler("JSON ist kein Objekt")
@@ -189,6 +202,18 @@ def _verschieben(pfad: Path, ziel_ordner: Path, grund: str = "") -> None:
             log.warning("Ablehnungsgrund nicht schreibbar für %s: %s", ziel, fehler)
 
 
+def _zurueckstellen(pfad: Path) -> None:
+    """Legt eine beanspruchte Datei unverändert in den Eingangsordner
+    zurück (AuftragSpaeter). `Path.replace()` ändert den Zeitstempel nicht,
+    `wartende_dateien()` sortiert danach - die Ankunftsreihenfolge bleibt
+    also über beliebig viele Rückstellungen hinweg erhalten."""
+    ziel = EINGANG_ORDNER / pfad.name
+    try:
+        pfad.replace(ziel)
+    except OSError as fehler:
+        log.error("Eingangsdatei nicht zurückstellbar: %s -> %s (%s)", pfad, ziel, fehler)
+
+
 def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
     """Ein Durchlauf für genau eine Datei: beanspruchen, lesen, bei #ADMIN#
     ohne Quelle "lokal" ablehnen, sonst an `ausfuehren(auftrag)` (core/
@@ -215,6 +240,10 @@ def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
         return
     try:
         ausfuehren(auftrag)
+    except AuftragSpaeter as grund:
+        log.info("Eingangsdatei zurückgestellt (%s): %s", pfad.name, grund)
+        _zurueckstellen(beansprucht)
+        return
     except Exception as fehler:  # noqa: BLE001
         log.exception("Auftrag aus dem Eingangsordner gescheitert (%s): %s", pfad.name, fehler)
     _verschieben(beansprucht, erledigt_ordner())

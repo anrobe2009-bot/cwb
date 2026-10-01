@@ -73,7 +73,7 @@ try:
     from .android_screenshot import screenshot_ablegen
     from .bloecke import block_erkennen, block_zaehler_aktualisieren
     from .datenordner import erstuebernahme
-    from .eingangsordner import Eingangswaechter
+    from .eingangsordner import AuftragSpaeter, Eingangswaechter
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
     from .faden import SitzungsFaden
@@ -131,7 +131,7 @@ except ImportError:
     from android_screenshot import screenshot_ablegen
     from bloecke import block_erkennen, block_zaehler_aktualisieren
     from datenordner import erstuebernahme
-    from eingangsordner import Eingangswaechter
+    from eingangsordner import AuftragSpaeter, Eingangswaechter
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
     from faden import SitzungsFaden
@@ -1956,15 +1956,32 @@ class Werkbank(QMainWindow):
         self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
                         block_angesagt=block_angesagt)
 
-    @slot_geschuetzt
     def _eingang_auftrag(self, auftrag) -> None:
-        """Ein Auftrag aus dem Eingangsordner (core/eingangsordner.py,
-        Vorhaben "Bruecke" Stufe B1, siehe wissen/plan_bruecke.md) -
-        Zeitschaltung, von Hand ueber werkzeuge/in_eingang.ps1, spaeter die
-        Bruecke zu claude.ai im Browser. #ADMIN# ist schon in
-        core.eingangsordner.verarbeiten() ausgeschlossen, ausser die Quelle
-        ist "lokal" - diese Methode bekommt es nur noch dann zu sehen. Sonst
-        identisch zu `_ablage_auftrag`: gleiche Blocknummern-, Dubletten- und
+        """Duenner, ABSICHTLICH nicht mit @slot_geschuetzt versehener
+        Vorspann vor `_eingang_auftrag_geschuetzt`: prueft, ob das Terminal
+        (#run#/#admin#) oder der Screenshot-Weg (#BILD#) gerade belegt ist,
+        und wirft dann AuftragSpaeter. @slot_geschuetzt faengt JEDE Ausnahme
+        ab und verschluckt sie - stuende es hier, wuerde
+        core.eingangsordner.verarbeiten() die Ausnahme nie zu sehen bekommen
+        und die Datei faelschlich als erledigt gelten. Anders als
+        `_ablage_auftrag` darf ein Auftrag aus dem Eingangsordner nie
+        verloren gehen: `verarbeiten()` legt die Datei bei AuftragSpaeter
+        unverarbeitet zurueck, der naechste Blick des Waechters versucht sie
+        erneut, sobald die Ressource frei ist."""
+        art = auftrag.art
+        if art == "bild" and self._bild_faden is not None and self._bild_faden.isRunning():
+            raise AuftragSpaeter("Screenshot-Weg belegt")
+        if art in ("run", "admin") and self._terminal_faden is not None \
+                and self._terminal_faden.isRunning():
+            raise AuftragSpaeter("Terminal belegt")
+        self._eingang_auftrag_geschuetzt(auftrag)
+
+    @slot_geschuetzt
+    def _eingang_auftrag_geschuetzt(self, auftrag) -> None:
+        """Der eigentliche Eingangsordner-Auftrag, abgesichert durch
+        @slot_geschuetzt wie jeder andere Qt-Slot - die Belegt-Pruefung dafuer
+        steht in `_eingang_auftrag` davor (siehe dort). Sonst identisch zu
+        `_ablage_auftrag`: gleiche Blocknummern-, Dubletten- und
         Projektpruefung; nur `vorspann` nennt zusaetzlich die Quelle."""
         art, inhalt = auftrag.art, auftrag.inhalt
         log.info(

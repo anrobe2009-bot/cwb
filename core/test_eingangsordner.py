@@ -96,6 +96,24 @@ class LesenTest(EingangsordnerTestBasis):
         with self.assertRaises(eingangsordner.EingangsFehler):
             eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
 
+    def test_utf8_bom_wird_gelesen(self):
+        # PowerShell 5.1 (Set-Content -Encoding UTF8, siehe
+        # werkzeuge/in_eingang.ps1) schreibt eine UTF-8-BOM vor den Text -
+        # json.loads lehnt das roh ab ("Unexpected UTF-8 BOM").
+        pfad = self._ordner / "a.json"
+        inhalt = json.dumps({"quelle": "zeitschaltung", "text": "#CODE#\nTu etwas."},
+                             ensure_ascii=False)
+        pfad.write_bytes(b"\xef\xbb\xbf" + inhalt.encode("utf-8"))
+        auftrag = eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
+        self.assertEqual(auftrag.quelle, "zeitschaltung")
+        self.assertEqual(auftrag.art, "code")
+        self.assertEqual(auftrag.inhalt, "Tu etwas.")
+
+    def test_ohne_bom_weiterhin_lesbar(self):
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        auftrag = eingangsordner.auftrag_lesen(pfad, markierung_erkennen)
+        self.assertEqual(auftrag.inhalt, "x")
+
 
 class AdminSperreTest(unittest.TestCase):
 
@@ -182,6 +200,55 @@ class VerarbeitenTest(EingangsordnerTestBasis):
         self.assertEqual(alt.read_text(encoding="utf-8"), "alt")
         treffer = list(eingangsordner.erledigt_ordner().glob("a_*.json"))
         self.assertEqual(len(treffer), 1)
+
+    def test_auftrag_spaeter_legt_datei_unverarbeitet_zurueck(self):
+        # Terminal oder Screenshot-Weg belegt (core/fenster.py,
+        # _eingang_auftrag): die Datei darf nicht nach erledigt/ oder
+        # abgelehnt/ verschwinden, sondern muss beim naechsten Blick erneut
+        # auftauchen.
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "#RUN#\nipconfig"})
+
+        def ausfuehren(_auftrag):
+            raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        eingangsordner.verarbeiten(pfad, markierung_erkennen, ausfuehren)
+        zurueck = self._ordner / "a.json"
+        self.assertTrue(zurueck.exists())
+        self.assertFalse((eingangsordner.erledigt_ordner() / "a.json").exists())
+        self.assertFalse((eingangsordner.abgelehnt_ordner() / "a.json").exists())
+        self.assertFalse((eingangsordner.in_bearbeitung_ordner() / "a.json").exists())
+        self.assertEqual(eingangsordner.wartende_dateien(), [zurueck])
+
+    def test_auftrag_spaeter_behaelt_reihenfolge_ueber_zeitstempel(self):
+        # Path.replace() aendert den Zeitstempel nicht - die urspruengliche
+        # Ankunftsreihenfolge (wartende_dateien() sortiert danach) bleibt
+        # ueber eine Rueckstellung hinweg erhalten.
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "#RUN#\nipconfig"})
+        vorher = pfad.stat().st_mtime
+
+        def ausfuehren(_auftrag):
+            raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        eingangsordner.verarbeiten(pfad, markierung_erkennen, ausfuehren)
+        zurueck = self._ordner / "a.json"
+        self.assertEqual(zurueck.stat().st_mtime, vorher)
+
+    def test_auftrag_spaeter_wird_erneut_versucht_bis_erfolg(self):
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "#RUN#\nipconfig"})
+        versuche = {"anzahl": 0}
+
+        def ausfuehren(_auftrag):
+            versuche["anzahl"] += 1
+            if versuche["anzahl"] < 2:
+                raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        zurueck = self._ordner / "a.json"
+        eingangsordner.verarbeiten(zurueck, markierung_erkennen, ausfuehren)
+        self.assertTrue(zurueck.exists())  # erster Versuch: zurueckgestellt
+        eingangsordner.verarbeiten(zurueck, markierung_erkennen, ausfuehren)
+        self.assertFalse(zurueck.exists())  # zweiter Versuch: erledigt
+        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+        self.assertEqual(versuche["anzahl"], 2)
 
 
 class WartendeDateienTest(EingangsordnerTestBasis):
