@@ -1916,6 +1916,9 @@ class Werkbank(QMainWindow):
         elif bilanz.get("abgebrochen"):
             teile += ["Abgebrochen.", ""]
 
+        if bilanz.get("hintergrund_warnung"):
+            teile += ["Warnung:", str(bilanz["hintergrund_warnung"]), ""]
+
         geaendert = bilanz.get("geaendert") or []
         teile.append("Geänderte Dateien:")
         teile += [f"- {pfad}" for pfad in geaendert] if geaendert else ["- keine"]

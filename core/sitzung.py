@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import (
+    TERMINAL_TASK_STATUSES,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -37,6 +38,9 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     RateLimitEvent,
     ResultMessage,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ThinkingBlock,
     ToolPermissionContext,
@@ -394,12 +398,36 @@ Regeln:
 - Jede neue Werkzeugdatei bekommt Fehler-Logging ueber das Modul logging.
 - Lies eine Datei, bevor du sie aenderst.
 - Wenn etwas unklar, unmoeglich oder unlogisch ist: sag es in einem Satz, statt zu raten.
-- Starte keine Hintergrund-Agenten und keine Hintergrund-Befehle. Unteragenten
-  sind erlaubt, aber nur im Vordergrund. Beende deine Antwort erst, wenn alle
-  Ergebnisse vorliegen.
+- Das Werkzeug fuer Unteragenten (Agent) und fuer Hintergrund-Orchestrierung
+  (Workflow) ist in CWB abgeschaltet und steht dir nicht zur Verfuegung.
+- Starte keine Hintergrund-Befehle (z. B. Bash im Hintergrund), auf deren
+  Ergebnis du warten muesstest. Arbeite jeden Auftrag vollstaendig selbst ab
+  und beende ihn erst, wenn er umgesetzt und geprueft ist.
 - Keine simulierten Tastendruecke oder Mausklicks an Fenster anderer Programme.
   Programme werden ueber eingebaute Testzugaenge, Kommandozeile oder
   Bildschirmfotos geprueft."""
+
+
+# Block 52: Werkzeugnamen aus der offiziellen Claude-Code-Tool-Referenz
+# (https://code.claude.com/docs/en/tools-reference), die fuer CWB-Sitzungen
+# ganz abgeschaltet werden (ClaudeAgentOptions.disallowed_tools in
+# _einstellungen()) - "Agent" startet Unteragenten, "Workflow" orchestriert
+# mehrere davon im Hintergrund. Als eigene Konstante, damit ein Test ohne
+# laufende Sitzung pruefen kann, dass beide wirklich gesperrt sind.
+HINTERGRUND_WERKZEUGE_GESPERRT = ["Agent", "Workflow"]
+
+
+def _hintergrund_warnung(aktive: dict[str, str]) -> str | None:
+    """Baut den Warnungstext fuer bericht_bauen() (core/fenster.py) aus den
+    beim Ende eines Auftrags noch nicht abgeschlossenen Hintergrundaufgaben
+    (task_id -> Beschreibung, siehe Sitzung._hintergrundaufgaben). None,
+    wenn keine mehr offen ist - dann bleibt der Bericht unveraendert."""
+    if not aktive:
+        return None
+    beschreibungen = ", ".join(
+        f"{beschreibung} ({task_id})" for task_id, beschreibung in aktive.items()
+    )
+    return f"Auftrag endete mit laufender Hintergrundaufgabe: {beschreibungen}"
 
 
 def _kontingent_aus_limit(info: Any) -> dict[str, Any] | None:
@@ -459,6 +487,14 @@ class Sitzung:
         # ihn alle AUFTRAG_KONTEXT_ALLE Auftraege in Kurzfassung zu
         # wiederholen (siehe auftrag()); wird beim Verbinden neu aufgesetzt.
         self._auftraege_seit_kontext = 0
+        # Block 52: Hintergrundaufgaben (Agent/Workflow/Bash im Hintergrund),
+        # deren Start diese Sitzung gesehen hat, aber noch kein Abschluss -
+        # task_id -> Beschreibung. Ueberlebt einzelne Auftraege absichtlich,
+        # damit eine Aufgabe, die erst nach der ResultMessage eines spaeteren
+        # Auftrags fertig meldet, trotzdem wieder entfernt wird (siehe
+        # auftrag(), Verarbeitung von TaskStartedMessage/TaskNotification-
+        # Message/TaskUpdatedMessage).
+        self._hintergrundaufgaben: dict[str, str] = {}
         # Suchpflicht vor Aenderungen (Block C6, Teil B): welche der beiden
         # Nachschlage-Werkzeuge in dieser Sitzung ueberhaupt verbunden sind
         # (gefuellt beim Verbinden ueber get_mcp_status), ob im laufenden
@@ -982,6 +1018,15 @@ class Sitzung:
             include_partial_messages=False,
             stderr=self.fehlerstrom.aufnehmen,
             mcp_servers=mcp_servers,
+            # Block 52: Unteragenten/Hintergrundaufgaben ganz abschalten,
+            # nicht nur per SYSTEM_ZUSATZ verbieten - disallowed_tools
+            # entfernt das Werkzeug aus dem Kontext des Modells, es kann
+            # ueberhaupt nicht mehr aufgerufen werden (claude_agent_sdk.types
+            # .ClaudeAgentOptions.disallowed_tools). Bash selbst bleibt
+            # erlaubt (fuer #RUN#/#ADMIN# unverzichtbar); ein Bash-Befehl im
+            # Hintergrund laesst sich damit nicht sperren, dafuer bleibt die
+            # Erkennung in auftrag() (TaskStartedMessage).
+            disallowed_tools=HINTERGRUND_WERKZEUGE_GESPERRT,
             # Werkzeugergebnisse mit eingebetteten Bildern ueberschreiten die
             # Vorgabe des SDK (1 MB) leicht; dann stirbt dessen Lesefaden
             # und die Sitzung liefert still nichts mehr (siehe auftrag()).
@@ -1385,6 +1430,21 @@ class Sitzung:
                 elif isinstance(nachricht, UserMessage):
                     self._protokoll_ergebnisse_erfassen(nachricht)
 
+                elif isinstance(nachricht, TaskStartedMessage):
+                    # Block 52: SYSTEM_ZUSATZ und disallowed_tools verbieten
+                    # Hintergrundaufgaben; trifft trotzdem eine ein (z. B.
+                    # Bash im Hintergrund, das disallowed_tools nicht sperren
+                    # kann, siehe _einstellungen()), wird sie hier vermerkt.
+                    self._hintergrundaufgaben[nachricht.task_id] = nachricht.description
+                    log.warning(
+                        "Hintergrundaufgabe gestartet trotz Verbot: %s (%s)",
+                        nachricht.task_id, nachricht.description,
+                    )
+
+                elif isinstance(nachricht, (TaskNotificationMessage, TaskUpdatedMessage)):
+                    if nachricht.status in TERMINAL_TASK_STATUSES:
+                        self._hintergrundaufgaben.pop(nachricht.task_id, None)
+
                 elif isinstance(nachricht, RateLimitEvent):
                     # Status "rejected" heisst: das Max-Kontingent (Fuenf-
                     # Stunden- oder Wochenfenster) ist erschoepft. Nur
@@ -1478,6 +1538,16 @@ class Sitzung:
         }
         if kontingent is not None:
             ergebnis["kontingent"] = kontingent
+        # Block 52: wiederkehrender Fehler, bei dem Claude Code eine
+        # Hintergrundaufgabe startete und den Auftrag mit "ich warte auf das
+        # Ergebnis" beendete, ohne selbst etwas umzusetzen - der naechste
+        # Auftrag bekam dann das spaete Ergebnis statt seiner eigenen Arbeit.
+        # Eine Warnung hier heisst: der Auftrag ist zu Ende, aber mindestens
+        # eine Hintergrundaufgabe laeuft noch.
+        warnung = _hintergrund_warnung(self._hintergrundaufgaben)
+        if warnung:
+            ergebnis["hintergrund_warnung"] = warnung
+            log.warning(warnung)
         return ergebnis
 
     async def _strom_leeren(self) -> bool:
