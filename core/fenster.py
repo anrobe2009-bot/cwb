@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QListWidget,
     QMainWindow,
     QMenu,
@@ -911,6 +912,17 @@ class Werkbank(QMainWindow):
         mitte = QWidget()
         mitte.setObjectName("arbeitsflaeche")
         aufbau = QVBoxLayout(mitte)
+        # Ohne diese Zeile setzt Qt die Mindestbreite/-hoehe des Fensters
+        # automatisch auf die Summe der Breiten aller Kindelemente in voller
+        # (ungeskalierter) Schriftgroesse - das Fenster liesse sich dann nie
+        # unter diesen Wert ziehen, auch nicht durch Andocken (Windows-Taste
+        # + Pfeil) oder die Skalierung des Stilblatts (stil_anwenden), weil
+        # die dafuer noetige Groessenaenderung gar nicht erst zugelassen
+        # wuerde. SetNoConstraint gibt diese Grenze frei; die Kindelemente
+        # (Kachelreihe, Ausgabekopf) weichen bei wenig Platz selbst aus
+        # (Umbruch bzw. kuerzere Texte), siehe core/tastenleiste.py und
+        # core/kopfzeile.py.
+        aufbau.setSizeConstraint(QLayout.SetNoConstraint)
 
         balken_zeile = QWidget()
         balken_zeile.setObjectName("balkenzeile")
@@ -1020,6 +1032,17 @@ class Werkbank(QMainWindow):
             feld.viewport().installEventFilter(self)
 
         self.setCentralWidget(mitte)
+        # Dieselbe Sperre wie bei `aufbau` oben, jetzt fuer das Fenster
+        # selbst: ohne sie uebernaehme QMainWindow die (ungeskalierte)
+        # Mindestgroesse von `mitte` unveraendert als eigene, vom
+        # Fenstermanager erzwungene Untergrenze - das Fenster liesse sich
+        # dann trotz allem nicht auf ein Drittel Bildschirmbreite
+        # verkleinern. Stattdessen eine kleine, feste Untergrenze (Block 49):
+        # klein genug, dass sie beim Ziel von etwa 600x540 nicht selbst zur
+        # Grenze wird.
+        if self.layout() is not None:
+            self.layout().setSizeConstraint(QLayout.SetNoConstraint)
+        self.setMinimumSize(480, 360)
 
     def _kuerzel_merken(self, folge: str, ziel) -> None:
         """Schreibt nur die Logzeile, dass die Taste im Fenster angekommen ist.

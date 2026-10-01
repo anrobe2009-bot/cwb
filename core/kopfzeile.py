@@ -29,6 +29,14 @@ verschiebt sich nichts. Die Zeile bleibt einzeilig; die Skalierung des ganzen
 Stilblatts (core/grundlagen.py, `stil_anwenden`) haelt Schrift und Abstaende
 schmaler Fenster klein genug, dass nichts umbricht.
 
+Reicht selbst die kleinste Schrift nicht mehr fuer die volle Beschriftung,
+wechselt die Kopfzeile in den Schmal-Modus (resizeEvent, `_modus_anwenden`):
+kuerzere Texte wie "Brücke" statt "Brücke an" oder nackte Zahlen statt
+"Auftrag 999.999". So erzwingt die Kopfzeile nie eine Mindestbreite - anders
+als vor Block 49, als die Beispieltexte zugleich die Untergrenze jedes Feldes
+waren (Qt-Labels ohne Zeilenumbruch melden ihre volle Textbreite auch als
+`minimumSizeHint`, `setMinimumWidth(0)` aendert daran nichts).
+
 Die Schaltflaeche zum Kopieren steht nicht mehr hier, sondern in einer eigenen
 schmalen Zeile direkt ueber dem Ausgabefeld (core/fenster.py) - dort gehoert
 sie hin, nicht in die Kopfzeile mit den Zaehlern.
@@ -85,16 +93,21 @@ WARTE_BEISPIELE = ("Warten 99",)
 # Zeichen fuer die drei Rueckfrage-Ausnahmen (Einstellungen, Reiter
 # Verhalten). Bleibt leer, solange keine der drei an ist - die Breite wird
 # am laengsten moeglichen Text gemessen, damit nichts in der Reihe springt.
+# Bei wenig Platz (Ausgabekopf.resizeEvent) steht nur noch das Zeichen da,
+# der volle Wortlaut bleibt als Kurzhinweis und Vorlesetext erhalten.
 SICHERHEITSHINWEIS_BEISPIELE = ("⚠ Internet · Löschen · Installieren",)
+SICHERHEITSHINWEIS_KURZ_BEISPIELE = ("⚠",)
 
 # Zahl der aktiven Freigaben (Einstellungen, Reiter Freigaben). Die Breite
 # wird an einer zweistelligen Zahl gemessen und aendert sich nie.
 FREIGABEN_BEISPIELE = ("Freigaben 99",)
+FREIGABEN_KURZ_BEISPIELE = ("99",)
 
 # Statushinweis fuer den Schalter "Bruecke" (Einstellungen, Reiter Verhalten,
 # Umschalt+F8, core/fenster.py, Vorhaben "Bruecke" Stufe B3). Bleibt leer,
 # solange die Bruecke aus ist - ab Werk der Fall.
 BRUECKE_BEISPIELE = ("Brücke an",)
+BRUECKE_KURZ_BEISPIELE = ("Brücke",)
 
 # "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"): Grundwert vom
 # 21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep, Glob,
@@ -104,6 +117,10 @@ BRUECKE_BEISPIELE = ("Brücke an",)
 # Gedankenstrich statt einer Zahl (siehe such_effizienz_zeigen); die Breite
 # wird an beiden Beispielen gemessen.
 SUCH_EFFIZIENZ_BEISPIELE = ("Such-Effizienz –", "Such-Effizienz 999 %")
+SUCH_EFFIZIENZ_KURZ_BEISPIELE = ("–", "999 %")
+
+# Warteanzeige kurz: nur die Zahl, ohne das Wort "Warten".
+WARTE_KURZ_BEISPIELE = ("99",)
 
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
@@ -112,6 +129,9 @@ AUFTRAG_BEISPIEL = "Auftrag 999.999"
 SITZUNG_BEISPIEL = "Sitzung 999.999"
 HEUTE_BEISPIEL = "Heute 999.999"
 ZAEHLER_BEISPIELE = (AUFTRAG_BEISPIEL, SITZUNG_BEISPIEL, HEUTE_BEISPIEL)
+# Kurzform bei wenig Platz: nur die Zahl, ohne "Auftrag"/"Sitzung"/"Heute" -
+# die Reihenfolge und der Kurzhinweis sagen weiterhin, welche Zahl welche ist.
+ZAEHLER_KURZ_BEISPIELE = ("999.999",)
 
 
 def zahl_lang(anzahl: int) -> str:
@@ -197,6 +217,28 @@ class Ausgabekopf(QWidget):
 
         self.nur_lesen = False
         self._status_text = "Verbinde …"
+
+        # Schmal-Modus: bei wenig Breite weichen die Felder auf kuerzere
+        # Texte aus (z. B. "Brücke" statt "Brücke an", Zaehler ohne Wort),
+        # damit die Zeile nie eine Mindestbreite erzwingt - siehe
+        # resizeEvent und _modus_anwenden. Die Rohwerte stehen in eigenen
+        # Feldern, damit beim Wechsel neu gezeichnet werden kann, ohne dass
+        # das Fenster den Wert erneut liefern muss.
+        self._schmal = False
+        self._sicherheit_internet = False
+        self._sicherheit_loeschen = False
+        self._sicherheit_installieren = False
+        self._freigaben_namen: list = []
+        self._bruecke_an = False
+        self._such_prozent: int | None = None
+        self._warte_anzahl = 0
+        self._verbrauch: dict = {}
+        self._heute = 0
+        # Je Feld die bei masse_festlegen gemessene (Breite lang, Breite
+        # kurz). Bestimmt, ab wann resizeEvent in den Schmal-Modus wechselt.
+        self._breiten: dict = {}
+        self._breite_lang_benoetigt = 0
+        self._hoehe = 0
 
         quer = QHBoxLayout(self)
         quer.setContentsMargins(0, 0, 0, 0)
@@ -322,48 +364,95 @@ class Ausgabekopf(QWidget):
 
     def masse_festlegen(self) -> None:
         """Legt die Masse der Kopfzeile fest: jedes Feld genau eine Textzeile
-        hoch und auf die Breite seiner gleichbleibenden Beispieltexte. Kein
-        Inhalt kann die Groesse aendern - weder eine grosse Zahl noch ein
-        langer Freigaben-Zaehler.
+        hoch, auf die Breite seiner gleichbleibenden Beispieltexte gemessen -
+        einmal lang (volle Beschriftung) und einmal kurz (siehe
+        _modus_anwenden). Kein Inhalt kann die Groesse aendern - weder eine
+        grosse Zahl noch ein langer Freigaben-Zaehler.
 
-        Die Breite ist Wunsch und Obergrenze zugleich, keine Untergrenze. Die
-        Zeile bleibt einzeilig; das Schrumpfen bei schmalem Fenster besorgt
-        die Skalierung des ganzen Stilblatts (core/grundlagen.py,
-        `stil_anwenden`), nicht ein Umbruch hier."""
+        Die Breite ist Wunsch und Obergrenze des jeweils geltenden Modus,
+        keine Untergrenze: reicht die Fensterbreite fuer die lange Fassung
+        nicht, wechselt resizeEvent in den Schmal-Modus mit kuerzeren
+        Texten, statt eine Mindestbreite zu erzwingen. Die Zeile bleibt
+        einzeilig; zusaetzlich besorgt die Skalierung des ganzen Stilblatts
+        (core/grundlagen.py, `stil_anwenden`) das Schrumpfen von Schrift und
+        Abstaenden."""
         try:
             felder = (
-                (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
-                (self.freigabenanzeige, FREIGABEN_BEISPIELE),
-                (self.bruecke_anzeige, BRUECKE_BEISPIELE),
-                (self.such_effizienz, SUCH_EFFIZIENZ_BEISPIELE),
-                (self.warteanzeige, WARTE_BEISPIELE),
-                (self.tokenzaehler, ZAEHLER_BEISPIELE),
-                (self.sitzungszaehler, ZAEHLER_BEISPIELE),
-                (self.tageszaehler, ZAEHLER_BEISPIELE),
+                ("sicherheitshinweis", self.sicherheitshinweis,
+                 SICHERHEITSHINWEIS_BEISPIELE, SICHERHEITSHINWEIS_KURZ_BEISPIELE),
+                ("freigabenanzeige", self.freigabenanzeige,
+                 FREIGABEN_BEISPIELE, FREIGABEN_KURZ_BEISPIELE),
+                ("bruecke_anzeige", self.bruecke_anzeige,
+                 BRUECKE_BEISPIELE, BRUECKE_KURZ_BEISPIELE),
+                ("such_effizienz", self.such_effizienz,
+                 SUCH_EFFIZIENZ_BEISPIELE, SUCH_EFFIZIENZ_KURZ_BEISPIELE),
+                ("warteanzeige", self.warteanzeige,
+                 WARTE_BEISPIELE, WARTE_KURZ_BEISPIELE),
+                ("tokenzaehler", self.tokenzaehler,
+                 ZAEHLER_BEISPIELE, ZAEHLER_KURZ_BEISPIELE),
+                ("sitzungszaehler", self.sitzungszaehler,
+                 ZAEHLER_BEISPIELE, ZAEHLER_KURZ_BEISPIELE),
+                ("tageszaehler", self.tageszaehler,
+                 ZAEHLER_BEISPIELE, ZAEHLER_KURZ_BEISPIELE),
             )
-            gemessen = []
+            breiten = {}
             hoehe = 0
-            for teil, beispiele in felder:
+            for name, teil, lang_beispiele, kurz_beispiele in felder:
                 # Ohne Grenze messen, sonst misst das Feld seine eigene
                 # Kuerzung vom letzten Mal.
                 teil.masse_zuruecksetzen()
-                breite, teilhoehe = self._breite_messen(teil, beispiele)
-                if breite <= 0 or teilhoehe <= 0:
+                breite_lang, teilhoehe = self._breite_messen(teil, lang_beispiele)
+                breite_kurz, teilhoehe_kurz = self._breite_messen(teil, kurz_beispiele)
+                if breite_lang <= 0 or teilhoehe <= 0 or breite_kurz <= 0:
                     return
-                gemessen.append((teil, breite))
-                hoehe = max(hoehe, teilhoehe)
+                breiten[name] = (breite_lang, breite_kurz)
+                hoehe = max(hoehe, teilhoehe, teilhoehe_kurz)
 
-            for teil, breite in gemessen:
-                teil.wunschbreite_setzen(breite)
-                teil.setFixedHeight(hoehe)
-            # Die Kopfzeile bekommt ihre Hoehe direkt und einmalig gesetzt,
-            # statt sie ueber die Kindfelder implizit vom Layout ableiten zu
-            # lassen (analog zu ATBs _set_panel_height). So steht in jedem
-            # Zustand ein einziger, eindeutiger Wert fest - kein Messen und
-            # Zurueckstellen der Fenstergroesse ist mehr noetig.
-            self.setFixedHeight(hoehe)
+            self._breiten = breiten
+            self._hoehe = hoehe
+            # Noetige Breite in der langen Fassung: die vier immer
+            # sichtbaren linken Felder, die drei Zaehler und die Abstaende
+            # dazwischen (die Warteanzeige bleibt aussen vor, sie ist im
+            # Regelfall verborgen und traegt dann nichts zur Breite bei).
+            dauerhaft = ("sicherheitshinweis", "freigabenanzeige", "bruecke_anzeige",
+                         "such_effizienz", "tokenzaehler", "sitzungszaehler",
+                         "tageszaehler")
+            abstand = self.layout().spacing() if self.layout() else 4
+            self._breite_lang_benoetigt = (
+                sum(breiten[name][0] for name in dauerhaft)
+                + abstand * (len(dauerhaft) - 1)
+            )
+            self._modus_anwenden()
         except Exception as fehler:  # noqa: BLE001
             log.exception("Maße der Kopfzeile nicht festgelegt: %s", fehler)
+
+    def _modus_anwenden(self) -> None:
+        """Setzt an jedem Feld die Wunschbreite des geltenden Modus (lang
+        oder schmal) und zeichnet alle Anzeigen mit dem passenden Wortlaut
+        neu. Aufgerufen nach jedem Messen und bei jedem Moduswechsel."""
+        if not self._breiten:
+            return
+        for name, (breite_lang, breite_kurz) in self._breiten.items():
+            teil = getattr(self, name)
+            teil.wunschbreite_setzen(breite_kurz if self._schmal else breite_lang)
+            teil.setFixedHeight(self._hoehe)
+        self.setFixedHeight(self._hoehe)
+        self._sicherheitshinweis_zeichnen()
+        self._freigaben_zeichnen()
+        self._bruecke_zeichnen()
+        self._such_effizienz_zeichnen()
+        self._warteschlange_zeichnen()
+        self._verbrauch_zeichnen()
+        self._tag_zeichnen()
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        if not self._breite_lang_benoetigt:
+            return
+        schmal = self.width() < self._breite_lang_benoetigt
+        if schmal != self._schmal:
+            self._schmal = schmal
+            self._modus_anwenden()
 
     # -- Warteschlange ------------------------------------------------------
 
@@ -371,9 +460,14 @@ class Ausgabekopf(QWidget):
         """Zeigt, wie viele Auftraege hinter dem laufenden warten. Bei null
         bleibt das Feld leer; der volle Wortlaut steht als Beschreibung und
         Kurzhinweis dahinter."""
+        self._warte_anzahl = max(0, int(anzahl))
+        self._warteschlange_zeichnen()
+
+    def _warteschlange_zeichnen(self) -> None:
         try:
-            anzahl = max(0, int(anzahl))
-            self.warteanzeige.setText(f"Warten {anzahl}" if anzahl else "")
+            anzahl = self._warte_anzahl
+            text = str(anzahl) if self._schmal else f"Warten {anzahl}"
+            self.warteanzeige.setText(text if anzahl else "")
             self.warteanzeige.setVisible(anzahl > 0)
             if anzahl == 0:
                 satz = "Warteschlange leer, es wartet kein Auftrag."
@@ -419,16 +513,23 @@ class Ausgabekopf(QWidget):
         """Zeigt ein kurzes Zeichen, solange mindestens einer der drei
         Rueckfrage-Schalter (Einstellungen, Reiter Verhalten) an ist. Sind
         alle drei aus, bleibt das Feld leer."""
+        self._sicherheit_internet = internet_ohne_rueckfrage
+        self._sicherheit_loeschen = loeschen_ohne_rueckfrage
+        self._sicherheit_installieren = installieren_ohne_rueckfrage
+        self._sicherheitshinweis_zeichnen()
+
+    def _sicherheitshinweis_zeichnen(self) -> None:
         try:
             teile = []
-            if internet_ohne_rueckfrage:
+            if self._sicherheit_internet:
                 teile.append("Internet")
-            if loeschen_ohne_rueckfrage:
+            if self._sicherheit_loeschen:
                 teile.append("Löschen")
-            if installieren_ohne_rueckfrage:
+            if self._sicherheit_installieren:
                 teile.append("Installieren")
             if teile:
-                self.sicherheitshinweis.setText("⚠ " + " · ".join(teile))
+                text = "⚠" if self._schmal else "⚠ " + " · ".join(teile)
+                self.sicherheitshinweis.setText(text)
                 satz = "Ohne Rückfrage erlaubt: " + " und ".join(teile) + "."
             else:
                 self.sicherheitshinweis.setText("")
@@ -442,8 +543,14 @@ class Ausgabekopf(QWidget):
         """Zeigt "Brücke an", solange der Schalter an ist (Einstellungen,
         Reiter Verhalten, Umschalt+F8). Aus bleibt das Feld leer - das ist
         der Normalfall."""
+        self._bruecke_an = bool(an)
+        self._bruecke_zeichnen()
+
+    def _bruecke_zeichnen(self) -> None:
         try:
-            self.bruecke_anzeige.setText("Brücke an" if an else "")
+            an = self._bruecke_an
+            text = ("Brücke" if self._schmal else "Brücke an") if an else ""
+            self.bruecke_anzeige.setText(text)
             satz = "Brücke an: Claude im Browser kann Aufträge schicken." if an \
                 else "Brücke aus."
             self.bruecke_anzeige.setToolTip(satz)
@@ -455,9 +562,15 @@ class Ausgabekopf(QWidget):
         """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage
         freigegeben sind (Einstellungen, Reiter Freigaben). Bei keiner
         Freigabe bleibt das Feld leer."""
+        self._freigaben_namen = list(namen)
+        self._freigaben_zeichnen()
+
+    def _freigaben_zeichnen(self) -> None:
         try:
+            namen = self._freigaben_namen
             anzahl = len(namen)
-            self.freigabenanzeige.setText(f"Freigaben {anzahl}" if anzahl else "")
+            text = (str(anzahl) if self._schmal else f"Freigaben {anzahl}") if anzahl else ""
+            self.freigabenanzeige.setText(text)
             if anzahl == 0:
                 satz = "Keine Freigabe aktiv."
             else:
@@ -476,13 +589,19 @@ class Ausgabekopf(QWidget):
         kostet selbst welche. `prozent` ist None, solange weniger als 5
         Aufträge seit Block C6 vorliegen; dann steht ein Gedankenstrich da.
         Nicht gesprochen."""
+        self._such_prozent = prozent
+        self._such_effizienz_zeichnen()
+
+    def _such_effizienz_zeichnen(self) -> None:
         try:
+            prozent = self._such_prozent
             if prozent is None:
-                self.such_effizienz.setText("Such-Effizienz –")
+                self.such_effizienz.setText("–" if self._schmal else "Such-Effizienz –")
                 satz = ("Such-Effizienz: noch nicht ermittelbar, weniger als "
                         "5 Aufträge seit Block C6.")
             else:
-                self.such_effizienz.setText(f"Such-Effizienz {prozent} %")
+                text = f"{prozent} %" if self._schmal else f"Such-Effizienz {prozent} %"
+                self.such_effizienz.setText(text)
                 satz = (
                     f"Such-Effizienz {prozent} Prozent. 100 Prozent ist der "
                     "Normalwert vom 21.09.2026, mehr heißt gezielter gesucht, "
@@ -511,42 +630,61 @@ class Ausgabekopf(QWidget):
     def verbrauch_zeigen(self, verbrauch: dict) -> None:
         """Zeigt links die Token dieses Auftrags, rechts die der ganzen
         Sitzung. Wird nicht angesagt, nur angezeigt."""
-        # Sichtbar sind nur frische Eingabe plus Ausgabe. Die Cache-Werte
-        # wiederholen bei jedem Aufruf fast die ganze Unterhaltung und wuerden
-        # die Zahl unbrauchbar aufblaehen; sie stehen nur im Kurzhinweis.
-        sitzung = verbrauch.get("sitzung", 0)
-        letzter = verbrauch.get("gesamt", 0)
-        self.tokenzaehler.setText(f"Auftrag {zahl_kurz(letzter)}")
-        self.sitzungszaehler.setText(f"Sitzung {zahl_kurz(sitzung)}")
-
-        auftrag_einzeln = (
-            f"Dieser Auftrag {zahl_lang(letzter)} Token ohne Cache — "
-            f"Eingabe {zahl_lang(verbrauch.get('eingabe', 0))}, "
-            f"Ausgabe {zahl_lang(verbrauch.get('ausgabe', 0))}, "
-            f"Cache gelesen {zahl_lang(verbrauch.get('cache_gelesen', 0))}, "
-            f"Cache erstellt {zahl_lang(verbrauch.get('cache_erstellt', 0))}"
-        )
-        sitzung_einzeln = (
-            f"Ganze Sitzung {zahl_lang(sitzung)} Token ohne Cache — "
-            f"Eingabe {zahl_lang(verbrauch.get('sitzung_eingabe', 0))}, "
-            f"Ausgabe {zahl_lang(verbrauch.get('sitzung_ausgabe', 0))}, "
-            f"Cache gelesen {zahl_lang(verbrauch.get('sitzung_cache_gelesen', 0))}, "
-            f"Cache erstellt {zahl_lang(verbrauch.get('sitzung_cache_erstellt', 0))}"
-        )
-        self.tokenzaehler.setToolTip(auftrag_einzeln)
-        self.tokenzaehler.setAccessibleDescription(auftrag_einzeln)
-        self.sitzungszaehler.setToolTip(sitzung_einzeln)
-        self.sitzungszaehler.setAccessibleDescription(sitzung_einzeln)
-
+        self._verbrauch = dict(verbrauch)
+        self._verbrauch_zeichnen()
         if "heute" in verbrauch:
             self.tag_zeigen(verbrauch.get("heute", 0))
+
+    def _verbrauch_zeichnen(self) -> None:
+        try:
+            verbrauch = self._verbrauch
+            # Sichtbar sind nur frische Eingabe plus Ausgabe. Die Cache-Werte
+            # wiederholen bei jedem Aufruf fast die ganze Unterhaltung und
+            # wuerden die Zahl unbrauchbar aufblaehen; sie stehen nur im
+            # Kurzhinweis. Bei wenig Platz faellt zusaetzlich das Wort weg -
+            # Reihenfolge und Kurzhinweis sagen weiterhin, welche Zahl welche
+            # ist ("Zähler ohne Wörter").
+            sitzung = verbrauch.get("sitzung", 0)
+            letzter = verbrauch.get("gesamt", 0)
+            if self._schmal:
+                self.tokenzaehler.setText(zahl_kurz(letzter))
+                self.sitzungszaehler.setText(zahl_kurz(sitzung))
+            else:
+                self.tokenzaehler.setText(f"Auftrag {zahl_kurz(letzter)}")
+                self.sitzungszaehler.setText(f"Sitzung {zahl_kurz(sitzung)}")
+
+            auftrag_einzeln = (
+                f"Dieser Auftrag {zahl_lang(letzter)} Token ohne Cache — "
+                f"Eingabe {zahl_lang(verbrauch.get('eingabe', 0))}, "
+                f"Ausgabe {zahl_lang(verbrauch.get('ausgabe', 0))}, "
+                f"Cache gelesen {zahl_lang(verbrauch.get('cache_gelesen', 0))}, "
+                f"Cache erstellt {zahl_lang(verbrauch.get('cache_erstellt', 0))}"
+            )
+            sitzung_einzeln = (
+                f"Ganze Sitzung {zahl_lang(sitzung)} Token ohne Cache — "
+                f"Eingabe {zahl_lang(verbrauch.get('sitzung_eingabe', 0))}, "
+                f"Ausgabe {zahl_lang(verbrauch.get('sitzung_ausgabe', 0))}, "
+                f"Cache gelesen {zahl_lang(verbrauch.get('sitzung_cache_gelesen', 0))}, "
+                f"Cache erstellt {zahl_lang(verbrauch.get('sitzung_cache_erstellt', 0))}"
+            )
+            self.tokenzaehler.setToolTip(auftrag_einzeln)
+            self.tokenzaehler.setAccessibleDescription(auftrag_einzeln)
+            self.sitzungszaehler.setToolTip(sitzung_einzeln)
+            self.sitzungszaehler.setAccessibleDescription(sitzung_einzeln)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Tokenverbrauch nicht gesetzt: %s", fehler)
 
     def tag_zeigen(self, heute: int) -> None:
         """Zeigt die Tagessumme rechts neben dem Sitzungszaehler. Sie zaehlt
         ueber alle Sitzungen und Neustarts eines Kalendertages hinweg."""
+        self._heute = int(heute)
+        self._tag_zeichnen()
+
+    def _tag_zeichnen(self) -> None:
         try:
-            heute = int(heute)
-            self.tageszaehler.setText(f"Heute {zahl_kurz(heute)}")
+            heute = self._heute
+            text = zahl_kurz(heute) if self._schmal else f"Heute {zahl_kurz(heute)}"
+            self.tageszaehler.setText(text)
             satz = (
                 f"Heute {zahl_lang(heute)} Token ohne Cache, über alle "
                 "Sitzungen des Tages zusammen"
