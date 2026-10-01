@@ -2631,18 +2631,19 @@ class Werkbank(QMainWindow):
         werte["leitstand_aktiv"] = an
         einstellungen_schreiben(werte)
         self._leitstand_zustand_anwenden()
-        if an and leitstand.api_schluessel_lesen() is None:
+        if an and leitstand.wirksamer_anbieter().api_schluessel is None:
             self.sprecher.sprich("Leitstand an. Kein Gemini-Schlüssel hinterlegt.", art="fehler")
         else:
             self.sprecher.sprich(f"Leitstand {'an' if an else 'aus'}.", art="immer")
 
     def _leitstand_nach_auftrag(self, bilanz: dict, block_nummer: int | None,
                                  satz: str) -> None:
-        """Block 72: nach jedem abgeschlossenen #CODE#-Auftrag (aufgerufen aus
-        `_fertig`) eines Projekts mit wissen/nachtplan.md fragt Leitstand
-        Gemini, ob und wie es weitergeht. Prueft dafuer zuerst synchron die
-        Grenzen (Fehlschlaege, Aufträge pro Nacht, Aenderung ausserhalb des
-        Projekts) - erst danach laeuft der Gemini-Aufruf selbst in
+        """Block 72/73: nach jedem abgeschlossenen #CODE#-Auftrag (aufgerufen
+        aus `_fertig`) eines Projekts mit wissen/nachtplan.md fragt Leitstand
+        den gewaehlten Anbieter (Gemini oder Anthropic, F12 -> Leitstand), ob
+        und wie es weitergeht. Prueft dafuer zuerst synchron die Grenzen
+        (Fehlschlaege, Aufträge pro Nacht, Aenderung ausserhalb des Projekts)
+        - erst danach laeuft der Anbieter-Aufruf selbst in
         core.leitstand.EntscheidungsFaden, damit ein langsamer oder
         haengender Netzaufruf das Fenster nie blockiert."""
         try:
@@ -2682,8 +2683,10 @@ class Werkbank(QMainWindow):
                     f"Höchstzahl von {leitstand.max_auftraege_pro_nacht()} "
                     "Aufträgen pro Nacht erreicht.")
                 return
-            api_schluessel = leitstand.api_schluessel_lesen()
-            if api_schluessel is None:
+            aufloesung = leitstand.wirksamer_anbieter()
+            if aufloesung.zurueckgefallen:
+                self.sprecher.sprich("Kein Anthropic-Schlüssel hinterlegt.", art="fehler")
+            if aufloesung.api_schluessel is None:
                 self.sprecher.sprich("Kein Gemini-Schlüssel hinterlegt.", art="fehler")
                 self._leitstand_anhalten(zustand, plan_mtime,
                                           "Kein Gemini-Schlüssel hinterlegt.")
@@ -2703,11 +2706,12 @@ class Werkbank(QMainWindow):
             leitstand.zustand_schreiben(zustand)
             self._leitstand_plan_mtime = plan_mtime
             self.leitstand_faden = leitstand.EntscheidungsFaden(
-                api_schluessel, plan_text, offen_text, self._letzter_bericht or satz,
-                leitstand.zeitlimit_sekunden(), self)
+                aufloesung.anbieter, aufloesung.api_schluessel, plan_text, offen_text,
+                self._letzter_bericht or satz, leitstand.zeitlimit_sekunden(), self)
             self.leitstand_faden.fertig.connect(self._leitstand_entschieden)
             self.leitstand_faden.start()
-            log.info("Leitstand: Gemini-Anfrage gestartet (Projekt %s)", self.projekt.name)
+            log.info("Leitstand: %s-Anfrage gestartet (Projekt %s)",
+                      aufloesung.anbieter, self.projekt.name)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Leitstand: Nachbearbeitung fehlgeschlagen: %s", fehler)
 
@@ -2722,20 +2726,25 @@ class Werkbank(QMainWindow):
         zustand = leitstand.zustand_lesen()
         if not ergebnis.get("ok"):
             self._leitstand_anhalten(
-                zustand, plan_mtime, f"Gemini-Anfrage gescheitert ({ergebnis.get('text', '')}).")
+                zustand, plan_mtime, f"Anfrage gescheitert ({ergebnis.get('text', '')}).")
             return
+        benutzter_anbieter = ergebnis.get("anbieter", leitstand.ANBIETER_GEMINI)
+        leitstand.nutzung_erfassen(
+            zustand, benutzter_anbieter,
+            ergebnis.get("eingabe_token", 0), ergebnis.get("ausgabe_token", 0))
         entscheidung = ergebnis["entscheidung"]
         schritt = ergebnis.get("schritt")
         auftrag_text = ergebnis.get("auftrag", "")
         grund = ergebnis.get("grund", "")
         if entscheidung == "stopp":
-            self._leitstand_anhalten(zustand, plan_mtime, grund or "Gemini: Stopp.")
+            self._leitstand_anhalten(zustand, plan_mtime, grund or "Stopp.")
             return
         verboten = leitstand.markierung_verboten(auftrag_text)
         if verboten:
             self._leitstand_anhalten(
                 zustand, plan_mtime,
-                f"Gemini schlug eine gesperrte Markierung vor ({verboten}).")
+                f"{leitstand.anbieter_anzeigename(benutzter_anbieter)} schlug eine "
+                f"gesperrte Markierung vor ({verboten}).")
             return
         if entscheidung == "wiederholen":
             anzahl = leitstand.wiederholung_erhoehen(zustand, self.projekt.name, schritt)
@@ -2761,7 +2770,7 @@ class Werkbank(QMainWindow):
         verlauf = leitstand.verlauf_abholen(zustand, self.projekt.name)
         leitstand.verlauf_leeren(zustand, self.projekt.name)
         leitstand.zustand_schreiben(zustand)
-        text = leitstand.nachtbericht_bauen(self.projekt.name, verlauf, grund)
+        text = leitstand.nachtbericht_bauen(self.projekt.name, verlauf, grund, zustand.nutzung)
         try:
             (self.projekt.pfad / "wissen").mkdir(parents=True, exist_ok=True)
             (self.projekt.pfad / "wissen" / "nachtbericht.md").write_text(

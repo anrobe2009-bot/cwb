@@ -1096,15 +1096,17 @@ class EinstellungenFenster(QDialog):
     # -- Bereich Leitstand ----------------------------------------------------
 
     def _gruppe_leitstand(self) -> Gruppe:
-        """Block 72 (siehe wissen/plan_leitstand.md, core/leitstand.py): nachts
-        oder wenn Robert nicht da ist, fragt Leitstand nach jedem
+        """Block 72/73 (siehe wissen/plan_leitstand.md, core/leitstand.py):
+        nachts oder wenn Robert nicht da ist, fragt Leitstand nach jedem
         abgeschlossenen #CODE#-Auftrag eines Projekts mit wissen/nachtplan.md
-        Gemini um die naechste Entscheidung. Ab Werk aus."""
+        einen waehlbaren Anbieter (Gemini oder Anthropic) um die naechste
+        Entscheidung. Ab Werk aus, Anbieter ab Werk Gemini."""
         gruppe = Gruppe(
             "Leitstand",
             "Übernimmt nachts die Rolle der KI im Chat für Projekte mit "
             "wissen/nachtplan.md. Chat und Claude Code bleiben unverändert im "
-            "Max-Abo; Leitstand fragt nur Gemini, ob und wie es weitergeht.",
+            "Max-Abo; Leitstand fragt nur den gewählten Anbieter, ob und wie "
+            "es weitergeht.",
         )
         werte = self._werte_lesen()
 
@@ -1113,14 +1115,16 @@ class EinstellungenFenster(QDialog):
             "leitstand_aktiv",
             "Leitstand",
             "Fragt nach jedem abgeschlossenen #CODE#-Auftrag eines Projekts "
-            "mit wissen/nachtplan.md Gemini (gemini-3.5-flash-lite) um die "
+            "mit wissen/nachtplan.md den unten gewählten Anbieter um die "
             "nächste Entscheidung und legt bei „weiter“ oder „wiederholen“ "
-            "selbst den nächsten #CODE#-Block ab. Ohne Schlüssel in "
+            "selbst den nächsten #CODE#-Block ab. Ohne passenden Schlüssel in "
             f"{LEITSTAND_ZUGANG_DATEI.name} bleibt er wirkungslos. Auch über "
             "die Kachel „Leitstand“ und Umschalt+F9 schaltbar; Not-Aus (F8) "
             "schaltet Leitstand zusätzlich aus. Ab Werk aus.",
             bool(werte.get("leitstand_aktiv", False)),
         )
+
+        self._leitstand_anbieter_gruppe_anlegen(gruppe, werte)
 
         self.leitstand_max_auftraege = self._grenze_zahl(
             gruppe,
@@ -1144,15 +1148,17 @@ class EinstellungenFenster(QDialog):
         self.leitstand_zeitlimit = self._grenze_zahl(
             gruppe,
             "leitstand_zeitlimit_sekunden",
-            "Zeitlimit je Gemini-Aufruf",
-            "Wie lange Leitstand auf die Antwort von Gemini wartet, bevor er "
-            "den Aufruf als gescheitert wertet und anhält.",
+            "Zeitlimit je Aufruf",
+            "Wie lange Leitstand auf die Antwort des gewählten Anbieters "
+            "wartet, bevor er den Aufruf als gescheitert wertet und anhält.",
             5, 120, " s",
             int(werte.get("leitstand_zeitlimit_sekunden", leitstand.STANDARD_ZEITLIMIT_SEKUNDEN)),
         )
 
         schluessel_hinweis = QLabel(
-            f"Gemini-Schlüssel: {'hinterlegt' if leitstand.api_schluessel_lesen() else 'fehlt'} "
+            f"Gemini-Schlüssel: {'hinterlegt' if leitstand.api_schluessel_lesen() else 'fehlt'}. "
+            "Anthropic-Schlüssel: "
+            f"{'hinterlegt' if leitstand.anthropic_api_schluessel_lesen() else 'fehlt'} "
             f"({LEITSTAND_ZUGANG_DATEI}). Nur bei „fehlt“ eintragen, nie hier "
             "anzeigen oder bearbeiten."
         )
@@ -1160,6 +1166,40 @@ class EinstellungenFenster(QDialog):
         schluessel_hinweis.setWordWrap(True)
         gruppe.feld(schluessel_hinweis)
         return gruppe
+
+    def _leitstand_anbieter_gruppe_anlegen(self, gruppe: Gruppe, werte: dict) -> None:
+        """Zwei sich ausschliessende Auswahlfelder (Vorgabe Gemini) - wie
+        `_gruppe_stufe` bei der Sprachausgabe: jede Wahl trägt ihre Erklärung
+        direkt im Text, damit ein Screenreader sie beim Durchgehen vorliest."""
+        aktueller = leitstand.anbieter()
+        angaben = (
+            (leitstand.ANBIETER_GEMINI, "Gemini",
+             "gemini-3.5-flash-lite. Ab Werk."),
+            (leitstand.ANBIETER_ANTHROPIC, "Anthropic",
+             "Claude Haiku 4.5. Ohne Schlüssel in "
+             f"{LEITSTAND_ZUGANG_DATEI.name} fällt Leitstand auf Gemini zurück."),
+        )
+        self.leitstand_anbieter_schalter: dict[str, QRadioButton] = {}
+        for wert, titel, erklaerung in angaben:
+            schalter = QRadioButton(f"{titel} — {erklaerung}")
+            schalter.setObjectName("leitstandanbieter")
+            schalter.setAccessibleName(titel)
+            schalter.setAccessibleDescription(erklaerung)
+            schalter.setToolTip(erklaerung)
+            schalter.setChecked(wert == aktueller)
+            schalter.toggled.connect(partial(self._leitstand_anbieter_gewaehlt, wert, titel))
+            gruppe.feld(schalter)
+            self.leitstand_anbieter_schalter[wert] = schalter
+
+    def _leitstand_anbieter_gewaehlt(self, wert: str, titel: str, an: bool) -> None:
+        if not an:
+            return
+        werte = self._werte_lesen()
+        werte["leitstand_anbieter"] = wert
+        self._sichern(werte)
+        kurzname = "Anthropic Haiku" if wert == leitstand.ANBIETER_ANTHROPIC else "Gemini"
+        log.info("Leitstand-Anbieter gewählt: %s", wert)
+        self.sprecher.sprich(f"Leitstand nutzt {kurzname}.", art="immer")
 
     def _grenze_zahl(self, gruppe: Gruppe, schluessel: str, titel: str, erklaerung: str,
                       minimum: int, maximum: int, einheit: str, wert: int) -> QSpinBox:

@@ -17,7 +17,8 @@ pywin32>=306; sys_platform == "win32"
 # gehört und nicht installiert werden muss.
 
 # Bruecke zu claude.ai im Browser (core/bruecke.py) und Leitstand
-# (core/leitstand.py, REST-Aufrufe an Gemini, keine eigene SDK-Abhaengigkeit)
+# (core/leitstand.py, REST-Aufrufe an Gemini und/oder Anthropic, keine
+# eigene SDK-Abhaengigkeit)
 requests>=2.31
 
 # Code-Index (index/): lokale semantische Codesuche, kein API-Schlüssel nötig

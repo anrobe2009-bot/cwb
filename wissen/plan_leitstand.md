@@ -1,10 +1,11 @@
-# Vorhaben "Leitstand" (Block 72)
+# Vorhaben "Leitstand" (Block 72/73)
 
 Entscheidung von Robert vom 01.10.2026: nachts oder wenn Robert nicht da ist,
 übernimmt Leitstand die Rolle der KI im Chat, die nicht selbstständig auf
 Berichte reagieren darf. Chat und Claude Code bleiben unverändert im
 Max-Abo; Leitstand fragt für die Weiter/Wiederholen/Stopp-Entscheidung ein
-eigenes, separat abgerechnetes Modell (Gemini).
+eigenes, separat abgerechnetes Modell - wählbar zwischen Gemini (Vorgabe) und
+Anthropic (Block 73, Entscheidung von Robert vom 01.10.2026, selber Tag).
 
 ## Ablauf
 
@@ -71,24 +72,62 @@ Gemini bekommt nur Nachtplan, `offen.md` und den Bericht des letzten
 Schritts - keine Code-Dateien, keine Einkaufs-, Gesundheits- oder
 Profildaten.
 
+## Anbieter (Block 73)
+
+Wählbar in F12 → Leitstand, zwei sich ausschließende Auswahlfelder, Vorgabe
+Gemini (`einstellungen.json`, Schlüssel `leitstand_anbieter`,
+`core.leitstand.anbieter()`). Jede Wahl wird sofort gesichert und angesagt
+("Leitstand nutzt Gemini." bzw. "Leitstand nutzt Anthropic Haiku.").
+
+- **Gemini** `gemini-3.5-flash-lite` (ai.google.dev/gemini-api/docs/models,
+  Stand 01.10.2026: "vorherige Generation" des Flash-Lite-Modells; für neue
+  Projekte rät die Dokumentation zu 3.5 Flash-Lite oder 3.8 Flash - für eine
+  reine Weiter/Wiederholen/Stopp-Entscheidung reicht 3.5 Flash-Lite).
+  Erzwingt JSON über `generationConfig.responseMimeType`. Mit dem echten
+  Schlüssel aus `leitstand_zugang.txt` gegengeprüft: Verbindungstest
+  ("Antworte mit OK") und ein JSON-Testaufruf im Entscheidungsschema liefen
+  beide über die echte REST-Schnittstelle korrekt.
+- **Anthropic** `claude-haiku-4-5-20251001`, Messages-API
+  (platform.claude.com/docs/en/models/overview, Stand 01.10.2026 per
+  WebFetch geprüft: weiterhin das schnellste/günstigste Modell der
+  aktuellen Reihe, kein schnellerer Nachfolger vorhanden - **Anthropics
+  eigene Angabe nennt dafür ein Retirement nicht vor dem 15.10.2026, also
+  schon in rund zwei Wochen**; danach kann die Kennung ohne weitere
+  Ankündigung scheitern und müsste neu geprüft werden). Ohne den von Gemini
+  bekannten erzwungenen JSON-Modus - `core.leitstand._json_dekodieren` fängt
+  einen üblichen Markdown-Zaun um die Antwort zusätzlich ab. Mangels eines im
+  Datenordner hinterlegten Anthropic-Schlüssels bei Auftragsende nur mit
+  nachgebildeten Antworten getestet (`core/test_leitstand.py`), nicht mit
+  einem echten Aufruf - Endpunkt, Kopfzeilen und Antwortform
+  (`usage.input_tokens`/`output_tokens`) stammen aus der offiziellen
+  Schnellstart-Dokumentation, nicht aus Vermutung.
+
+Beide Anbieter nutzen reine REST-Aufrufe über `requests` (wie
+`core/bruecke.py`), keine eigene SDK-Abhängigkeit, und dasselbe
+Entscheidungsschema/dieselben Grenzen.
+
 ## Schlüssel
 
 `%LOCALAPPDATA%\CWB\leitstand_zugang.txt` (`core/pfade.py`,
-`LEITSTAND_ZUGANG_DATEI`), Zeile `gemini_api_key=...` - wie beim PC-Token
-der Brücke nie geloggt, nie angezeigt, nicht in Git. Fehlt er, sagt CWB
-"Kein Gemini-Schlüssel hinterlegt." und hält sofort an, sobald ein
-Nachtplan-Auftrag ihn bräuchte.
+`LEITSTAND_ZUGANG_DATEI`) - wie beim PC-Token der Brücke nie geloggt, nie
+angezeigt, nicht in Git:
 
-## Modell
+- `gemini_api_key=...` - fehlt er, sagt CWB "Kein Gemini-Schlüssel
+  hinterlegt." und hält sofort an, sobald ein Nachtplan-Auftrag ihn bräuchte.
+- `anthropic_api_key=...` - fehlt er, während Anthropic gewählt ist, sagt
+  CWB "Kein Anthropic-Schlüssel hinterlegt." und fällt auf Gemini zurück
+  (`core.leitstand.wirksamer_anbieter`); fehlt dann auch der Gemini-
+  Schlüssel, gilt die Zeile darüber.
 
-`gemini-3.5-flash-lite` (ai.google.dev/gemini-api/docs/models, Stand
-01.10.2026: "vorherige Generation" des Flash-Lite-Modells; für neue Projekte
-rät die Dokumentation zu 3.5 Flash-Lite oder 3.8 Flash - für eine reine
-Weiter/Wiederholen/Stopp-Entscheidung reicht 3.5 Flash-Lite). Reiner
-REST-Aufruf über `requests` (wie `core/bruecke.py`), keine eigene
-SDK-Abhängigkeit. Mit dem echten Schlüssel aus `leitstand_zugang.txt`
-gegengeprüft: Verbindungstest ("Antworte mit OK") und ein JSON-Testaufruf im
-Entscheidungsschema liefen beide über die echte REST-Schnittstelle korrekt.
+## Nutzung im Nachtbericht (Block 73)
+
+Jeder gelungene Aufruf zählt in `core.leitstand.Zustand.nutzung`
+(Anbieter → Aufrufe, Eingabe-/Ausgabe-Token aus der jeweiligen `usage`-
+Antwort) - global über die Nacht, nicht je Projekt, wie `anzahl_auftraege`.
+Jeder geschriebene `nachtbericht.md` listet den nächtlichen Gesamtstand unter
+"Nutzung diese Nacht" - eine Schätzung zur Kosteneinschätzung, kein
+Abrechnungsbeleg; ein an einem Netzfehler oder kaputtem JSON gescheiterter
+Aufruf zählt nicht mit, weil dann kein verlässliches `usage`-Feld vorliegt.
 
 ## Zustand
 
@@ -108,3 +147,12 @@ zurück (`core.leitstand.zustand_lesen`).
   geprüft wurden die reinen Funktionen (`core/test_leitstand.py`,
   `core/test_bloecke.py`) sowie ein echter, harmloser Gemini-Aufruf als
   Verbindungstest.
+- `anthropic_api_key` fehlt bislang in `leitstand_zugang.txt` - der
+  geforderte echte Verbindungstest für Anthropic konnte deshalb nicht
+  durchgeführt werden, nur mit nachgebildeten Antworten. Robert müsste die
+  Zeile ergänzen, dann lässt sich der Verbindungstest nachholen.
+- Anthropics Retirement-Angabe für `claude-haiku-4-5-20251001` nennt den
+  15.10.2026 als frühestmöglichen Termin - nur rund zwei Wochen nach diesem
+  Auftrag. Wird die Kennung danach abgeschaltet, meldet sich das als
+  LeitstandNetzFehler (HTTP-Fehlerstatus) und Leitstand hält an; die Kennung
+  müsste dann neu geprüft und eingetragen werden.
