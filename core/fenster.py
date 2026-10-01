@@ -2087,6 +2087,9 @@ class Werkbank(QMainWindow):
             "Eingangsordner: Auftrag erhalten (Quelle %s, Projekt %r, Art %s, %d Zeichen)",
             auftrag.quelle, auftrag.projekt, art or "ohne Markierung", len(inhalt),
         )
+        if von_bruecke:
+            log.info("Brücke: Auftrag gestartet (Nummer %s, Art %s)",
+                      bruecke_nummer, art or "ohne Markierung")
         inhalt, weiter, block_angesagt = self._block_verarbeiten(
             art, inhalt, herkunft="von Claude" if von_bruecke else "")
         if not weiter:
@@ -2152,7 +2155,7 @@ class Werkbank(QMainWindow):
         werte["bruecke_aktiv"] = an
         einstellungen_schreiben(werte)
         self._bruecke_zustand_anwenden()
-        self.sprecher.sprich(f"Brücke: {'an' if an else 'aus'}.")
+        self.sprecher.sprich(f"Brücke {'an' if an else 'aus'}.", art="immer")
 
     @slot_geschuetzt
     def _bruecke_nicht_erreichbar(self) -> None:

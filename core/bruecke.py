@@ -59,6 +59,12 @@ ABFRAGE_ABSTAND_MS = 5000
 # (wissen/plan_bruecke.md, Stufe B3).
 AUSFALL_SCHWELLE_SEKUNDEN = 300
 
+# Muss zum Server passen (C:\Max und frriends\bruecke\server.py,
+# QUITTUNG_SCHWELLE_SEKUNDEN): liefert er einen Auftrag erneut aus, wenn
+# innerhalb dieser Zeit keine Quittung ankam - nur zur Begruendung der
+# Logzeilen hier, keine eigene Fristpruefung auf dieser Seite.
+QUITTUNG_SCHWELLE_SEKUNDEN = 60
+
 
 class BrueckenFehler(Exception):
     """Weder lokal noch öffentlich erreichbar."""
@@ -134,10 +140,13 @@ def _anfrage(methode: str, endpunkt: str, zugang: Zugangsdaten, **kwargs) -> req
 
 
 def abholen(zugang: Zugangsdaten) -> dict | None:
-    """Ein Abholversuch gegen GET .../abholen. `None`, wenn gerade kein
-    Auftrag wartet (leere Antwort oder kein Feld "text"). Wirft
-    BrueckenFehler, wenn der Dienst weder lokal noch öffentlich erreichbar
-    war."""
+    """Ein Abholversuch gegen GET .../abholen. Der Server (server.py,
+    cwb_abholen) antwortet immer mit {"auftrag": {...}} oder {"auftrag":
+    None} - nie mit den Feldern direkt auf oberster Ebene. `None` kommt
+    zurueck, wenn gerade kein Auftrag wartet (leere Antwort, "auftrag" fehlt
+    oder ist None, oder das verschachtelte Objekt hat kein Feld "text").
+    Wirft BrueckenFehler, wenn der Dienst weder lokal noch öffentlich
+    erreichbar war."""
     antwort = _anfrage("GET", "/abholen", zugang)
     if antwort.status_code == 204 or not antwort.content:
         return None
@@ -146,9 +155,12 @@ def abholen(zugang: Zugangsdaten) -> dict | None:
     except ValueError:
         log.warning("Antwort von /abholen ist kein gültiges JSON")
         return None
-    if not isinstance(daten, dict) or not str(daten.get("text", "")).strip():
+    if not isinstance(daten, dict):
         return None
-    return daten
+    auftrag = daten.get("auftrag")
+    if not isinstance(auftrag, dict) or not str(auftrag.get("text", "")).strip():
+        return None
+    return auftrag
 
 
 def bericht_hochladen(zugang: Zugangsdaten, auftrag_nummer, text: str) -> None:
@@ -157,6 +169,17 @@ def bericht_hochladen(zugang: Zugangsdaten, auftrag_nummer, text: str) -> None:
     versucht."""
     _anfrage("POST", "/bericht", zugang,
              json={"auftrag_nummer": auftrag_nummer, "text": text})
+
+
+def quittieren(zugang: Zugangsdaten, auftrag_nummer) -> None:
+    """POST .../quittung mit {auftrag_nummer}. Erst danach gilt ein Auftrag
+    beim Server endgueltig als abgeholt (server.py, cwb_quittung) - ohne
+    Quittung liefert er ihn nach QUITTUNG_SCHWELLE_SEKUNDEN erneut aus.
+    Wirft BrueckenFehler bei Netzfehlern; der Aufrufer entscheidet, ob er das
+    nur loggt (die naechste Auslieferung desselben Auftrags wird dann anhand
+    seiner auftrag_nummer erkannt und nicht doppelt abgelegt, siehe
+    BrueckenFaden._abgelegt)."""
+    _anfrage("POST", "/quittung", zugang, json={"auftrag_nummer": auftrag_nummer})
 
 
 class BrueckenFaden(QThread):
@@ -177,6 +200,11 @@ class BrueckenFaden(QThread):
         self._laeuft = True
         self._letzter_erfolg = time.monotonic()
         self._ausfall_gemeldet = False
+        # auftrag_nummern, die in diesem Lauf schon im Eingangsordner liegen
+        # (abgelegt oder als #ADMIN# abgelehnt) - schuetzt vor doppelter
+        # Ablage, wenn der Server denselben Auftrag erneut ausliefert, weil
+        # die Quittung nicht ankam (Netzfehler zwischen Ablage und Quittung).
+        self._abgelegt: set[int] = set()
 
     def anhalten(self) -> None:
         self._laeuft = False
@@ -214,16 +242,26 @@ class BrueckenFaden(QThread):
         """Eine Abfrage. Fehlt die Zugangsdatei, zählt das wie ein
         Netzfehler (BrueckenFehler) - ohne sie ist die Brücke ohnehin nicht
         erreichbar, und auch das soll nach fünf Minuten einmal angesagt
-        werden."""
+        werden.
+
+        Das Feld heisst beim Server "nummer" (server.py, cwb_abholen), nicht
+        "auftrag_nummer" - das ist nur der interne Name in core/
+        eingangsordner.py."""
         zugang = zugangsdaten_lesen()
         if zugang is None:
             raise BrueckenFehler("keine Zugangsdaten")
         auftrag = abholen(zugang)
         if auftrag is None:
             return
-        nummer = auftrag.get("auftrag_nummer")
+        nummer = auftrag.get("nummer")
         text = str(auftrag.get("text", ""))
         projekt = str(auftrag.get("projekt", ""))
+        log.info("Brücke: Auftrag abgeholt (Nummer %s)", nummer)
+        if nummer in self._abgelegt:
+            log.info("Brücke: Auftrag %s erneut zugestellt (Quittung wohl verloren) - "
+                      "nicht erneut abgelegt, nur erneut quittiert", nummer)
+            self._quittieren_versuchen(zugang, nummer)
+            return
         art, _ = self._markierung_erkennen(text)
         if art == "admin":
             log.warning("Brücke: #ADMIN#-Auftrag abgelehnt (Auftrag %s)", nummer)
@@ -233,9 +271,27 @@ class BrueckenFaden(QThread):
                 )
             except BrueckenFehler:
                 log.info("Brücke: Ablehnungsbericht nicht hochgeladen (Netzfehler)")
+            self._abgelegt.add(nummer)
+            self._quittieren_versuchen(zugang, nummer)
             return
         eingangsordner.ablegen(QUELLE_BRUECKE, text, projekt=projekt, auftrag_nummer=nummer)
+        self._abgelegt.add(nummer)
         log.info("Brücke: Auftrag abgelegt (Nummer %s, Projekt %r)", nummer, projekt or "egal")
+        self._quittieren_versuchen(zugang, nummer)
+
+    def _quittieren_versuchen(self, zugang: Zugangsdaten, nummer) -> None:
+        """Best-effort: scheitert die Quittung an einem Netzfehler, liefert
+        der Server denselben Auftrag nach QUITTUNG_SCHWELLE_SEKUNDEN erneut
+        aus - `_einen_durchlauf` erkennt ihn dann ueber `self._abgelegt` und
+        versucht nur die Quittung erneut, ohne ihn ein zweites Mal
+        abzulegen."""
+        try:
+            quittieren(zugang, nummer)
+        except BrueckenFehler:
+            log.info("Brücke: Quittung nicht gesendet (Auftrag %s), Server liefert nach "
+                      "%d s erneut aus", nummer, QUITTUNG_SCHWELLE_SEKUNDEN)
+            return
+        log.info("Brücke: Auftrag quittiert (Nummer %s)", nummer)
 
 
 class BerichtFaden(QThread):

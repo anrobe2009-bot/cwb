@@ -118,18 +118,22 @@ class AnfrageTest(unittest.TestCase):
     """Lokal bevorzugt, Fallback auf öffentlich bei jedem Fehler."""
 
     def test_lokal_erfolgreich_oeffentlich_wird_nicht_versucht(self):
-        server = SchonServer(lokal=lambda *a, **k: _antwort(200, {"text": "x"}))
+        server = SchonServer(
+            lokal=lambda *a, **k: _antwort(200, {"auftrag": {"nummer": 1, "text": "x"}})
+        )
         with mock.patch.object(bruecke.requests, "request", server):
             auftrag = bruecke.abholen(ZUGANG)
-        self.assertEqual(auftrag, {"text": "x"})
+        self.assertEqual(auftrag, {"nummer": 1, "text": "x"})
         self.assertEqual(len(server.aufrufe), 1)
         self.assertTrue(server.aufrufe[0][1].startswith(bruecke.LOKALE_BASIS))
 
     def test_lokal_scheitert_oeffentlich_greift(self):
-        server = SchonServer(oeffentlich=lambda *a, **k: _antwort(200, {"text": "y"}))
+        server = SchonServer(
+            oeffentlich=lambda *a, **k: _antwort(200, {"auftrag": {"nummer": 2, "text": "y"}})
+        )
         with mock.patch.object(bruecke.requests, "request", server):
             auftrag = bruecke.abholen(ZUGANG)
-        self.assertEqual(auftrag, {"text": "y"})
+        self.assertEqual(auftrag, {"nummer": 2, "text": "y"})
         self.assertEqual(len(server.aufrufe), 2)
 
     def test_beide_scheitern_wirft_bruecken_fehler(self):
@@ -143,10 +147,38 @@ class AnfrageTest(unittest.TestCase):
         with mock.patch.object(bruecke.requests, "request", server):
             self.assertIsNone(bruecke.abholen(ZUGANG))
 
+    def test_auftrag_none_gilt_als_kein_auftrag(self):
+        """Die tatsaechliche Antwort des Servers (server.py, cwb_abholen),
+        wenn die Warteschlange leer ist: {"auftrag": None}, nicht 204."""
+        server = SchonServer(lokal=lambda *a, **k: _antwort(200, {"auftrag": None}))
+        with mock.patch.object(bruecke.requests, "request", server):
+            self.assertIsNone(bruecke.abholen(ZUGANG))
+
     def test_antwort_ohne_text_feld_gilt_als_kein_auftrag(self):
+        server = SchonServer(lokal=lambda *a, **k: _antwort(200, {"auftrag": {}}))
+        with mock.patch.object(bruecke.requests, "request", server):
+            self.assertIsNone(bruecke.abholen(ZUGANG))
+
+    def test_antwort_ohne_auftragsfeld_gilt_als_kein_auftrag(self):
         server = SchonServer(lokal=lambda *a, **k: _antwort(200, {}))
         with mock.patch.object(bruecke.requests, "request", server):
             self.assertIsNone(bruecke.abholen(ZUGANG))
+
+    def test_quittieren_sendet_auftrag_nummer(self):
+        gesehen = {}
+
+        def lokal(methode, url, headers=None, **kwargs):
+            gesehen["methode"] = methode
+            gesehen["url"] = url
+            gesehen["json"] = kwargs.get("json")
+            return _antwort(200)
+
+        server = SchonServer(lokal=lokal)
+        with mock.patch.object(bruecke.requests, "request", server):
+            bruecke.quittieren(ZUGANG, 11)
+        self.assertEqual(gesehen["methode"], "POST")
+        self.assertTrue(gesehen["url"].endswith("/quittung"))
+        self.assertEqual(gesehen["json"], {"auftrag_nummer": 11})
 
     def test_bericht_hochladen_sendet_pc_token_header(self):
         gesehen = {}
@@ -196,11 +228,17 @@ class EinenDurchlaufTest(unittest.TestCase):
                 for p in self._eingang.glob("*.json")]
 
     def test_code_auftrag_landet_im_eingangsordner(self):
-        server = SchonServer(
-            lokal=lambda *a, **k: _antwort(
-                200, {"auftrag_nummer": 5, "projekt": "CWB", "text": "#CODE#\nTu etwas."}
-            )
-        )
+        quittiert = {}
+
+        def lokal(methode, url, headers=None, json=None, **kwargs):
+            if url.endswith("/abholen"):
+                return _antwort(
+                    200, {"auftrag": {"nummer": 5, "projekt": "CWB", "text": "#CODE#\nTu etwas."}}
+                )
+            quittiert["json"] = json
+            return _antwort(200)
+
+        server = SchonServer(lokal=lokal)
         with mock.patch.object(bruecke.requests, "request", server):
             self.faden._einen_durchlauf()
         dateien = self._dateien()
@@ -209,13 +247,19 @@ class EinenDurchlaufTest(unittest.TestCase):
         self.assertEqual(dateien[0]["projekt"], "CWB")
         self.assertEqual(dateien[0]["auftrag_nummer"], 5)
         self.assertIn("#CODE#", dateien[0]["text"])
+        self.assertEqual(quittiert["json"], {"auftrag_nummer": 5})
+        self.assertIn(5, self.faden._abgelegt)
 
     def test_admin_auftrag_wird_abgelehnt_und_nicht_abgelegt(self):
         hochgeladen = {}
+        quittiert = {}
 
         def lokal(methode, url, headers=None, json=None, **kwargs):
             if url.endswith("/abholen"):
-                return _antwort(200, {"auftrag_nummer": 9, "text": "#ADMIN#\nGet-Service"})
+                return _antwort(200, {"auftrag": {"nummer": 9, "text": "#ADMIN#\nGet-Service"}})
+            if url.endswith("/quittung"):
+                quittiert["json"] = json
+                return _antwort(200)
             hochgeladen["json"] = json
             return _antwort(200)
 
@@ -225,12 +269,50 @@ class EinenDurchlaufTest(unittest.TestCase):
         self.assertEqual(self._dateien(), [])
         self.assertEqual(hochgeladen["json"]["auftrag_nummer"], 9)
         self.assertIn("ADMIN", hochgeladen["json"]["text"])
+        self.assertEqual(quittiert["json"], {"auftrag_nummer": 9})
 
     def test_kein_auftrag_legt_nichts_ab(self):
-        server = SchonServer(lokal=lambda *a, **k: _antwort(204))
+        server = SchonServer(lokal=lambda *a, **k: _antwort(200, {"auftrag": None}))
         with mock.patch.object(bruecke.requests, "request", server):
             self.faden._einen_durchlauf()
         self.assertEqual(self._dateien(), [])
+
+    def test_erneute_auslieferung_wird_nicht_doppelt_abgelegt(self):
+        """Kommt derselbe Auftrag ein zweites Mal (Quittung ging beim ersten
+        Mal verloren), landet er nicht noch einmal im Eingangsordner - nur
+        die Quittung wird erneut versucht."""
+        quittungen = []
+
+        def lokal(methode, url, headers=None, json=None, **kwargs):
+            if url.endswith("/abholen"):
+                return _antwort(
+                    200, {"auftrag": {"nummer": 5, "projekt": "CWB", "text": "#CODE#\nTu etwas."}}
+                )
+            if url.endswith("/quittung"):
+                quittungen.append(json)
+            return _antwort(200)
+
+        server = SchonServer(lokal=lokal)
+        with mock.patch.object(bruecke.requests, "request", server):
+            self.faden._einen_durchlauf()
+            self.faden._einen_durchlauf()
+        self.assertEqual(len(self._dateien()), 1)
+        self.assertEqual(quittungen, [{"auftrag_nummer": 5}, {"auftrag_nummer": 5}])
+
+    def test_quittung_scheitert_bleibt_folgenlos(self):
+        """Ein Netzfehler bei der Quittung lässt den Auftrag trotzdem
+        abgelegt - der Server liefert ihn notfalls erneut aus."""
+        def lokal(methode, url, headers=None, json=None, **kwargs):
+            if url.endswith("/abholen"):
+                return _antwort(
+                    200, {"auftrag": {"nummer": 5, "projekt": "CWB", "text": "#CODE#\nTu etwas."}}
+                )
+            raise requests.ConnectionError("Quittung nicht erreichbar (Test)")
+
+        server = SchonServer(lokal=lokal)
+        with mock.patch.object(bruecke.requests, "request", server):
+            self.faden._einen_durchlauf()
+        self.assertEqual(len(self._dateien()), 1)
 
     def test_netzfehler_wirft_bruecken_fehler(self):
         server = SchonServer()
