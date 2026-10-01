@@ -1,6 +1,8 @@
 # CWB – Anweisung für die KI im Chat
 
-Stand: 22.09.2026 (Block C6: Gedächtnis wird technisch erzwungen, siehe Abschnitt 4 und 7).
+Stand: 30.09.2026 (Block 56: Blocknummern mit Lücken- und Vollständigkeitsprüfung,
+siehe Abschnitt 3, „Blocknummern“; Block C6: Gedächtnis wird technisch erzwungen,
+siehe Abschnitt 4 und 7).
 Abgelesen aus dem Code im Ordner `C:\Users\Entwickler\Desktop\start\CWB`
 (core/*.py, index/*.py, memory_hub/*.py, CLAUDE.md, stil.qss, verlauf.css, Startskripte,
 einstellungen.json). Nichts in dieser Datei ist geraten; wo der Code eine Frage offen lässt,
@@ -140,6 +142,29 @@ nicht.
   Inhalt → ganzer Text als Auftrag. (c) Eingabefeld + Strg+Eingabe: dieselbe Erkennung.
 - Aufträge **ohne** Markierung gehen (über F7 oder Eingabefeld) als gewöhnlicher
   Claude-Code-Auftrag durch; der Wächter ignoriert sie.
+
+### Blocknummern (Block 56, `core/bloecke.py`)
+
+- **Format:** Erste Inhaltszeile nach der Markierung ist `Block N` (bei `#RUN#`/
+  `#ADMIN#` als PowerShell-Kommentar `# Block N`), letzte Zeile ist `Ende Block N`
+  (bzw. `# Ende Block N`). Bei `#BILD#` steht nur `Block N`, ohne Ende-Zeile – dort
+  gehört üblich kein Inhalt dahinter. Groß-/Kleinschreibung und das führende `#`
+  sind egal, erkannt wird in beiden Formen. Beide Zeilen werden vor der Übergabe an
+  Claude Code bzw. PowerShell entfernt. Blöcke ohne diese erste Zeile laufen wie
+  bisher, ganz ohne Prüfung.
+- **Annahme-Ansage:** Statt „Auftrag erhalten.“ sagt CWB dann „Block 12 erhalten.“
+  – über alle drei Wege (Wächter, F7, Eingabefeld) und alle vier Markierungen.
+- **Lücken-Erkennung:** CWB merkt sich je Projekt und Kalendertag die zuletzt
+  angenommene Nummer (`einstellungen.json`, Schlüssel `block_zaehler`, übersteht
+  Neustarts). Kommt eine Nummer größer als die letzte plus eins, sagt CWB
+  zusätzlich „Achtung, Block 11 fehlt.“ (bzw. „Blöcke 9 bis 11 fehlen.“) – der
+  Auftrag läuft trotzdem. Eine kleinere oder gleiche Nummer gilt als Neubeginn der
+  Zählung, ohne Warnung; ebenso ein Eintrag von einem früheren Kalendertag.
+- **Unvollständig:** Fehlt die Zeile „Ende Block N“ mit derselben Nummer, sagt
+  CWB „Achtung, Block 12 ist unvollständig angekommen.“ und führt den Auftrag
+  **nicht** aus, sondern merkt ihn vor: **F5** führt ihn trotzdem aus, **Escape**
+  verwirft ihn. `#BILD#` kennt keine Unvollständigkeits-Prüfung (keine Ende-Zeile
+  erwartet).
 
 ### `#CODE#` – Auftrag an Claude Code
 
@@ -518,18 +543,28 @@ ausgeführt.
     (Robert schickt sie ab). Erst dann den nächsten Block liefern.
 11. **Antworten kurz halten** – Robert hört alles. Der Block selbst darf lang sein, der Text
     davor nicht.
+12. **Blocknummer mitgeben (seit Block 56):** Erste Inhaltszeile nach der Markierung
+    `Block N` (bei `#RUN#`/`#ADMIN#` als PowerShell-Kommentar `# Block N`), letzte Zeile
+    `Ende Block N` (bzw. `# Ende Block N`); bei `#BILD#` nur `Block N`, ohne Ende-Zeile.
+    `N` ist die laufende Blocknummer dieser Unterhaltung, hochgezählt ab dem ersten Block.
+    Damit erkennt CWB verlorene oder mitten im Satz abgeschnittene Blöcke und sagt es an,
+    statt sie stillschweigend zu verwerfen oder unvollständig auszuführen.
 
 Beispielform (ohne Zaunzeilen als Teil des kopierten Textes):
 
 ```
 #CODE#
+Block 57
 Projekt: CWB
 Lies core/fenster.py und …
+Ende Block 57
 ```
 
 ```
 #RUN#
+# Block 58
 python -m pytest tests -q
+# Ende Block 58
 ```
 
 ---

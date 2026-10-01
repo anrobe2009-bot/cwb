@@ -71,6 +71,7 @@ from PySide6.QtWidgets import (
 try:
     from .ablagewaechter import Zwischenablagewaechter
     from .android_screenshot import screenshot_ablegen
+    from .bloecke import block_erkennen, block_zaehler_aktualisieren
     from .datenordner import erstuebernahme
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
@@ -127,6 +128,7 @@ try:
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from android_screenshot import screenshot_ablegen
+    from bloecke import block_erkennen, block_zaehler_aktualisieren
     from datenordner import erstuebernahme
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
@@ -595,6 +597,12 @@ class Werkbank(QMainWindow):
         # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
         # selbst, die ueber den Arbeitsfaden laufen.
         self._pending_terminal: dict | None = None
+        # Ein Block, dessen "Ende Block N"-Zeile fehlte (core/bloecke.py) -
+        # er wurde NICHT ausgefuehrt, sondern liegt hier zur Entscheidung:
+        # F5 fuehrt ihn trotzdem aus, Escape verwirft ihn. Ein neu
+        # ankommender Block ueberschreibt eine aeltere Vormerkung, so wie bei
+        # der Projektwarnung (siehe _vormerkung_zeigen).
+        self._pending_block: dict | None = None
         # Die letzten zehn angenommenen Auftraege an Claude Code (Art "code"
         # oder ohne Markierung, geglaetteter Text, Zeitpunkt) - einzige
         # Grundlage der Dublettensperre, siehe _dublette_abgewiesen.
@@ -752,8 +760,8 @@ class Werkbank(QMainWindow):
             ("F10", "Nur lesen ein- oder ausschalten", self._nur_lesen_umschalten),
             ("Strg+Z", "Letzten Auftrag zurücknehmen", self._zuruecknehmen),
             ("Strg+B", "Bild anhängen", self._bild_waehlen),
-            ("F5", "Zum Eingabefeld, nach Projektwarnung: trotzdem hier ausführen",
-             self._f5),
+            ("F5", "Zum Eingabefeld, nach Projektwarnung oder unvollständigem "
+             "Block: trotzdem ausführen", self._f5),
             ("F6", "Bericht-Text kopieren", self._bericht_erneut_kopieren),
             ("Strg+F6", "Berichtordner öffnen", self._berichtordner_oeffnen),
             ("Strg+F7", "Bericht-Datei kopieren", self._berichtdatei_kopieren),
@@ -1157,6 +1165,9 @@ class Werkbank(QMainWindow):
         # beantworten, noch bevor die Rueckfrage ueberhaupt zu Ende gesprochen ist.
         if self.frage_offen and not self.sprecher.spricht():
             self._frage_beantworten(False)
+            return
+        if self._pending_block is not None and not self.sprecher.spricht():
+            self._block_verwerfen()
             return
         self.sprecher.schweig()
 
@@ -1862,19 +1873,26 @@ class Werkbank(QMainWindow):
             "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
             len(text), art or "ohne Markierung", len(inhalt),
         )
+        block_angesagt = False
+        if art:
+            inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+            if not weiter:
+                return
         if art == "bild":
             # #BILD# fuellt nie das Eingabefeld: die Markierung allein loest
             # schon aus, kein Inhalt noetig. Keine Dublettenpruefung: ein
             # Bildschirmabzug ohne Inhalt ist zwangslaeufig jedes Mal
             # derselbe Text und laeuft immer sofort.
-            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._bild_markierung()
             return
         if art in ("run", "admin"):
             # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
             # im Terminal, ohne Claude Code, und ohne Dublettenpruefung -
             # diese Befehle laufen immer sofort, auch wiederholt.
-            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
             return
         if self._dublette_abgewiesen(art, inhalt):
@@ -1887,7 +1905,8 @@ class Werkbank(QMainWindow):
         ansage = (
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
-        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}", art=art, inhalt=inhalt)
+        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}", art=art, inhalt=inhalt,
+                        block_angesagt=block_angesagt)
 
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
@@ -1901,19 +1920,25 @@ class Werkbank(QMainWindow):
         Eingabefeld neu geparst - sonst ginge die Markierung dabei verloren.
         Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
         ablagewaechter.py)."""
+        inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+        if not weiter:
+            return
         if art == "bild":
             # Keine Dublettenpruefung: siehe _aus_zwischenablage.
-            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._bild_markierung()
             return
         if art in ("run", "admin"):
             # Keine Dublettenpruefung: siehe _aus_zwischenablage.
-            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt)
             return
         if self._dublette_abgewiesen(art, inhalt):
             return
-        self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt)
+        self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
+                        block_angesagt=block_angesagt)
 
     # -- Dublettensperre ------------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
@@ -1992,9 +2017,57 @@ class Werkbank(QMainWindow):
         self._status_zeigen(satz)
         self.sprecher.sprich(satz, art="fehler")
 
+    # -- Blocknummern ---------------------------------------------------------
+
+    def _block_verarbeiten(self, art: str, inhalt: str,
+                            bilder: list[Path] | None = None) -> tuple[str, bool, bool]:
+        """Erkennt und entfernt eine Blocknummer am Anfang/Ende von `inhalt`
+        (core/bloecke.py, Block 56) und sagt Annahme, Luecke oder
+        Unvollstaendigkeit an. Wird fuer alle drei Wege (Waechter, F7,
+        Eingabefeld) und alle vier Markierungen aufgerufen, jeweils bevor der
+        Inhalt an Claude Code oder das Terminal geht.
+
+        Rueckgabe: (bereinigter Inhalt, ausfuehren, schon_angesagt).
+
+        Ohne Blockzeile bleibt der Inhalt unveraendert, es wird nichts
+        gesagt, `schon_angesagt` ist Falsch - der Aufrufer sagt wie bisher
+        selbst "Auftrag erhalten." an.
+
+        Fehlt die Zeile "Ende Block N" (bei #BILD# gibt es dafuer keine
+        Pruefung), wird NICHT ausgefuehrt (`ausfuehren`=False), sondern als
+        `self._pending_block` vorgemerkt - F5 fuehrt ihn aus, Escape
+        verwirft ihn (siehe _f5, _escape)."""
+        nummer, bereinigt, vollstaendig = block_erkennen(art, inhalt)
+        if nummer is None:
+            return inhalt, True, False
+        luecke = block_zaehler_aktualisieren(self.projekt.name, nummer)
+        if luecke:
+            log.warning("Block-Luecke (Projekt %s, Block %d): %s",
+                        self.projekt.name, nummer, luecke)
+        if not vollstaendig:
+            self._pending_block = {
+                "art": art, "inhalt": bereinigt, "bilder": list(bilder or []),
+                "nummer": nummer,
+            }
+            satz = f"Achtung, Block {nummer} ist unvollständig angekommen."
+            if luecke:
+                satz += f" {luecke}"
+            log.warning("Block %d unvollstaendig angekommen (Art %s), vorgemerkt",
+                        nummer, art or "code")
+            self._verlauf_anhaengen(satz, "hinweis")
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="fehler")
+            return bereinigt, False, True
+        satz = f"Block {nummer} erhalten."
+        if luecke:
+            satz += f" {luecke}"
+        log.info("Block %d erkannt und angenommen (Art %s)", nummer, art or "code")
+        self.sprecher.sprich(satz, art="auftrag")
+        return bereinigt, True, True
+
     @slot_geschuetzt
     def _absenden(self, vorspann: str = "", *, art: str | None = None,
-                  inhalt: str | None = None) -> None:
+                  inhalt: str | None = None, block_angesagt: bool = False) -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
@@ -2012,10 +2085,20 @@ class Werkbank(QMainWindow):
         verloren, und zwei Wege desselben Auftrags sahen fuer die
         Dublettensperre wie zwei verschiedene Auftraege aus. Bleiben beide
         Parameter leer, wird wie gewohnt aus dem Eingabefeld gelesen und
-        dabei frisch auf Dubletten geprueft."""
+        dabei frisch auf Dubletten geprueft.
+
+        `block_angesagt` kommt vom Aufrufer, wenn er `_block_verarbeiten`
+        (core/bloecke.py, Block 56) schon selbst aufgerufen und dabei schon
+        "Block N erhalten." gesagt hat - dann bleibt das spaetere generische
+        "Auftrag erhalten." hier und in `_auftrag_starten` stumm. Ist `art`
+        leer, ruft diese Methode `_block_verarbeiten` selbst auf."""
         if art is None:
             roh = self.eingabe.toPlainText()
             art, text = markierung_erkennen(roh)
+            text, weiter, block_angesagt = self._block_verarbeiten(art, text, self.bilder)
+            if not weiter:
+                self.eingabe.clear()
+                return
             if (text.strip() and not self._holt_vorgemerkten
                     and art not in ("run", "admin", "bild")
                     and self._dublette_abgewiesen(art, text)):
@@ -2097,14 +2180,19 @@ class Werkbank(QMainWindow):
             self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
             self._status_zeigen(satz)
             # Auch ein wartender Auftrag wird einmal kurz bestaetigt, sonst
-            # bliebe das Abschicken voellig ohne hoerbare Antwort.
-            self.sprecher.sprich("Auftrag erhalten, er wartet noch.", art="auftrag")
+            # bliebe das Abschicken voellig ohne hoerbare Antwort. War schon
+            # eine Blocknummer angesagt (_block_verarbeiten), wird die
+            # Annahme nicht ein zweites Mal gesprochen, nur das Warten.
+            if block_angesagt:
+                self.sprecher.sprich("Er wartet noch.", art="auftrag")
+            else:
+                self.sprecher.sprich("Auftrag erhalten, er wartet noch.", art="auftrag")
             return
 
-        self._auftrag_starten(text, bilder, vorspann=vorspann)
+        self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt)
 
-    def _auftrag_starten(self, text: str, bilder: list[Path],
-                          vorspann: str = "", ansagen: bool = True) -> None:
+    def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
+                          ansagen: bool = True, block_angesagt: bool = False) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
@@ -2143,7 +2231,7 @@ class Werkbank(QMainWindow):
             log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
             self._status_zeigen(
                 f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
-            if ansagen:
+            if ansagen and not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             return
         if faden.sitzung is None:
@@ -2151,10 +2239,10 @@ class Werkbank(QMainWindow):
             faden.auftrag_geben(text, bilder)
             self._status_zeigen(
                 f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
-            if ansagen:
+            if ansagen and not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             return
-        if ansagen:
+        if ansagen and not block_angesagt:
             self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
         faden.auftrag_geben(text, bilder)
 
@@ -2237,13 +2325,55 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _f5(self) -> None:
-        """F5 hat zwei Bedeutungen, je nach Lage: hält die Projektwarnung
-        gerade einen Auftrag zurück, führt F5 ihn hier aus. Sonst springt sie
-        wie gewohnt ins Eingabefeld."""
+        """F5 hat drei Bedeutungen, je nach Lage: liegt ein unvollstaendig
+        angekommener Block vor (core/bloecke.py), fuehrt F5 ihn trotzdem
+        aus. Sonst, haelt die Projektwarnung gerade einen Auftrag zurueck,
+        fuehrt F5 ihn hier aus. Sonst springt sie wie gewohnt ins
+        Eingabefeld."""
+        if self._pending_block is not None:
+            self._block_trotzdem_ausfuehren()
+            return
         if vormerkung_offen():
             self._trotzdem_hier()
             return
         self._springe(self.eingabe, "Eingabefeld")
+
+    @slot_geschuetzt
+    def _block_trotzdem_ausfuehren(self) -> None:
+        """F5 bei einem unvollstaendig angekommenen Block: er laeuft doch,
+        obwohl die Zeile "Ende Block N" fehlte."""
+        info, self._pending_block = self._pending_block, None
+        if info is None:
+            return
+        satz = f"Block {info['nummer']} läuft trotzdem."
+        log.info("Unvollstaendiger Block %d wird trotzdem ausgefuehrt (Art %s)",
+                 info["nummer"], info["art"] or "code")
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="auftrag")
+        art, inhalt = info["art"], info["inhalt"]
+        if art == "bild":
+            self._bild_markierung()
+        elif art in ("run", "admin"):
+            self._terminal_markierung(art, inhalt)
+        else:
+            self.bilder = list(info["bilder"])
+            self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
+                            block_angesagt=True)
+
+    @slot_geschuetzt
+    def _block_verwerfen(self) -> None:
+        """Escape bei einem unvollstaendig angekommenen Block: verwerfen,
+        statt ihn auszufuehren."""
+        info, self._pending_block = self._pending_block, None
+        if info is None:
+            return
+        satz = f"Block {info['nummer']} verworfen."
+        log.info("Unvollstaendiger Block %d verworfen (Art %s)",
+                 info["nummer"], info["art"] or "code")
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="hinweis")
 
     @slot_geschuetzt
     def _trotzdem_hier(self) -> None:
