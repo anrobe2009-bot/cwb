@@ -145,6 +145,12 @@ class Start(QMainWindow):
         super().resizeEvent(ereignis)
         stil_verzoegert(self.width(), self.height())
 
+    def projekt_oeffnen(self, projekt: Projekt) -> None:
+        """Oeffnet `projekt` direkt, ohne die Liste zu zeigen - fuer den
+        automatischen Projektwechsel im Leerlauf (core/fenster.py, Block 70,
+        Teil C, `_auto_projekt_wechseln`)."""
+        self._oeffnen(projekt)
+
     def _oeffnen(self, projekt: Projekt) -> None:
         if self.werkbank is not None:
             return

@@ -169,6 +169,13 @@ QToolTip {
     font-size: 13pt;
 }
 
+/* Modellanzeige (Block 70, Teil B): dauerhaft sichtbar, ruhige Farbe wie
+   #such_effizienz - kein Warnsignal, nur stetige Auskunft. */
+#modellanzeige {
+    color: #8fa8c8;
+    font-size: 13pt;
+}
+
 /* Kopieren-Knopf: schwebt als Kind-Widget direkt auf dem Ausgabefeld oben
    rechts (Positionierung in fenster.py), klein und unauffaellig, in der
    Groesse den kleinen Zaehlerfeldern der Kopfzeile angeglichen - keine

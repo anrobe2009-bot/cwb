@@ -191,17 +191,93 @@ class ProjektzuordnungTest(EingangsordnerTestBasis):
         pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "hausgemacht", "text": "x"})
         self.assertFalse(eingangsordner.passend_fuer_projekt(pfad, "CWB"))
 
+    def test_bindestrich_und_leerzeichen_unscharf(self):
+        pfad = self._datei_anlegen(
+            "a.json", {"quelle": "lokal", "projekt": "Max Friends", "text": "x"}
+        )
+        self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "max-friends"))
+
+    def test_alias_aus_zusatzprojekten(self):
+        # Block 70, Teil C: "max-friends" ist nur ueber den eingetragenen
+        # Alias mit "Max und frriends" gleichwertig - ohne ihn wuerden die
+        # unterschiedlichen Woerter/Tippfehler keine Uebereinstimmung ergeben.
+        pfad = self._datei_anlegen(
+            "a.json", {"quelle": "bruecke", "projekt": "max-friends", "text": "x"}
+        )
+        with mock.patch.object(
+            eingangsordner, "zusatzprojekte_lesen",
+            return_value=[{"name": "Max und frriends", "pfad": "C:/MAX-Friends",
+                           "aliase": ["max-friends", "Max & Friends"]}],
+        ):
+            self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "Max und frriends"))
+
+
+class ProjektGleichwertigTest(unittest.TestCase):
+
+    def test_gross_klein_bindestrich_leerzeichen(self):
+        self.assertTrue(eingangsordner.projekt_gleichwertig("CWB", "cwb"))
+        self.assertTrue(eingangsordner.projekt_gleichwertig("Max Friends", "max-friends"))
+
+    def test_ohne_alias_keine_uebereinstimmung(self):
+        with mock.patch.object(eingangsordner, "zusatzprojekte_lesen", return_value=[]):
+            self.assertFalse(
+                eingangsordner.projekt_gleichwertig("max-friends", "Max und frriends")
+            )
+
+    def test_mit_alias_uebereinstimmung(self):
+        with mock.patch.object(
+            eingangsordner, "zusatzprojekte_lesen",
+            return_value=[{"name": "Max und frriends", "pfad": "C:/MAX-Friends",
+                           "aliase": ["max-friends", "Max & Friends"]}],
+        ):
+            self.assertTrue(
+                eingangsordner.projekt_gleichwertig("max-friends", "Max und frriends")
+            )
+            self.assertTrue(
+                eingangsordner.projekt_gleichwertig("Max & Friends", "Max und frriends")
+            )
+
+    def test_leere_namen_sind_nicht_gleichwertig(self):
+        self.assertFalse(eingangsordner.projekt_gleichwertig("", ""))
+        self.assertFalse(eingangsordner.projekt_gleichwertig("CWB", ""))
+
+
+class NaechsteFremdeProjektDateiTest(EingangsordnerTestBasis):
+
+    def test_ohne_dateien_ist_none(self):
+        self.assertIsNone(eingangsordner.naechste_fremde_projekt_datei("CWB"))
+
+    def test_eigenes_und_projektloses_zaehlen_nicht(self):
+        self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "CWB", "text": "x"})
+        self._datei_anlegen("b.json", {"quelle": "lokal", "text": "x"})
+        self.assertIsNone(eingangsordner.naechste_fremde_projekt_datei("CWB"))
+
+    def test_aelteste_fremde_datei_gewinnt(self):
+        self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht", "text": "x"})
+        os.utime(self._ordner / "a.json", (1000, 1000))
+        self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "schreiber", "text": "x"})
+        os.utime(self._ordner / "b.json", (2000, 2000))
+        self.assertEqual(eingangsordner.naechste_fremde_projekt_datei("CWB"), "hausgemacht")
+
 
 class VerarbeitenTest(EingangsordnerTestBasis):
 
-    def test_gueltiger_auftrag_wird_ausgefuehrt_und_landet_in_erledigt(self):
+    def test_gueltiger_auftrag_wird_ausgefuehrt_und_bleibt_in_laeuft(self):
+        # Block 70, Teil A: ein normaler Rueckkehr aus ausfuehren() heisst nur
+        # "angenommen", nicht "fertig" - core/fenster.py arbeitet den Auftrag
+        # meist noch asynchron ab. Die Datei darf darum NICHT schon hier nach
+        # erledigt/ verschwinden, sonst waeren Bruecken-Auftraege 28/29 aus
+        # dem gemeldeten Fehler verloren, sobald sie nur in die Warteschlange
+        # gereiht wurden.
         pfad = self._datei_anlegen("a.json", {"quelle": "zeitschaltung", "text": "#CODE#\nTu etwas."})
         empfangen = []
         eingangsordner.verarbeiten(pfad, markierung_erkennen, empfangen.append)
         self.assertEqual(len(empfangen), 1)
         self.assertEqual(empfangen[0].inhalt, "Tu etwas.")
+        self.assertEqual(empfangen[0].datei, eingangsordner.laeuft_ordner() / "a.json")
         self.assertFalse(pfad.exists())
-        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+        self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
+        self.assertFalse((eingangsordner.erledigt_ordner() / "a.json").exists())
         self.assertFalse((eingangsordner.abgelehnt_ordner() / "a.json").exists())
 
     def test_admin_ohne_lokal_wird_abgelehnt_und_nicht_ausgefuehrt(self):
@@ -220,7 +296,7 @@ class VerarbeitenTest(EingangsordnerTestBasis):
         eingangsordner.verarbeiten(pfad, markierung_erkennen, empfangen.append)
         self.assertEqual(len(empfangen), 1)
         self.assertEqual(empfangen[0].art, "admin")
-        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+        self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
 
     def test_kaputte_datei_landet_in_abgelehnt_mit_grund(self):
         pfad = self._datei_anlegen("a.json", "kein json")
@@ -239,13 +315,13 @@ class VerarbeitenTest(EingangsordnerTestBasis):
         eingangsordner.verarbeiten(pfad, markierung_erkennen, ausfuehren)
         self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
 
-    def test_namenskonflikt_in_erledigt_wird_nicht_ueberschrieben(self):
-        (eingangsordner.erledigt_ordner() / "a.json").write_text("alt", encoding="utf-8")
+    def test_namenskonflikt_in_laeuft_wird_nicht_ueberschrieben(self):
+        (eingangsordner.laeuft_ordner() / "a.json").write_text("alt", encoding="utf-8")
         pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
         eingangsordner.verarbeiten(pfad, markierung_erkennen, lambda a: None)
-        alt = eingangsordner.erledigt_ordner() / "a.json"
+        alt = eingangsordner.laeuft_ordner() / "a.json"
         self.assertEqual(alt.read_text(encoding="utf-8"), "alt")
-        treffer = list(eingangsordner.erledigt_ordner().glob("a_*.json"))
+        treffer = list(eingangsordner.laeuft_ordner().glob("a_*.json"))
         self.assertEqual(len(treffer), 1)
 
     def test_auftrag_spaeter_legt_datei_unverarbeitet_zurueck(self):
@@ -293,9 +369,116 @@ class VerarbeitenTest(EingangsordnerTestBasis):
         eingangsordner.verarbeiten(zurueck, markierung_erkennen, ausfuehren)
         self.assertTrue(zurueck.exists())  # erster Versuch: zurueckgestellt
         eingangsordner.verarbeiten(zurueck, markierung_erkennen, ausfuehren)
-        self.assertFalse(zurueck.exists())  # zweiter Versuch: erledigt
-        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+        self.assertFalse(zurueck.exists())  # zweiter Versuch: angenommen
+        self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
         self.assertEqual(versuche["anzahl"], 2)
+
+
+class AbschliessenTest(EingangsordnerTestBasis):
+
+    def test_abschliessen_verschiebt_von_laeuft_nach_erledigt(self):
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        empfangen = []
+        eingangsordner.verarbeiten(pfad, markierung_erkennen, empfangen.append)
+        laeuft_pfad = empfangen[0].datei
+        eingangsordner.abschliessen(laeuft_pfad)
+        self.assertFalse(laeuft_pfad.exists())
+        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+
+    def test_abschliessen_namenskonflikt_wird_nicht_ueberschrieben(self):
+        (eingangsordner.erledigt_ordner() / "a.json").write_text("alt", encoding="utf-8")
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        empfangen = []
+        eingangsordner.verarbeiten(pfad, markierung_erkennen, empfangen.append)
+        eingangsordner.abschliessen(empfangen[0].datei)
+        alt = eingangsordner.erledigt_ordner() / "a.json"
+        self.assertEqual(alt.read_text(encoding="utf-8"), "alt")
+        treffer = list(eingangsordner.erledigt_ordner().glob("a_*.json"))
+        self.assertEqual(len(treffer), 1)
+
+    def test_abschliessen_ohne_vorhandene_datei_ist_folgenlos(self):
+        eingangsordner.abschliessen(eingangsordner.laeuft_ordner() / "fehlt.json")
+
+
+class VerwerfenTest(EingangsordnerTestBasis):
+
+    def test_verwerfen_verschiebt_von_laeuft_nach_abgelehnt_mit_grund(self):
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        empfangen = []
+        eingangsordner.verarbeiten(pfad, markierung_erkennen, empfangen.append)
+        eingangsordner.verwerfen(empfangen[0].datei, "Not-Aus")
+        self.assertFalse(empfangen[0].datei.exists())
+        ziel = eingangsordner.abgelehnt_ordner() / "a.json"
+        self.assertTrue(ziel.exists())
+        self.assertEqual(ziel.with_suffix(".txt").read_text(encoding="utf-8"), "Not-Aus")
+
+    def test_verwerfen_ohne_vorhandene_datei_ist_folgenlos(self):
+        eingangsordner.verwerfen(eingangsordner.laeuft_ordner() / "fehlt.json", "egal")
+
+
+class WiederAufnehmenTest(EingangsordnerTestBasis):
+    """Block 70, Teil A: core/fenster.py ruft wieder_aufnehmen() beim Oeffnen
+    eines Projekts auf - fuer Auftraege, die beim letzten Mal (Absturz,
+    Neustart, Projektwechsel) nicht fertig wurden und darum noch in laeuft/
+    liegen."""
+
+    def _in_laeuft_anlegen(self, name: str, inhalt: dict, mtime: float | None = None) -> Path:
+        pfad = eingangsordner.laeuft_ordner() / name
+        pfad.write_text(json.dumps(inhalt, ensure_ascii=False), encoding="utf-8")
+        if mtime is not None:
+            os.utime(pfad, (mtime, mtime))
+        return pfad
+
+    def test_ohne_laeuft_dateien_passiert_nichts(self):
+        self.assertEqual(eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB",
+                                                           lambda a: None), 0)
+
+    def test_passende_datei_wird_wieder_angenommen(self):
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB",
+                                            "text": "#CODE#\nBlock 65"})
+        empfangen = []
+        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
+        self.assertEqual(anzahl, 1)
+        self.assertEqual(len(empfangen), 1)
+        self.assertEqual(empfangen[0].inhalt, "Block 65")
+        # Die Datei bleibt in laeuft/ liegen, bis core/fenster.py einen
+        # echten Abschluss meldet (abschliessen()) - genau wie bei einem
+        # frischen Auftrag.
+        self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
+
+    def test_fremdes_projekt_bleibt_unangetastet(self):
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht",
+                                            "text": "x"})
+        empfangen = []
+        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
+        self.assertEqual(anzahl, 0)
+        self.assertEqual(empfangen, [])
+        self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
+
+    def test_reihenfolge_aelteste_zuerst(self):
+        self._in_laeuft_anlegen("b.json", {"quelle": "bruecke", "text": "zweiter"}, mtime=2000)
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "erster"}, mtime=1000)
+        empfangen = []
+        eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
+        self.assertEqual([a.inhalt for a in empfangen], ["erster", "zweiter"])
+
+    def test_auftrag_spaeter_legt_datei_in_eingang_zurueck(self):
+        self._in_laeuft_anlegen("a.json", {"quelle": "lokal", "text": "#RUN#\nipconfig"})
+
+        def ausfuehren(_auftrag):
+            raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", ausfuehren)
+        self.assertEqual(anzahl, 0)
+        self.assertTrue((self._ordner / "a.json").exists())
+        self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
+
+    def test_kaputte_datei_landet_in_abgelehnt(self):
+        pfad = eingangsordner.laeuft_ordner() / "a.json"
+        pfad.write_text("kein json", encoding="utf-8")
+        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", lambda a: None)
+        self.assertEqual(anzahl, 0)
+        self.assertTrue((eingangsordner.abgelehnt_ordner() / "a.json").exists())
 
 
 class WartendeDateienTest(EingangsordnerTestBasis):
@@ -370,10 +553,12 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
         verbliebene = {p.name for p in eingangsordner.wartende_dateien()}
         self.assertEqual(verbliebene, {"a.json", "b.json", "c.json"})
         # Keine der drei wurde je beansprucht (ausgefuehrt, verschoben o. ae.) -
-        # einzig der gelaufene Auftrag (d.json) landet in erledigt/.
+        # einzig der angenommene Auftrag (d.json) landet in laeuft/, nicht
+        # schon in erledigt/ (Block 70, Teil A).
         self.assertFalse(list(eingangsordner.in_bearbeitung_ordner().glob("*.json")))
-        erledigt = {p.name for p in eingangsordner.erledigt_ordner().glob("*.json")}
-        self.assertEqual(erledigt, {"d.json"})
+        laeuft = {p.name for p in eingangsordner.laeuft_ordner().glob("*.json")}
+        self.assertEqual(laeuft, {"d.json"})
+        self.assertFalse(list(eingangsordner.erledigt_ordner().glob("*.json")))
 
     def test_urspruengliche_reihenfolge_bleibt_beim_naechsten_blick_erhalten(self):
         for index, name in enumerate(["a.json", "b.json"]):

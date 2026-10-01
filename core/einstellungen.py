@@ -1072,6 +1072,18 @@ class EinstellungenFenster(QDialog):
             "Ab Werk aus.",
             bool(werte.get("bruecke_aktiv", False)),
         )
+        self.auto_projektwechsel = self._schalter(
+            gruppe,
+            "auto_projektwechsel",
+            "Automatisch Projekt wechseln",
+            "Steht dieser Schalter an, wechselt CWB im Leerlauf von selbst zu "
+            "einem anderen bekannten Projekt, sobald dort ein Auftrag aus dem "
+            "Eingangsordner oder der Brücke wartet - wie F9, nur ohne "
+            "Roberts Zutun (Block 70, Teil C). Kein Wechsel, solange ein "
+            "eigener Auftrag läuft, die Warteschlange nicht leer ist oder "
+            "eine Kontingent-Pause läuft. Ab Werk an.",
+            bool(werte.get("auto_projektwechsel", True)),
+        )
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe

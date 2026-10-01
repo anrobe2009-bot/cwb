@@ -41,6 +41,11 @@ class SitzungsFaden(QThread):
     verbrauch_da = Signal(dict)
     # Die vom Abo wirklich waehlbaren Modelle, sobald die Verbindung steht
     modelle_da = Signal(list)
+    # Block 70, Teil B: der tatsaechlich aufgeloeste Modellname der gerade
+    # (neu) verbundenen Sitzung (Sitzung.modell_name, z.B. "claude-sonnet-5") -
+    # bei jeder Verbindung und jedem Modellwechsel, nicht nur beim allerersten
+    # Aufbau.
+    modell_verbunden_da = Signal(str)
 
     def __init__(self, projekt: Projekt, modell: str = ""):
         super().__init__()
@@ -122,6 +127,7 @@ class SitzungsFaden(QThread):
         self.sitzung.nur_lesen_setzen(self.nur_lesen)
         await self.sitzung.verbinden()
         self.modelle_da.emit(list(self.sitzung.modelle))
+        self.modell_verbunden_da.emit(self.sitzung.modell_name)
         self.bereit_da.emit()
 
         while True:
@@ -134,6 +140,7 @@ class SitzungsFaden(QThread):
                 try:
                     await self.sitzung.modell_wechseln(text)
                     self.modelle_da.emit(list(self.sitzung.modelle))
+                    self.modell_verbunden_da.emit(self.sitzung.modell_name)
                     self.bereit_da.emit()
                 except Exception as fehler:  # noqa: BLE001
                     log.exception("Modellwechsel gescheitert: %s", fehler)

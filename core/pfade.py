@@ -42,7 +42,7 @@ LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 # Einzige Stelle, an der die Versionsnummer steht - Fenstertitel, Einstellungen,
 # Hilfe (F1) und der Start-Logeintrag lesen sie von hier. Wie sie kuenftig
 # steigt, steht in CLAUDE.md unter "Versionsnummer".
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # Das Log waechst sonst unbegrenzt. Ist die Datei voll, wandert sie nach
 # cwb_fehler.log.1, die aelteren rutschen nach; alles jenseits der dritten
@@ -286,10 +286,23 @@ BRUECKE_ZUGANG_DATEI = DATENORDNER / "bruecke_zugang.txt"
 #   "zusatzprojekte": [
 #     {"name": "Lisa", "pfad": "E:/Sonstiges/lisa"}
 #   ]
+#
+# Optional ein Feld "aliase" (Liste von Zeichenketten), z.B.
+#
+#   {"name": "Max und frriends", "pfad": "C:/MAX-Friends",
+#    "aliase": ["max-friends", "Max & Friends"]}
+#
+# core/eingangsordner.py (Block 70, Teil C, projekt_gleichwertig) nutzt das,
+# um einen abweichend geschriebenen Projektnamen im Feld "projekt" einer
+# Eingangsordner-/Bruecken-Datei trotzdem dem richtigen Projekt zuzuordnen -
+# ohne Alias zaehlt dort nur Gross-/Kleinschreibung, Bindestrich und
+# Leerzeichen als unscharf.
 
 def zusatzprojekte_lesen() -> list[dict]:
     """Die gepflegte Projektliste. Ungueltige Eintraege (ohne Name oder
-    Pfad) werden stillschweigend uebergangen."""
+    Pfad) werden stillschweigend uebergangen. Das Feld "aliase" bleibt leer,
+    wenn es fehlt oder keine Liste ist - dann zaehlt fuer diesen Eintrag nur
+    der unscharfe Abgleich ohne Aliase."""
     liste = einstellungen_lesen().get(ZUSATZPROJEKTE_SCHLUESSEL)
     if not isinstance(liste, list):
         return []
@@ -299,8 +312,15 @@ def zusatzprojekte_lesen() -> list[dict]:
             continue
         name = str(eintrag.get("name", "")).strip()
         pfad = str(eintrag.get("pfad", "")).strip()
-        if name and pfad:
-            ergebnis.append({"name": name, "pfad": pfad})
+        if not (name and pfad):
+            continue
+        roh_aliase = eintrag.get("aliase")
+        aliase = [str(a).strip() for a in roh_aliase if str(a).strip()] \
+            if isinstance(roh_aliase, list) else []
+        gepflegt = {"name": name, "pfad": pfad}
+        if aliase:
+            gepflegt["aliase"] = aliase
+        ergebnis.append(gepflegt)
     return ergebnis
 
 

@@ -1,26 +1,26 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 17:32.
+Automatisch erzeugt am 01.10.2026 18:08.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 3215 |  |
-| core\einstellungen.py | 1747 |  |
+| core\fenster.py | 3423 |  |
+| core\einstellungen.py | 1759 |  |
 | core\sitzung.py | 1722 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
 | core\sprache.py | 853 |  |
-| core\kopfzeile.py | 750 |  |
+| core\kopfzeile.py | 795 |  |
+| core\eingangsordner.py | 541 |  |
 | core\grundlagen.py | 521 |  |
 | core\zielfenster.py | 517 |  |
 | memory_hub\memory_db.py | 506 | Memory Hub - Kernmodul. |
 | core\datenordner.py | 462 |  |
 | index\indexer.py | 460 |  |
-| core\pfade.py | 433 |  |
+| core\pfade.py | 453 |  |
 | memory_hub\aufraeumen.py | 421 | Memory Hub - Aufraeummodus. |
 | core\terminal.py | 414 |  |
 | core\android_screenshot.py | 384 |  |
-| core\eingangsordner.py | 381 |  |
 | core\landkarte.py | 351 |  |
 | core\tastenleiste.py | 343 |  |
 | core\bruecke.py | 329 |  |
@@ -29,10 +29,10 @@ Automatisch erzeugt am 01.10.2026 17:32.
 | core\zeigeransage.py | 259 |  |
 | core\ersteinrichtung.py | 258 |  |
 | index\mcp_server.py | 182 | Code-Index - MCP-Server, Teil von CWB. |
-| core\projektwahl.py | 160 |  |
+| core\modelle.py | 173 |  |
+| core\projektwahl.py | 166 |  |
+| core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
-| core\faden.py | 154 |  |
-| core\modelle.py | 146 |  |
 | core\bloecke.py | 120 |  |
 | core\pausetaste.py | 84 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |

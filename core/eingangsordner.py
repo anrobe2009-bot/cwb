@@ -36,6 +36,7 @@ jedes offene Fenster holen.
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,9 +45,9 @@ from pathlib import Path
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer
 
 try:
-    from .pfade import EINGANG_ORDNER, log_einrichten
+    from .pfade import EINGANG_ORDNER, log_einrichten, zusatzprojekte_lesen
 except ImportError:
-    from pfade import EINGANG_ORDNER, log_einrichten
+    from pfade import EINGANG_ORDNER, log_einrichten, zusatzprojekte_lesen
 
 log_einrichten()
 log = logging.getLogger("cwb.eingangsordner")
@@ -58,6 +59,14 @@ PRUEF_ABSTAND_MS = 2000
 ERLEDIGT_UNTERORDNER = "erledigt"
 ABGELEHNT_UNTERORDNER = "abgelehnt"
 IN_BEARBEITUNG_UNTERORDNER = ".in_bearbeitung"
+# Block 70, Teil A: ein angenommener Auftrag steht hier, solange er
+# tatsaechlich noch laeuft oder in core/fenster.py wartet - verarbeiten()
+# selbst verschiebt NIE nach erledigt/, das tut erst abschliessen(), von
+# fenster.py aus aufgerufen, wenn ein Bericht wirklich geschrieben oder
+# hochgeladen wurde. Ueberlebt ein Absturz oder ein Projektwechsel, bleibt
+# die Datei hier liegen - wieder_aufnehmen() holt sie beim naechsten Start
+# dieses Projekts zurueck.
+LAEUFT_UNTERORDNER = "laeuft"
 
 QUELLE_LOKAL = "lokal"
 
@@ -74,11 +83,16 @@ def in_bearbeitung_ordner() -> Path:
     return EINGANG_ORDNER / IN_BEARBEITUNG_UNTERORDNER
 
 
+def laeuft_ordner() -> Path:
+    return EINGANG_ORDNER / LAEUFT_UNTERORDNER
+
+
 def sicherstellen() -> None:
-    """Legt den Eingangsordner und seine drei Unterordner an, falls sie
+    """Legt den Eingangsordner und seine vier Unterordner an, falls sie
     fehlen. Schlägt das fehl, läuft CWB ohne Eingangsordner weiter - wie bei
     jedem anderen Schreibfehler in diesem Projekt."""
-    for ordner in (EINGANG_ORDNER, erledigt_ordner(), abgelehnt_ordner(), in_bearbeitung_ordner()):
+    for ordner in (EINGANG_ORDNER, erledigt_ordner(), abgelehnt_ordner(),
+                   in_bearbeitung_ordner(), laeuft_ordner()):
         try:
             ordner.mkdir(parents=True, exist_ok=True)
         except OSError as fehler:
@@ -178,19 +192,66 @@ def admin_gesperrt(art: str, quelle: str) -> bool:
     return art == "admin" and quelle != QUELLE_LOKAL
 
 
+def _projekt_normalisiert(name: str) -> str:
+    """Vergleichsform eines Projektnamens fuer den unscharfen Abgleich
+    (Block 70, Teil C): klein geschrieben, ohne Leerzeichen, Bindestrich,
+    Unterstrich oder Et-Zeichen - "max-friends" und "Max & Friends" werden
+    so gleich."""
+    return re.sub(r"[\s\-_&]+", "", (name or "").lower())
+
+
+def _alias_klassen() -> dict[str, str]:
+    """Normalisierter Alias/Name -> normalisierter kanonischer Projektname,
+    aus dem Feld "aliase" der Zusatzprojekte (core/pfade.py,
+    zusatzprojekte_lesen). Ohne Zusatzprojekte oder ohne "aliase" bleibt die
+    Abbildung leer - dann zaehlt nur `_projekt_normalisiert` allein. Scheitert
+    das Lesen, gilt dasselbe, statt den Abgleich ganz abzubrechen."""
+    abbildung: dict[str, str] = {}
+    try:
+        for zusatz in zusatzprojekte_lesen():
+            kanon = _projekt_normalisiert(zusatz.get("name", ""))
+            if not kanon:
+                continue
+            abbildung[kanon] = kanon
+            for alias in zusatz.get("aliase", None) or []:
+                norm = _projekt_normalisiert(str(alias))
+                if norm:
+                    abbildung[norm] = kanon
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Aliase der Zusatzprojekte nicht lesbar: %s", fehler)
+    return abbildung
+
+
+def projekt_gleichwertig(a: str, b: str) -> bool:
+    """Block 70, Teil C: wahr, wenn `a` und `b` denselben Projektnamen
+    meinen - ohne Ruecksicht auf Gross-/Kleinschreibung, Bindestrich und
+    Leerzeichen, und zusaetzlich ueber die Aliase der Zusatzprojekte (z.B.
+    "max-friends" fuer "Max und frriends", wenn dort als Alias eingetragen).
+    Zwei leere Namen gelten NICHT als gleich - das waere kein Treffer,
+    sondern schlicht nichts zu vergleichen."""
+    na, nb = _projekt_normalisiert(a), _projekt_normalisiert(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    klassen = _alias_klassen()
+    return klassen.get(na, na) == klassen.get(nb, nb)
+
+
 def passend_fuer_projekt(pfad: Path, projekt_name: str) -> bool:
     """Wahr, wenn diese Datei zu einem Fenster mit offenem Projekt
     `projekt_name` gehört: ihr Feld "projekt" ist leer (dann darf jedes
-    Fenster sie holen) oder stimmt ohne Rücksicht auf Gross-/Kleinschreibung
-    überein. Ein Lesefehler zählt als Treffer - die eigentliche Fehlermeldung
-    entsteht erst in `verarbeiten()`, nach dem Beanspruchen, wo sie auch
-    protokolliert und als abgelehnte Datei sichtbar wird."""
+    Fenster sie holen) oder ist zu `projekt_name` gleichwertig
+    (`projekt_gleichwertig`, Block 70 Teil C). Ein Lesefehler zählt als
+    Treffer - die eigentliche Fehlermeldung entsteht erst in `verarbeiten()`,
+    nach dem Beanspruchen, wo sie auch protokolliert und als abgelehnte
+    Datei sichtbar wird."""
     try:
         daten = _daten_lesen(pfad)
     except (OSError, ValueError, EingangsFehler):
         return True
     ziel = str(daten.get("projekt", "")).strip()
-    return not ziel or ziel.lower() == projekt_name.strip().lower()
+    return not ziel or projekt_gleichwertig(ziel, projekt_name)
 
 
 def fremde_projekte(projekt_name: str) -> dict[str, int]:
@@ -208,11 +269,29 @@ def fremde_projekte(projekt_name: str) -> dict[str, int]:
         except (OSError, ValueError, EingangsFehler):
             continue
         ziel = str(daten.get("projekt", "")).strip()
-        if not ziel or ziel.lower() == projekt_name.strip().lower():
+        if not ziel or projekt_gleichwertig(ziel, projekt_name):
             continue
-        schluessel = next((k for k in ergebnis if k.lower() == ziel.lower()), ziel)
+        schluessel = next((k for k in ergebnis if projekt_gleichwertig(k, ziel)), ziel)
         ergebnis[schluessel] = ergebnis.get(schluessel, 0) + 1
     return ergebnis
+
+
+def naechste_fremde_projekt_datei(projekt_name: str) -> str | None:
+    """Block 70, Teil C: das Feld "projekt" der aeltesten wartenden Datei,
+    die nicht zu `projekt_name` gleichwertig ist (`projekt_gleichwertig`) -
+    Grundlage fuer den automatischen Projektwechsel im Leerlauf (core/
+    fenster.py, `_auto_projekt_pruefen`). Dateien ohne Feld "projekt" zaehlen
+    nicht, sie passen zu jedem offenen Fenster. `None`, wenn keine solche
+    Datei wartet."""
+    for pfad in wartende_dateien():
+        try:
+            daten = _daten_lesen(pfad)
+        except (OSError, ValueError, EingangsFehler):
+            continue
+        ziel = str(daten.get("projekt", "")).strip()
+        if ziel and not projekt_gleichwertig(ziel, projekt_name):
+            return ziel
+    return None
 
 
 def wartende_dateien() -> list[Path]:
@@ -236,11 +315,13 @@ def _beanspruchen(pfad: Path) -> Path | None:
         return None
 
 
-def _verschieben(pfad: Path, ziel_ordner: Path, grund: str = "") -> None:
-    """Verschiebt die beanspruchte Datei nach erledigt/ oder abgelehnt/. Ein
-    Namenskonflikt (zwei Dateien gleichen Namens) bekommt einen Zeitstempel
-    angehängt, statt die ältere zu überschreiben. Bei Ablehnung wird der
-    Grund in eine gleichnamige .txt-Datei daneben geschrieben."""
+def _verschieben(pfad: Path, ziel_ordner: Path, grund: str = "") -> Path | None:
+    """Verschiebt die beanspruchte Datei nach laeuft/, erledigt/ oder
+    abgelehnt/. Ein Namenskonflikt (zwei Dateien gleichen Namens) bekommt
+    einen Zeitstempel angehängt, statt die ältere zu überschreiben. Bei
+    Ablehnung wird der Grund in eine gleichnamige .txt-Datei daneben
+    geschrieben. Gibt den tatsächlichen Zielpfad zurück, `None` bei einem
+    Schreibfehler."""
     ziel = ziel_ordner / pfad.name
     if ziel.exists():
         zeitstempel = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -249,12 +330,13 @@ def _verschieben(pfad: Path, ziel_ordner: Path, grund: str = "") -> None:
         pfad.replace(ziel)
     except OSError as fehler:
         log.error("Eingangsdatei nicht verschiebbar: %s -> %s (%s)", pfad, ziel, fehler)
-        return
+        return None
     if grund:
         try:
             ziel.with_suffix(".txt").write_text(grund, encoding="utf-8")
         except OSError as fehler:
             log.warning("Ablehnungsgrund nicht schreibbar für %s: %s", ziel, fehler)
+    return ziel
 
 
 def _zurueckstellen(pfad: Path) -> None:
@@ -271,13 +353,19 @@ def _zurueckstellen(pfad: Path) -> None:
 
 def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
     """Ein Durchlauf für genau eine Datei: beanspruchen, lesen, bei #ADMIN#
-    ohne Quelle "lokal" ablehnen, sonst an `ausfuehren(auftrag)` (core/
-    fenster.py, _eingang_auftrag) übergeben und danach nach erledigt/
-    verschieben.
+    ohne Quelle "lokal" ablehnen, sonst nach laeuft/ verschieben und an
+    `ausfuehren(auftrag)` (core/fenster.py, _eingang_auftrag) übergeben.
 
-    `ausfuehren` darf selbst eine Ausnahme werfen - die Datei landet dann
-    trotzdem in erledigt/, damit sie nicht bei jedem Blick erneut versucht
-    wird; der Fehler steht im Log."""
+    Kehrt `ausfuehren` ohne Ausnahme zurück, heißt das nur "angenommen", NICHT
+    "fertig" - core/sitzung.py arbeitet den Auftrag meist noch asynchron ab
+    (Warteschlange, Arbeitsfaden). Die Datei bleibt darum in laeuft/ liegen;
+    erst core/fenster.py ruft nach einem echten Abschluss (Bericht
+    geschrieben oder hochgeladen) `abschliessen()` auf. Nur wenn `ausfuehren`
+    selbst eine andere Ausnahme als AuftragSpaeter wirft - der Auftrag kam
+    also nie bis zur Warteschlange -, landet die Datei sofort in erledigt/,
+    damit sie nicht bei jedem Blick erneut versucht wird; der Fehler steht
+    im Log. AuftragSpaeter legt die Datei unverändert in den Eingangsordner
+    zurück (siehe `_zurueckstellen`)."""
     sicherstellen()
     beansprucht = _beanspruchen(pfad)
     if beansprucht is None:
@@ -293,15 +381,87 @@ def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
         log.warning("Eingangsdatei abgelehnt (%s): %s", pfad.name, grund)
         _verschieben(beansprucht, abgelehnt_ordner(), grund)
         return
+    laeuft = _verschieben(beansprucht, laeuft_ordner())
+    if laeuft is None:
+        return
+    auftrag.datei = laeuft
     try:
         ausfuehren(auftrag)
     except AuftragSpaeter as grund:
         log.info("Eingangsdatei zurückgestellt (%s): %s", pfad.name, grund)
-        _zurueckstellen(beansprucht)
-        return
+        _zurueckstellen(laeuft)
     except Exception as fehler:  # noqa: BLE001
         log.exception("Auftrag aus dem Eingangsordner gescheitert (%s): %s", pfad.name, fehler)
-    _verschieben(beansprucht, erledigt_ordner())
+        _verschieben(laeuft, erledigt_ordner())
+
+
+def abschliessen(datei: Path) -> None:
+    """Verschiebt eine Datei aus laeuft/ nach erledigt/ - aufgerufen von
+    core/fenster.py (_fertig, _terminal_fertig, _bild_fertig), sobald der
+    zugehörige Auftrag tatsächlich abgeschlossen ist (Bericht geschrieben
+    oder an die Brücke hochgeladen), egal ob mit Erfolg, Fehler oder nach
+    einem Abbruch (F8). Existiert die Datei nicht mehr (schon abgeschlossen,
+    oder zwischenzeitlich zurückgestellt), passiert nichts."""
+    if not datei.exists():
+        return
+    _verschieben(datei, erledigt_ordner())
+
+
+def verwerfen(datei: Path, grund: str) -> None:
+    """Verschiebt eine Datei aus laeuft/ nach abgelehnt/, mit `grund` in der
+    gleichnamigen .txt-Datei - core/fenster.py ruft das auf, wenn ein
+    wartender oder laufender Eingangsordner-Auftrag ausdrücklich verworfen
+    wird (F4 Warteschlange leeren, F8 Not-Aus, einzelnes Entfernen in der
+    Warteschlangenverwaltung), statt ihn als erledigt zu melden. Ohne diesen
+    Aufruf würde `wieder_aufnehmen()` die Datei beim nächsten Start erneut
+    anstoßen, obwohl Robert sie gerade bewusst verworfen hat."""
+    if not datei.exists():
+        return
+    _verschieben(datei, abgelehnt_ordner(), grund)
+
+
+def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
+    """Block 70, Teil A: nimmt beim Öffnen eines Projekts alle Aufträge
+    wieder auf, die beim letzten Mal nicht fertig wurden - ihre Datei liegt
+    noch in laeuft/, weil `verarbeiten()` sie dort erst durch `abschliessen()`
+    wegnimmt (core/fenster.py), nicht schon bei der Annahme. Das deckt sowohl
+    einen abgestürzten/neu gestarteten Prozess als auch einen Projektwechsel
+    (F9) ab: in beiden Fällen geht der im Fenster gemerkte Zustand (Faden,
+    Warteschlange) verloren, die Datei in laeuft/ aber nicht.
+
+    Älteste zuerst, wie `wartende_dateien()`. Nur Dateien, die zu
+    `projekt_name` passen (`passend_fuer_projekt`), werden hier angefasst -
+    andere bleiben liegen, bis das richtige Fenster sie holt. Gibt die Zahl
+    der tatsächlich wieder angenommenen Aufträge zurück."""
+    sicherstellen()
+    ordner = laeuft_ordner()
+    if not ordner.is_dir():
+        return 0
+    dateien = sorted((p for p in ordner.glob("*.json") if p.is_file()),
+                      key=lambda p: p.stat().st_mtime)
+    anzahl = 0
+    for pfad in dateien:
+        if not passend_fuer_projekt(pfad, projekt_name):
+            continue
+        try:
+            auftrag = auftrag_lesen(pfad, markierung_erkennen)
+        except EingangsFehler as fehler:
+            log.warning("Wieder aufgenommene Datei kaputt (%s): %s", pfad.name, fehler)
+            _verschieben(pfad, abgelehnt_ordner(), str(fehler))
+            continue
+        try:
+            ausfuehren(auftrag)
+        except AuftragSpaeter as grund:
+            log.info("Wieder aufgenommene Datei zurückgestellt (%s): %s", pfad.name, grund)
+            _zurueckstellen(pfad)
+            continue
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Wieder aufgenommener Auftrag gescheitert (%s): %s",
+                           pfad.name, fehler)
+            _verschieben(pfad, erledigt_ordner())
+            continue
+        anzahl += 1
+    return anzahl
 
 
 class Eingangswaechter(QObject):

@@ -117,6 +117,33 @@ def aufbereiten(roh: list) -> list[dict]:
     return eintraege
 
 
+# Block 70, Teil B: Zuordnung vom tatsaechlich aufgeloesten Modellnamen
+# (Sitzung.modell_name, z.B. "claude-sonnet-5", "claude-opus-5[1m]") zu einem
+# kurzen deutschen Anzeigenamen fuer die Kopfzeile - lang und schmal (bei
+# wenig Platz, core/kopfzeile.py). Nicht verwechseln mit HINWEISE oben: das
+# dort ist nach dem CLI-Kurznamen ("sonnet", "opus[1m]") geschluesselt, der
+# bei der Auswahl gilt, nicht nach dem aufgeloesten Namen der Verbindung.
+ANZEIGE_KURZNAMEN = (
+    ("fable", "Fable 5.1", "Fable"),
+    ("opus", "Opus 5", "Opus"),
+    ("sonnet", "Sonnet 5", "Sonnet"),
+    ("haiku", "Haiku 4.5", "Haiku"),
+)
+
+
+def anzeige_name(modell_name: str) -> tuple[str, str]:
+    """Macht aus dem aufgeloesten Modellnamen einen kurzen Anzeigenamen fuer
+    die Kopfzeile: lang (z.B. "Sonnet 5") und schmal bei wenig Platz (z.B.
+    "Sonnet"). Kennt `modell_name` keines der vier Modelle, wird er
+    unveraendert in beiden Fassungen gezeigt, statt etwas zu erraten."""
+    niedrig = (modell_name or "").lower()
+    for muster, lang, kurz in ANZEIGE_KURZNAMEN:
+        if muster in niedrig:
+            return lang, kurz
+    name = modell_name or "unbekannt"
+    return name, name
+
+
 def eintrag_suchen(eintraege: list, wert: str) -> dict:
     """Sucht einen Eintrag nach seinem Wert. Nichts gefunden: leerer Eintrag."""
     for eintrag in eintraege or []:

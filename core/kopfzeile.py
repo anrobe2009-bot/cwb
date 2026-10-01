@@ -18,8 +18,11 @@ Beschreibung an der Kopfzeile selbst.
 Das geltende Schreibrecht ("Nur lesen" / "Lesen und Schreiben") steht nicht
 hier, sondern einzig an der Kachel ZUGRIFF_KENNUNG (F10, core/fenster.py) -
 eine zweite Anzeige derselben Information waere hier nur Redundanz. Die
-Modellwahl steht ebenfalls nicht mehr hier, sondern in den Einstellungen
-(F12, Reiter Verhalten, core/einstellungen.py).
+Modellwahl (das Auswaehlen) steht nicht hier, sondern in den Einstellungen
+(F12, Reiter Verhalten, core/einstellungen.py). Welches Modell dabei
+tatsaechlich verbunden ist, zeigt die Modellanzeige hier dauerhaft an
+(Block 70, Teil B, `modell_zeigen`) - anders als die uebrigen Felder in
+dieser Zeile ist sie nie leer.
 
 Taetigkeit und bearbeitete Datei stehen nicht mehr hier, sondern gross und
 fett direkt im Aktivitaetsbalken oben (core/fenster.py, Aktivitaetsbalken).
@@ -123,6 +126,13 @@ SUCH_EFFIZIENZ_KURZ_BEISPIELE = ("–", "999 %")
 
 # Warteanzeige kurz: nur die Zahl, ohne das Wort "Warten".
 WARTE_KURZ_BEISPIELE = ("99",)
+
+# Modellanzeige (Block 70, Teil B): der Kurzname des tatsaechlich verbundenen
+# Modells (core/modelle.py, anzeige_name) - dauerhaft sichtbar, nie leer, im
+# Unterschied zu den anderen Feldern hier. Breite an allen vier moeglichen
+# Namen gemessen, lang und schmal.
+MODELL_BEISPIELE = ("Sonnet 5", "Opus 5", "Haiku 4.5", "Fable 5.1")
+MODELL_KURZ_BEISPIELE = ("Sonnet", "Opus", "Haiku", "Fable")
 
 # Eingangsanzeige (Block 63): wie viele Auftragsdateien im Eingangsordner auf
 # ein ANDERES, nicht offenes Projekt warten (core/eingangsordner.py,
@@ -242,6 +252,8 @@ class Ausgabekopf(QWidget):
         self._freigaben_namen: list = []
         self._bruecke_an = False
         self._such_prozent: int | None = None
+        self._modell_lang = ""
+        self._modell_kurz = ""
         self._warte_anzahl = 0
         self._eingang_fremde: dict = {}
         self._verbrauch: dict = {}
@@ -300,6 +312,17 @@ class Ausgabekopf(QWidget):
         self.such_effizienz.setAlignment(Qt.AlignCenter)
         self.such_effizienz.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.such_effizienz)
+
+        # Modellanzeige (Block 70, Teil B): der Kurzname des tatsaechlich
+        # verbundenen Modells - anders als die uebrigen Felder hier dauerhaft
+        # sichtbar, nie leer. core/fenster.py setzt den Wert ueber
+        # modell_zeigen(), sobald die Sitzung (neu) verbunden ist.
+        self.modellanzeige = Schrumpffeld("")
+        self.modellanzeige.setObjectName("modellanzeige")
+        self.modellanzeige.setAccessibleName("Modell")
+        self.modellanzeige.setAlignment(Qt.AlignCenter)
+        self.modellanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.modellanzeige)
 
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
@@ -409,6 +432,8 @@ class Ausgabekopf(QWidget):
                  BRUECKE_BEISPIELE, BRUECKE_KURZ_BEISPIELE),
                 ("such_effizienz", self.such_effizienz,
                  SUCH_EFFIZIENZ_BEISPIELE, SUCH_EFFIZIENZ_KURZ_BEISPIELE),
+                ("modellanzeige", self.modellanzeige,
+                 MODELL_BEISPIELE, MODELL_KURZ_BEISPIELE),
                 ("warteanzeige", self.warteanzeige,
                  WARTE_BEISPIELE, WARTE_KURZ_BEISPIELE),
                 ("eingangsanzeige", self.eingangsanzeige,
@@ -440,8 +465,8 @@ class Ausgabekopf(QWidget):
             # dazwischen (die Warteanzeige bleibt aussen vor, sie ist im
             # Regelfall verborgen und traegt dann nichts zur Breite bei).
             dauerhaft = ("sicherheitshinweis", "freigabenanzeige", "bruecke_anzeige",
-                         "such_effizienz", "tokenzaehler", "sitzungszaehler",
-                         "tageszaehler")
+                         "such_effizienz", "modellanzeige", "tokenzaehler",
+                         "sitzungszaehler", "tageszaehler")
             abstand = self.layout().spacing() if self.layout() else 4
             self._breite_lang_benoetigt = (
                 sum(breiten[name][0] for name in dauerhaft)
@@ -466,6 +491,7 @@ class Ausgabekopf(QWidget):
         self._freigaben_zeichnen()
         self._bruecke_zeichnen()
         self._such_effizienz_zeichnen()
+        self._modell_zeichnen()
         self._warteschlange_zeichnen()
         self._eingang_fremde_zeichnen()
         self._verbrauch_zeichnen()
@@ -668,6 +694,25 @@ class Ausgabekopf(QWidget):
             self.such_effizienz.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Such-Effizienz nicht gesetzt: %s", fehler)
+
+    def modell_zeigen(self, lang: str, kurz: str) -> None:
+        """Zeigt den Kurznamen des tatsaechlich verbundenen Modells (Block 70,
+        Teil B) - anders als die uebrigen Felder hier dauerhaft, nie leer.
+        `lang`/`kurz` kommen fertig aus core/modelle.py (`anzeige_name`);
+        diese Klasse entscheidet nichts, sie zeigt nur an."""
+        self._modell_lang = lang
+        self._modell_kurz = kurz
+        self._modell_zeichnen()
+
+    def _modell_zeichnen(self) -> None:
+        try:
+            text = self._modell_kurz if self._schmal else self._modell_lang
+            self.modellanzeige.setText(text)
+            satz = f"Modell {self._modell_lang}." if self._modell_lang else "Modell unbekannt."
+            self.modellanzeige.setToolTip(satz)
+            self.modellanzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Modellanzeige nicht gesetzt: %s", fehler)
 
     def status_zeichnen(self) -> None:
         """Legt die gemerkte Meldung samt Nur-Lesen-Zustand als Beschreibung
