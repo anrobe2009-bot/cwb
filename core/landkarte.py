@@ -1,9 +1,9 @@
 """
 CWB - Code Workbench
 Landkarte: wissen/landkarte.md je Projekt - eine Tabelle Datei/Zeilen/Zweck,
-größte Datei zuerst. Claude Code schlägt sehr viel per Suche nach, obwohl eine
-Suche rund 40 % teurer ist als reiner Volltext (core/grundlagen.py,
-suche_ersparnis_prozent) - die Landkarte sagt auf einen Blick, welche Datei
+größte Datei zuerst. Claude Code schlägt sehr viel per Suche nach, obwohl das
+deutlich mehr Lesezugriffe kostet als reiner Volltext (core/grundlagen.py,
+such_effizienz_prozent) - die Landkarte sagt auf einen Blick, welche Datei
 wofür zuständig ist, ohne dass dafür erst gesucht werden muss. Bisher wurde
 sie von Hand per Skript für einzelne Projekte angelegt; dieses Modul baut sie
 automatisch beim Verbinden (core/sitzung.py, `_landkarte_anstossen`).

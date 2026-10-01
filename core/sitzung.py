@@ -35,6 +35,7 @@ from claude_agent_sdk import (
     McpSdkServerConfig,
     PermissionResultAllow,
     PermissionResultDeny,
+    RateLimitEvent,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -46,7 +47,7 @@ from claude_agent_sdk import (
 )
 
 try:
-    from .grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
+    from .grundlagen import suche_auftrag_anhaengen, such_effizienz_prozent
     from .landkarte import landkarte_erzeugen
     from .modelle import STANDARD as MODELL_STANDARD
     from .modelle import aufbereiten as modelle_aufbereiten
@@ -60,7 +61,7 @@ try:
         code_index_vorladen,
     )
 except ImportError:
-    from grundlagen import suche_auftrag_anhaengen, suche_ersparnis_prozent
+    from grundlagen import suche_auftrag_anhaengen, such_effizienz_prozent
     from landkarte import landkarte_erzeugen
     from modelle import STANDARD as MODELL_STANDARD
     from modelle import aufbereiten as modelle_aufbereiten
@@ -233,6 +234,7 @@ class Zustand(Enum):
     FUEHRT_AUS = "fuehrt_aus"
     NETZ = "netz"
     WARTET = "wartet"
+    WARTET_KONTINGENT = "wartet_kontingent"
     FERTIG = "fertig"
     ABGEBROCHEN = "abgebrochen"
     FEHLER = "fehler"
@@ -334,7 +336,7 @@ PROTOKOLL_UNTERORDNER = Path(".cwb") / "protokoll"
 # Laenge, ab der ein Werkzeugergebnis im Protokoll abgeschnitten wird
 PROTOKOLL_ERGEBNIS_LAENGE = 300
 
-# Werkzeuge, die die Kennzahl "Suche gespart" als Lesezugriff zaehlt (Block
+# Werkzeuge, die die Kennzahl "Such-Effizienz" als Lesezugriff zaehlt (Block
 # C10). Bash zaehlt nur dazu, wenn befehl_schreibt() nichts findet - dieselbe
 # Pruefung, die core/sicherheit.py schon fuer den Nur-Lesen-Modus benutzt.
 LESE_WERKZEUGE = {"Read", "Grep", "Glob"}
@@ -360,7 +362,7 @@ def lesezugriffe_vor_aenderung(werkzeuge: list[dict]) -> int:
     """Zaehlt Read/Grep/Glob/lesende-Bash-Aufrufe am Anfang eines Auftrags,
     bis die erste Aenderung kommt (Edit/Write/NotebookEdit oder ein
     schreibender Bash-Befehl). Kommt nie eine Aenderung, zaehlen alle -
-    Grundlage der Kopfzeilen-Anzeige "Suche gespart" (Block C10)."""
+    Grundlage der Kopfzeilen-Anzeige "Such-Effizienz" (Block C10)."""
     zahl = 0
     for eintrag in werkzeuge:
         name = eintrag.get("name", "")
@@ -394,7 +396,28 @@ Regeln:
 - Wenn etwas unklar, unmoeglich oder unlogisch ist: sag es in einem Satz, statt zu raten.
 - Starte keine Hintergrund-Agenten und keine Hintergrund-Befehle. Unteragenten
   sind erlaubt, aber nur im Vordergrund. Beende deine Antwort erst, wenn alle
-  Ergebnisse vorliegen."""
+  Ergebnisse vorliegen.
+- Keine simulierten Tastendruecke oder Mausklicks an Fenster anderer Programme.
+  Programme werden ueber eingebaute Testzugaenge, Kommandozeile oder
+  Bildschirmfotos geprueft."""
+
+
+def _kontingent_aus_limit(info: Any) -> dict[str, Any] | None:
+    """Baut das Rueckgabefeld "kontingent" von auftrag() aus der zuletzt
+    erhaltenen RateLimitEvent-Meldung (Agent-SDK, Kontingent-Pause bei
+    erschoepftem Max-Abo) - None, wenn keine Meldung vorliegt oder ihr
+    Status nicht "rejected" (erschoepft) ist, etwa bei "allowed_warning".
+    `info` ist eine claude_agent_sdk.RateLimitInfo; als Any getippt, damit
+    core/test_kontingent.py sie ohne SDK-Importpflicht nachbilden kann.
+    Eigene Funktion statt Inline-Code in auftrag(), damit sich die Erkennung
+    ohne laufende SDK-Verbindung testen laesst."""
+    if info is None or getattr(info, "status", None) != "rejected":
+        return None
+    return {
+        "resets_at": info.resets_at,
+        "rate_limit_type": info.rate_limit_type,
+        "quelle": "RateLimitEvent (Claude Agent SDK), status=rejected",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +468,10 @@ class Sitzung:
         self._nachschlage_erfuellt = False
         self._suchpflicht_hinweis_gegeben = False
         self.fehlerstrom = Fehlerstrom("Sitzung")
+        # Die zuletzt im laufenden Auftrag erhaltene RateLimitEvent-Meldung
+        # des SDK (Max-Kontingent) - status="rejected" heisst erschoepft,
+        # siehe auftrag() und _kontingent_aus_limit().
+        self._limit_erkannt = None
         self.verbrauch = {
             "eingabe": 0, "cache_gelesen": 0, "cache_erstellt": 0, "ausgabe": 0,
             "gesamt": 0, "sitzung": 0,
@@ -465,17 +492,15 @@ class Sitzung:
         except Exception as fehler:  # noqa: BLE001
             log.exception("Ereignisrueckruf gescheitert: %s", fehler)
 
-    def _suche_ersparnis_satz(self) -> str:
+    def _such_effizienz_satz(self) -> str:
         """Fuer 'Wo stehen wir?' (F2) - dieselbe Zahl wie in der Kopfzeile,
-        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py. Ein
-        negativer Wert heisst "teurer als Volltext", nicht "negativ gespart"
-        (Block 63, wie core/kopfzeile.py::suchersparnis_zeigen)."""
-        prozent = suche_ersparnis_prozent()
+        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py. 100
+        Prozent ist der Normalwert vom 21.09.2026, mehr heisst gezielter
+        gesucht, weniger umstaendlicher (wie core/kopfzeile.py::such_effizienz_zeigen)."""
+        prozent = such_effizienz_prozent()
         if prozent is None:
-            return "Suche gespart: noch nicht ermittelbar."
-        if prozent < 0:
-            return f"Suche {abs(prozent)} Prozent teurer als Volltext."
-        return f"Suche gespart: {prozent} Prozent."
+            return "Such-Effizienz: noch nicht ermittelbar."
+        return f"Such-Effizienz {prozent} Prozent."
 
     def stand(self) -> str:
         """Antwort auf die Taste 'Wo stehen wir?'. Nennt seit Block 61 (Teil
@@ -484,12 +509,12 @@ class Sitzung:
         modell = f" Modell {self.modell_name}." if self.modell_name else ""
         if not self.laeuft:
             return (f"Nichts laeuft gerade.{modell} {self.verbrauch['sitzung']} Token in dieser Sitzung, "
-                    f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._suche_ersparnis_satz()}")
+                    f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._such_effizienz_satz()}")
         anzahl = len(self.schritte)
         dauer = int((datetime.now() - self.begonnen).total_seconds()) if self.begonnen else 0
         letzte = self.schritte[-1].ansage if self.schritte else "gestartet"
         return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden.{modell} Zuletzt: {letzte}. "
-                f"{self._suche_ersparnis_satz()}")
+                f"{self._such_effizienz_satz()}")
 
     def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
         """Haelt die Tokenwerte des letzten Auftrags fest und summiert die Sitzung.
@@ -904,12 +929,12 @@ class Sitzung:
             zeilen.append("Pflicht aktiv: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
         zeilen.append("")
 
-        # Grundlage der Kopfzeilen-Anzeige "Suche gespart" (Block C10): wird
+        # Grundlage der Kopfzeilen-Anzeige "Such-Effizienz" (Block C10): wird
         # bei jedem Auftrag an den Verlauf in einstellungen.json angehaengt,
         # unabhaengig davon, ob etwas geaendert wurde.
         lesezugriffe = lesezugriffe_vor_aenderung(self._protokoll["werkzeuge"])
         suche_auftrag_anhaengen(lesezugriffe)
-        zeilen.append("## Suche gespart")
+        zeilen.append("## Such-Effizienz")
         zeilen.append(f"Lesezugriffe vor der ersten Aenderung: {lesezugriffe}.")
         zeilen.append("")
 
@@ -1265,6 +1290,7 @@ class Sitzung:
         self.begonnen = datetime.now()
         self.schritte.clear()
         self._nachschlage_erfuellt = False
+        self._limit_erkannt = None
         werte = einstellungen_lesen()
         suchpflicht_erforderlich = (
             bool(self._nachschlage_verfuegbar)
@@ -1359,6 +1385,20 @@ class Sitzung:
                 elif isinstance(nachricht, UserMessage):
                     self._protokoll_ergebnisse_erfassen(nachricht)
 
+                elif isinstance(nachricht, RateLimitEvent):
+                    # Status "rejected" heisst: das Max-Kontingent (Fuenf-
+                    # Stunden- oder Wochenfenster) ist erschoepft. Nur
+                    # gemerkt - ausgewertet wird das erst nach dem Strom,
+                    # unabhaengig davon, ob danach noch eine ResultMessage
+                    # oder eine Ausnahme kommt.
+                    self._limit_erkannt = nachricht.rate_limit_info
+                    log.warning(
+                        "RateLimitEvent erhalten: status=%s typ=%s auslastung=%s "
+                        "freigabe=%s",
+                        self._limit_erkannt.status, self._limit_erkannt.rate_limit_type,
+                        self._limit_erkannt.utilization, self._limit_erkannt.resets_at,
+                    )
+
                 elif isinstance(nachricht, ResultMessage):
                     ergebnis_da = True
                     self._verbrauch_erfassen(nachricht)
@@ -1379,13 +1419,28 @@ class Sitzung:
         finally:
             self.laeuft = False
 
+        # Das Max-Kontingent ist erschoepft (Fuenf-Stunden- oder
+        # Wochenfenster) - kein echter Fehler, der Auftrag wird spaeter von
+        # fenster.py automatisch fortgesetzt (siehe core/fenster.py,
+        # _kontingent_...). Der Klient gilt als unbrauchbar: die CLI bricht
+        # den laufenden Aufruf bei "rejected" ab, eine frische Verbindung
+        # ist die sicherere Grundlage fuer den Fortsetzungsversuch.
+        kontingent = _kontingent_aus_limit(self._limit_erkannt)
+        if kontingent is not None:
+            fehlermeldung = ""
+            verbindung_tot = True
+            log.warning(
+                "Kontingent erschoepft (Typ %s, Freigabe %s) - Auftrag wird spaeter "
+                "fortgesetzt", kontingent["rate_limit_type"], kontingent["resets_at"],
+            )
+
         if self._abbruch and not ergebnis_da and not verbindung_tot:
             # Der Rest der abgebrochenen Antwort liegt noch im Strom. Wird er
             # nicht abgeholt, liest der naechste Auftrag ihn als seine
             # Antwort und liefert damit alten Inhalt zum neuen Auftrag.
             verbindung_tot = not await self._strom_leeren()
 
-        if not ergebnis_da and not self._abbruch and not fehlermeldung:
+        if kontingent is None and not ergebnis_da and not self._abbruch and not fehlermeldung:
             verbindung_tot = True
             log.error("Auftrag endete ohne Ergebnismeldung - die Sitzung liefert nichts mehr")
             self.fehlerstrom.protokollieren("Sitzung ohne Ergebnis")
@@ -1397,7 +1452,9 @@ class Sitzung:
         geaendert = self.wache.auftrag_bilanz()
         self._protokoll_schreiben(geaendert)
 
-        if fehlermeldung:
+        if kontingent is not None:
+            self._melde(Zustand.WARTET_KONTINGENT, "Kontingent erschöpft")
+        elif fehlermeldung:
             self._melde(Zustand.FEHLER, "Fehler", fehlermeldung)
         elif self._abbruch:
             self._melde(Zustand.ABGEBROCHEN, "Auftrag abgebrochen")
@@ -1411,7 +1468,7 @@ class Sitzung:
         elif not self._abbruch:
             await self._nachtrag_stellen()
 
-        return {
+        ergebnis = {
             "antwort": "\n".join(antwort).strip(),
             "geaendert": geaendert,
             "fehler": fehlermeldung,
@@ -1419,6 +1476,9 @@ class Sitzung:
             "schritte": len(self.schritte),
             "sicherungspunkt": punkt,
         }
+        if kontingent is not None:
+            ergebnis["kontingent"] = kontingent
+        return ergebnis
 
     async def _strom_leeren(self) -> bool:
         """Holt nach einem Not-Aus den Rest der alten Antwort bis zur

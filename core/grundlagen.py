@@ -14,7 +14,7 @@ import functools
 import logging
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QTimer
@@ -238,12 +238,13 @@ def tagesverbrauch_erhoehen(anzahl: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# "Suche gespart" (Block C10): wie viele Lesezugriffe (Read, Grep, Glob,
-# lesende Bash-Befehle - siehe core/sitzung.py, lesezugriffe_vor_aenderung)
-# ein Auftrag im Schnitt braucht, bevor die erste Datei geändert wird. Eine
-# sinkende Zahl heißt: Claude Code schaut vor dem Ändern gezielter nach.
-# Das ist kein Maß für gesparte Token - reines Nachschauen vor dem Ändern
-# kostet selbst welche.
+# "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"/"teurer als
+# Volltext"): wie viele Lesezugriffe (Read, Grep, Glob, lesende
+# Bash-Befehle - siehe core/sitzung.py, lesezugriffe_vor_aenderung) ein
+# Auftrag im Schnitt braucht, bevor die erste Datei geändert wird, verglichen
+# mit dem Grundwert vom 21.09.2026. Eine steigende Zahl heißt: Claude Code
+# schaut vor dem Ändern gezielter nach. Das ist kein Maß für gesparte Token -
+# reines Nachschauen vor dem Ändern kostet selbst welche.
 #
 # Grundwert: einmalig aus den Auftragsprotokollen vom 21.09.2026 über alle
 # Projekte berechnet (siehe wissen/tagebuch.md, Block C10) und danach nicht
@@ -316,17 +317,89 @@ def suche_auftrag_anhaengen(lesezugriffe: int) -> list[int]:
         return suche_verlauf_lesen()
 
 
-def suche_ersparnis_prozent() -> int | None:
-    """(Grundwert - aktueller Schnitt) / Grundwert in Prozent, ganzzahlig,
-    darf negativ sein. None, solange kein Grundwert gesetzt ist oder weniger
-    als 5 Aufträge seit Block C6 im Verlauf stehen - dann zeigt die
-    Kopfzeile "Suche gespart: –" statt einer Zahl."""
+def such_effizienz_prozent() -> int | None:
+    """Grundwert geteilt durch aktuellen Schnitt mal 100, ganzzahlig. 100 %
+    ist der Normalwert vom 21.09.2026: mehr heißt gezielter gesucht (weniger
+    Lesezugriffe vor der ersten Änderung als damals), weniger heißt
+    umständlicher. None, solange kein Grundwert gesetzt ist oder weniger als
+    5 Aufträge seit Block C6 im Verlauf stehen - dann zeigt die Kopfzeile
+    "Such-Effizienz –" statt einer Zahl."""
     grundwert = suche_grundwert_lesen()
     verlauf = suche_verlauf_lesen()
     if not grundwert or len(verlauf) < SUCHE_MINDEST_AUFTRAEGE:
         return None
     aktuell = sum(verlauf) / len(verlauf)
-    return round((grundwert - aktuell) / grundwert * 100)
+    if aktuell <= 0:
+        # Kein einziger Lesezugriff vor der ersten Aenderung - effizienter
+        # geht es nicht, ein echter Quotient waere aber undefiniert.
+        return 999
+    return round(grundwert / aktuell * 100)
+
+
+# ---------------------------------------------------------------------------
+# Kontingent-Pause (Max-Abo): das Agent-SDK meldet ein erschoepftes
+# Kontingent ueber eine RateLimitEvent-Nachricht mit status="rejected"
+# (core/sitzung.py, auftrag()) - kein freier Lauftext, sondern ein
+# strukturiertes Feld mit "resets_at" (Unix-Zeitstempel der Freigabe) und
+# "rate_limit_type" ("five_hour", "seven_day", ...). kontingent_entscheidung()
+# ist reine Logik ohne Oberflaeche, damit core/fenster.py
+# (_kontingent_pause_behandeln) sie verwenden und dieses Modul sie ohne Qt
+# testen kann.
+# ---------------------------------------------------------------------------
+
+KONTINGENT_WOCHENGRENZE_SEKUNDEN = 12 * 3600
+KONTINGENT_NACHSCHLAG_SEKUNDEN = 2 * 60
+KONTINGENT_UNBEKANNT_WARTE_SEKUNDEN = 15 * 60
+
+
+def kontingent_entscheidung(resets_at: int | float | None, jetzt: datetime) -> dict:
+    """Entscheidet, wie auf ein erschoepftes Kontingent reagiert wird.
+
+    `resets_at` ist der von der RateLimitEvent-Meldung gelieferte
+    Unix-Zeitstempel der Freigabe (None, wenn das SDK keinen nennt).
+
+    Liegt die Freigabe mehr als KONTINGENT_WOCHENGRENZE_SEKUNDEN entfernt,
+    handelt es sich vermutlich um das Wochenlimit statt des Fuenf-Stunden-
+    Fensters: Rueckgabe mit `wochenlimit=True`, `warte_bis=None` - kein
+    automatischer Fortsetzungsversuch.
+
+    Sonst: `warte_bis` ist die Freigabe plus KONTINGENT_NACHSCHLAG_SEKUNDEN,
+    ohne bekannte Freigabe `jetzt` plus KONTINGENT_UNBEKANNT_WARTE_SEKUNDEN.
+    `ansage` und `status` sind fertige Saetze fuer Sprachausgabe und
+    Statuszeile, `wartesekunden` (mindestens 1) die Zeit bis `warte_bis`."""
+    freigabe = datetime.fromtimestamp(resets_at) if resets_at else None
+
+    if freigabe is not None and (
+            freigabe - jetzt).total_seconds() > KONTINGENT_WOCHENGRENZE_SEKUNDEN:
+        return {
+            "wochenlimit": True,
+            "freigabe": freigabe,
+            "warte_bis": None,
+            "grund": (
+                f"Kontingent erschöpft, Freigabe laut Claude Code erst "
+                f"{freigabe:%d.%m.%Y %H:%M} Uhr – mehr als 12 Stunden entfernt, "
+                "vermutlich das Wochenlimit. Warteschlange angehalten, kein "
+                "automatischer Fortsetzungsversuch."
+            ),
+        }
+
+    if freigabe is not None:
+        warte_bis = freigabe + timedelta(seconds=KONTINGENT_NACHSCHLAG_SEKUNDEN)
+        ansage = f"Kontingent erschöpft, ich mache um {warte_bis:%H:%M} Uhr weiter."
+        status = f"Wartet auf Kontingent, weiter um {warte_bis:%H:%M} Uhr."
+    else:
+        warte_bis = jetzt + timedelta(seconds=KONTINGENT_UNBEKANNT_WARTE_SEKUNDEN)
+        ansage = "Kontingent erschöpft, ich versuche es alle 15 Minuten."
+        status = "Wartet auf Kontingent, nächster Versuch in 15 Minuten."
+
+    return {
+        "wochenlimit": False,
+        "freigabe": freigabe,
+        "warte_bis": warte_bis,
+        "ansage": ansage,
+        "status": status,
+        "wartesekunden": max(1.0, (warte_bis - jetzt).total_seconds()),
+    }
 
 
 # ---------------------------------------------------------------------------

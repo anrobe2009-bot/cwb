@@ -425,16 +425,17 @@ nicht.
   `tokenverbrauch`, 30 Tage aufbewahrt). Nur angezeigt, nicht gesprochen; F2 nennt den
   Sitzungsstand. Der Bericht listet alle Werte einschließlich Cache.
 
-### Suche gespart (`sitzung.py`, `lesezugriffe_vor_aenderung`, `grundlagen.py`)
-- Kennzahl in der Kopfzeile zwischen Freigaben-Zahl und Tokenzähler: wie viele
-  Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) ein Auftrag im Schnitt braucht,
-  bevor die erste Datei geändert wird, verglichen mit dem Grundwert vom 21.09.2026
-  (einmalig aus den Auftragsprotokollen aller Projekte berechnet, `einstellungen.json` →
-  `suche_gespart.grundwert`). „Aktuell“ ist der gleitende Schnitt der letzten 15 Aufträge
-  ab Block C6 (`suche_gespart.verlauf`). **Das ist keine Token-Ersparnis** – reines
-  Nachschauen vor dem Ändern kostet selbst Token, die Zahl sagt nur, ob vor dem Ändern
-  gezielter nachgeschaut wird. Unter 5 Aufträgen seit Block C6 zeigt das Feld „–“ statt
-  einer Zahl. Nicht gesprochen; F2 „Wo stehen wir“ nennt den Wert zusätzlich als Satz.
+### Such-Effizienz (`sitzung.py`, `lesezugriffe_vor_aenderung`, `grundlagen.py`)
+- Kennzahl in der Kopfzeile zwischen Freigaben-Zahl und Tokenzähler: Grundwert vom
+  21.09.2026 (einmalig aus den Auftragsprotokollen aller Projekte berechnet,
+  `einstellungen.json` → `suche_gespart.grundwert`) geteilt durch den aktuellen Schnitt
+  der Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) vor der ersten
+  Dateiänderung, mal 100, ganzzahlig. 100 % ist der Normalwert, mehr heißt gezielter
+  gesucht, weniger heißt umständlicher. „Aktuell“ ist der gleitende Schnitt der
+  letzten 15 Aufträge ab Block C6 (`suche_gespart.verlauf`). **Das ist keine
+  Token-Ersparnis** – reines Nachschauen vor dem Ändern kostet selbst Token. Unter
+  5 Aufträgen seit Block C6 zeigt das Feld „–“ statt einer Zahl. Nicht gesprochen;
+  F2 „Wo stehen wir“ nennt den Wert zusätzlich als Satz.
 
 ### Bildanhänge
 - Strg+B: Dateidialog (png, jpg, jpeg, webp, gif, bmp). Strg+V im Fenster mit Bild in der

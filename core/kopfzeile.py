@@ -96,17 +96,14 @@ FREIGABEN_BEISPIELE = ("Freigaben 99",)
 # solange die Bruecke aus ist - ab Werk der Fall.
 BRUECKE_BEISPIELE = ("Brücke an",)
 
-# "Suche gespart" (Block C10): wie viele Lesezugriffe (Read, Grep, Glob,
-# lesende Bash-Befehle) ein Auftrag im Schnitt braucht, bevor die erste
-# Datei geaendert wird, verglichen mit dem Grundwert vom 21.09.2026 - keine
-# Token-Ersparnis. Unter 5 Auftraegen seit Block C6 steht ein Gedankenstrich
-# statt einer Zahl. Ein negativer Wert heisst: mehr Lesezugriffe als frueher,
-# nicht "negativ gespart" - dafuer steht seit Block 63 ein eigener Text statt
-# einer verwirrenden negativen Prozentzahl (siehe suchersparnis_zeigen); die
-# Breite wird an allen drei Beispielen gemessen.
-SUCHERSPARNIS_BEISPIELE = (
-    "Suche gespart: –", "Suche gespart: 100 %", "Suche: 999 % teurer als Volltext",
-)
+# "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"): Grundwert vom
+# 21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep, Glob,
+# lesende Bash-Befehle) vor der ersten Dateiänderung, mal 100 - keine
+# Token-Ersparnis. 100 % ist der Normalwert, mehr heißt gezielter gesucht,
+# weniger heißt umständlicher. Unter 5 Aufträgen seit Block C6 steht ein
+# Gedankenstrich statt einer Zahl (siehe such_effizienz_zeigen); die Breite
+# wird an beiden Beispielen gemessen.
+SUCH_EFFIZIENZ_BEISPIELE = ("Such-Effizienz –", "Such-Effizienz 999 %")
 
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
@@ -240,15 +237,15 @@ class Ausgabekopf(QWidget):
         self.bruecke_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.bruecke_anzeige)
 
-        # "Suche gespart" (Block C10): zwischen Freigaben-Zahl und
+        # "Such-Effizienz" (Block C10): zwischen Freigaben-Zahl und
         # Tokenzaehler, wie in der Kopfzeile vereinbart. Nicht gesprochen -
         # F2 "Wo stehen wir" nennt den Wert stattdessen als Satz.
-        self.suchersparnis = Schrumpffeld("")
-        self.suchersparnis.setObjectName("suchersparnis")
-        self.suchersparnis.setAccessibleName("Suche gespart")
-        self.suchersparnis.setAlignment(Qt.AlignCenter)
-        self.suchersparnis.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        quer.addWidget(self.suchersparnis)
+        self.such_effizienz = Schrumpffeld("")
+        self.such_effizienz.setObjectName("such_effizienz")
+        self.such_effizienz.setAccessibleName("Such-Effizienz")
+        self.such_effizienz.setAlignment(Qt.AlignCenter)
+        self.such_effizienz.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.such_effizienz)
 
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer, solange keiner wartet, damit die Zeile im
@@ -338,7 +335,7 @@ class Ausgabekopf(QWidget):
                 (self.sicherheitshinweis, SICHERHEITSHINWEIS_BEISPIELE),
                 (self.freigabenanzeige, FREIGABEN_BEISPIELE),
                 (self.bruecke_anzeige, BRUECKE_BEISPIELE),
-                (self.suchersparnis, SUCHERSPARNIS_BEISPIELE),
+                (self.such_effizienz, SUCH_EFFIZIENZ_BEISPIELE),
                 (self.warteanzeige, WARTE_BEISPIELE),
                 (self.tokenzaehler, ZAEHLER_BEISPIELE),
                 (self.sitzungszaehler, ZAEHLER_BEISPIELE),
@@ -470,44 +467,33 @@ class Ausgabekopf(QWidget):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Freigabenanzeige nicht gesetzt: %s", fehler)
 
-    def suchersparnis_zeigen(self, prozent: int | None) -> None:
-        """Zeigt die Kennzahl "Suche gespart" (Block C10): wie viele
-        Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) ein Auftrag im
-        Schnitt braucht, bevor die erste Datei geaendert wird, verglichen
-        mit dem Grundwert vom 21.09.2026. Keine Token-Ersparnis - reines
-        Nachschauen kostet selbst welche. `prozent` ist None, solange
-        weniger als 5 Auftraege seit Block C6 vorliegen; dann steht ein
-        Gedankenstrich da. Ein negativer Wert heisst: der aktuelle Schnitt
-        liegt UEBER dem Grundwert, es wird also nichts gespart, sondern mehr
-        gelesen als frueher - seit Block 63 steht dafuer "Suche: N % teurer
-        als Volltext" statt einer verwirrenden negativen Prozentzahl wie
-        "gespart: -126 %". Nicht gesprochen."""
+    def such_effizienz_zeigen(self, prozent: int | None) -> None:
+        """Zeigt die Kennzahl "Such-Effizienz" (Block C10): Grundwert vom
+        21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep,
+        Glob, lesende Bash-Befehle) vor der ersten Dateiänderung, mal 100.
+        100 % ist der Normalwert, mehr heißt gezielter gesucht, weniger
+        heißt umständlicher. Keine Token-Ersparnis - reines Nachschauen
+        kostet selbst welche. `prozent` ist None, solange weniger als 5
+        Aufträge seit Block C6 vorliegen; dann steht ein Gedankenstrich da.
+        Nicht gesprochen."""
         try:
             if prozent is None:
-                self.suchersparnis.setText("Suche gespart: –")
-                satz = ("Suche gespart: noch nicht ermittelbar, weniger als "
+                self.such_effizienz.setText("Such-Effizienz –")
+                satz = ("Such-Effizienz: noch nicht ermittelbar, weniger als "
                         "5 Aufträge seit Block C6.")
-            elif prozent < 0:
-                teurer = abs(prozent)
-                self.suchersparnis.setText(f"Suche: {teurer} % teurer als Volltext")
-                satz = (
-                    f"Suche {teurer} Prozent teurer als reine Volltextsuche: "
-                    "mehr Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) "
-                    "vor der ersten Dateiänderung als der Grundwert vom "
-                    "21.09.2026 - keine Token-Ersparnis."
-                )
             else:
-                self.suchersparnis.setText(f"Suche gespart: {prozent} %")
+                self.such_effizienz.setText(f"Such-Effizienz {prozent} %")
                 satz = (
-                    f"Suche gespart: {prozent} Prozent. Gemessen werden "
-                    "Lesezugriffe (Read, Grep, Glob, lesende Bash-Befehle) "
-                    "vor der ersten Dateiänderung, verglichen mit dem "
-                    "Grundwert vom 21.09.2026 - keine Token-Ersparnis."
+                    f"Such-Effizienz {prozent} Prozent. 100 Prozent ist der "
+                    "Normalwert vom 21.09.2026, mehr heißt gezielter gesucht, "
+                    "weniger umständlicher. Gemessen werden Lesezugriffe "
+                    "(Read, Grep, Glob, lesende Bash-Befehle) vor der ersten "
+                    "Dateiänderung - keine Token-Ersparnis."
                 )
-            self.suchersparnis.setToolTip(satz)
-            self.suchersparnis.setAccessibleDescription(satz)
+            self.such_effizienz.setToolTip(satz)
+            self.such_effizienz.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
-            log.exception("Suchersparnis nicht gesetzt: %s", fehler)
+            log.exception("Such-Effizienz nicht gesetzt: %s", fehler)
 
     def status_zeichnen(self) -> None:
         """Legt die gemerkte Meldung samt Nur-Lesen-Zustand als Beschreibung

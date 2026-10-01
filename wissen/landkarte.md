@@ -1,21 +1,21 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 08:32.
+Automatisch erzeugt am 01.10.2026 10:02.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 2985 |  |
+| core\fenster.py | 3134 |  |
 | core\einstellungen.py | 1747 |  |
-| core\sitzung.py | 1592 |  |
+| core\sitzung.py | 1652 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
 | core\sprache.py | 853 |  |
-| core\kopfzeile.py | 571 |  |
+| core\kopfzeile.py | 557 |  |
+| core\grundlagen.py | 521 |  |
 | core\zielfenster.py | 517 |  |
 | memory_hub\memory_db.py | 506 | Memory Hub - Kernmodul. |
 | core\datenordner.py | 462 |  |
 | index\indexer.py | 460 |  |
-| core\grundlagen.py | 448 |  |
 | core\pfade.py | 433 |  |
 | memory_hub\aufraeumen.py | 421 | Memory Hub - Aufraeummodus. |
 | core\terminal.py | 414 |  |

@@ -31,7 +31,7 @@ import sys
 import threading
 import zipfile
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -84,12 +84,13 @@ try:
         einstellungen_lesen,
         einstellungen_schreiben,
         fenster_geometrie_merken,
+        kontingent_entscheidung,
         slot_geschuetzt,
         stil_erneuern,
         stil_laden,
         stil_verzoegert,
         stil_wird_angewandt,
-        suche_ersparnis_prozent,
+        such_effizienz_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -143,12 +144,13 @@ except ImportError:
         einstellungen_lesen,
         einstellungen_schreiben,
         fenster_geometrie_merken,
+        kontingent_entscheidung,
         slot_geschuetzt,
         stil_erneuern,
         stil_laden,
         stil_verzoegert,
         stil_wird_angewandt,
-        suche_ersparnis_prozent,
+        such_effizienz_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
@@ -222,6 +224,18 @@ BRUECKE_SYMBOL_AUS = "🌉"
 BRUECKE_SYMBOL_AN = "🛰"
 BRUECKE_FARBE_AUS = "1"
 BRUECKE_FARBE_AN = "4"
+
+# Kontingent-Pause (Max-Abo): bricht ein Auftrag mit einer RateLimitEvent-
+# Meldung status="rejected" ab (core/sitzung.py, auftrag()), haelt CWB die
+# Warteschlange an statt den Auftrag als gescheitert zu werten. Die
+# Zeitentscheidung (Wochenlimit oder Fuenf-Stunden-Fenster, wann der naechste
+# Versuch startet) liegt reiner Logik wegen in core/grundlagen.py,
+# kontingent_entscheidung() - hier nur der Vorspann fuer den
+# Fortsetzungsversuch.
+KONTINGENT_VORSPANN = (
+    "Das Kontingent war erschöpft. Setze genau dort fort, wo du aufgehört "
+    "hast; prüfe dafür wissen/offen.md und git status.\n\n"
+)
 
 # Ordner fuer die Berichtdateien, relativ zum Projekt. Der Bericht liegt schon
 # in der Zwischenablage; fuer den Fall, dass daraus beim Einfuegen im Chat nur
@@ -503,7 +517,8 @@ class WarteschlangenFenster(QDialog):
     ein Kontextmenue mit "Löschen" (Block 60) - Entf/Rueckschritt bleiben
     daneben bestehen."""
 
-    def __init__(self, warteschlange: list[tuple[str, list[Path], int | None]], eltern=None):
+    def __init__(self, warteschlange: list[tuple[str, list[Path], int | None, int | None]],
+                 eltern=None):
         super().__init__(eltern)
         self._warteschlange = warteschlange
         self.setWindowTitle("Warteschlange verwalten")
@@ -542,7 +557,8 @@ class WarteschlangenFenster(QDialog):
 
     def _liste_fuellen(self) -> None:
         self.liste.clear()
-        for nummer, (text, _bilder, _bruecke_nummer) in enumerate(self._warteschlange, start=1):
+        for nummer, (text, _bilder, _bruecke_nummer, _block_nummer) in enumerate(
+                self._warteschlange, start=1):
             kurz = " ".join(text.split())[:80]
             self.liste.addItem(f"Platz {nummer}: {kurz}")
         if self._warteschlange:
@@ -640,6 +656,21 @@ class Werkbank(QMainWindow):
         self._bruecke_code_nummer: int | None = None
         self._terminal_bruecke_nummer: int | None = None
         self._bild_bruecke_nummer: int | None = None
+        # Die Blocknummer (core/bloecke.py, "Block N") eines laufenden oder
+        # wartenden #CODE#-Auftrags, bis _fertig() sie in den Bericht
+        # uebernimmt - None, wenn der Auftrag keine Nummer trug.
+        self._aktueller_block_nummer: int | None = None
+        # Bildanhaenge des gerade laufenden Auftrags - fuer den Fall, dass
+        # ihn _fertig() wegen einer Kontingent-Pause fortsetzen muss.
+        self._aktuelle_bilder: list[Path] = []
+        # Kontingent-Pause (Max-Abo): None ausserhalb einer Pause. Haelt den
+        # pausierten Auftrag (Text, Bilder, Bruecken-/Blocknummer) sowie die
+        # zuletzt gemeldete Freigabezeit, bis _kontingent_fortsetzen() ihn
+        # erneut startet (core/fenster.py, _fertig).
+        self._kontingent_info: dict | None = None
+        self._kontingent_uhr = QTimer(self)
+        self._kontingent_uhr.setSingleShot(True)
+        self._kontingent_uhr.timeout.connect(self._kontingent_fortsetzen)
         # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
         # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
         self._terminal_ziel: tuple | None = None
@@ -667,8 +698,9 @@ class Werkbank(QMainWindow):
         # einer lief. Sie werden der Reihe nach abgearbeitet, einer nach dem
         # anderen - nichts geht verloren, nichts blockiert. F4 leert sie. Das
         # dritte Tupelglied ist die Bruecken-auftrag_nummer (None ausser bei
-        # einem #CODE#-Auftrag aus der Bruecke, core/bruecke.py).
-        self._warteschlange: list[tuple[str, list[Path], int | None]] = []
+        # einem #CODE#-Auftrag aus der Bruecke, core/bruecke.py), das vierte
+        # die Blocknummer (core/bloecke.py, "Block N", None ohne Nummer).
+        self._warteschlange: list[tuple[str, list[Path], int | None, int | None]] = []
         # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
         # erkennt _absenden, ob der neue Auftrag warten muss.
         self._auftrag_laeuft = False
@@ -926,9 +958,9 @@ class Werkbank(QMainWindow):
         # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
         # einstellungen.json und faengt nicht mit jedem Neustart neu an.
         self.ausgabekopf.tag_zeigen(tagesverbrauch_heute())
-        # "Suche gespart" (Block C10) ebenso: der Verlauf steht schon aus
+        # "Such-Effizienz" (Block C10) ebenso: der Verlauf steht schon aus
         # frueheren Auftraegen in einstellungen.json.
-        self.ausgabekopf.suchersparnis_zeigen(suche_ersparnis_prozent())
+        self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
 
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
@@ -1679,6 +1711,7 @@ class Werkbank(QMainWindow):
         # hochgeladen - sofort geleert, damit der naechste Auftrag (ohne
         # Bruecke) nicht faelschlich mithochlaedt.
         bruecke_nummer, self._bruecke_code_nummer = self._bruecke_code_nummer, None
+        block_nummer, self._aktueller_block_nummer = self._aktueller_block_nummer, None
         # Der Platz beim Arbeitsfaden ist wieder frei; die Bilder wurden schon
         # beim Abschicken uebergeben.
         self._auftrag_laeuft = False
@@ -1686,7 +1719,17 @@ class Werkbank(QMainWindow):
         self.balken.animation_stoppen()
         # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
         # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
-        self.ausgabekopf.suchersparnis_zeigen(suche_ersparnis_prozent())
+        self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+
+        kontingent = bilanz.get("kontingent")
+        if kontingent is not None:
+            # Das Max-Kontingent ist erschoepft (core/sitzung.py, auftrag()) -
+            # kein gescheiterter Auftrag, sondern eine Pause. Weder Bericht
+            # noch Bruecken-Upload noch "naechsten_starten": das holt
+            # _kontingent_fortsetzen() nach, sobald der Auftrag wirklich zu
+            # Ende ist.
+            self._kontingent_pause_behandeln(kontingent, bruecke_nummer, block_nummer)
+            return
 
         # `satz` steht in der Statuszeile und muss in eine Zeile passen.
         # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
@@ -1721,7 +1764,7 @@ class Werkbank(QMainWindow):
             ansage = "Fertig."
 
         try:
-            self._letzter_bericht = self._bericht_bauen(bilanz)
+            self._letzter_bericht = self._bericht_bauen(bilanz, block_nummer)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Bericht nicht gebaut: %s", fehler)
             self._letzter_bericht = ""
@@ -1749,11 +1792,99 @@ class Werkbank(QMainWindow):
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
 
-    def _bericht_bauen(self, bilanz: dict) -> str:
+    def _kontingent_pause_behandeln(self, kontingent: dict, bruecke_nummer: int | None,
+                                     block_nummer: int | None) -> None:
+        """Haelt die Warteschlange an, statt den Auftrag als gescheitert zu
+        werten: das Max-Kontingent ist erschoepft (core/sitzung.py,
+        auftrag(), Rueckgabefeld "kontingent", RateLimitEvent des Agent-SDK
+        mit status="rejected"). Beim ersten Aufruf einer Pause merkt
+        `self._kontingent_info` Text, Bilder sowie Bruecken-/Blocknummer
+        einmalig - jeder weitere Aufruf (ein Fortsetzungsversuch, der selbst
+        wieder abgewiesen wurde) aktualisiert nur die Freigabezeit, damit
+        der Fortsetzungs-Vorspann (KONTINGENT_VORSPANN) sich nicht mit jedem
+        Versuch neu um den Auftragstext legt."""
+        erster_versuch = self._kontingent_info is None
+        if erster_versuch:
+            self._kontingent_info = {
+                "text": self.letzter_auftrag,
+                "bilder": list(self._aktuelle_bilder),
+                "bruecke_nummer": bruecke_nummer,
+                "block_nummer": block_nummer,
+            }
+        else:
+            log.info("Kontingent weiterhin erschöpft, neue Freigabezeit übernommen")
+
+        entscheidung = kontingent_entscheidung(kontingent.get("resets_at"), datetime.now())
+
+        if entscheidung["wochenlimit"]:
+            # Vermutlich das Wochenlimit, nicht das Fuenf-Stunden-Fenster:
+            # kein automatischer Fortsetzungsversuch, die Warteschlange
+            # bleibt angehalten, bis Robert selbst eingreift.
+            grund = entscheidung["grund"]
+            log.warning("Kontingent-Pause abgebrochen (Wochenlimit): %s", grund)
+            self._zustand_zeigen("fehler")
+            self._status_zeigen(grund)
+            self._verlauf_anhaengen(grund, "fehler")
+            self.sprecher.sprich(grund, art="fehler")
+            try:
+                bilanz_fuer_bericht = {
+                    "antwort": self.letzte_antwort, "geaendert": [], "fehler": grund,
+                    "abgebrochen": False,
+                }
+                self._letzter_bericht = self._bericht_bauen(
+                    bilanz_fuer_bericht, self._kontingent_info.get("block_nummer"))
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Bericht nicht gebaut (Kontingent-Wochenlimit): %s", fehler)
+                self._letzter_bericht = ""
+            self._letzter_bericht_pfad = (
+                self._bericht_datei_speichern() if self._letzter_bericht else None
+            )
+            self._kontingent_info = None
+            return
+
+        status, ansage = entscheidung["status"], entscheidung["ansage"]
+        self._zustand_zeigen("wartet_kontingent")
+        self._taetigkeit_zeigen("wartet auf Kontingent")
+        self._status_zeigen(status)
+        if erster_versuch:
+            # Nur beim ersten Mal gesprochen - ein stiller Fortsetzungsversuch,
+            # der selbst wieder abgewiesen wird, loest keine zweite Ansage aus.
+            self._verlauf_anhaengen(status, "hinweis")
+            self.sprecher.sprich(ansage, art="fehler")
+        log.warning(
+            "Kontingent erschöpft (Typ %s): %s - nächster Versuch in %d Sekunden",
+            kontingent.get("rate_limit_type"), status, int(entscheidung["wartesekunden"]),
+        )
+        self._kontingent_uhr.start(int(entscheidung["wartesekunden"] * 1000))
+
+    @slot_geschuetzt
+    def _kontingent_fortsetzen(self) -> None:
+        """Vom Kontingent-Timer gerufen (_kontingent_pause_behandeln): setzt
+        den pausierten Auftrag mit dem Fortsetzungs-Vorspann fort - in
+        derselben Sitzung, wenn sie noch lebt, sonst verbindet
+        core/sitzung.py (_neu_verbinden) von selbst neu, bevor der Auftrag
+        gesendet wird."""
+        info, self._kontingent_info = self._kontingent_info, None
+        if info is None:
+            # F8 (Not-Aus) hat die Pause inzwischen verworfen.
+            return
+        log.info("Kontingent-Pause vorbei, setze Auftrag fort: %s", info["text"][:120])
+        self._auftrag_starten(
+            f"{KONTINGENT_VORSPANN}{info['text']}", info["bilder"], ansagen=False,
+            bruecke_nummer=info["bruecke_nummer"], block_nummer=info["block_nummer"],
+        )
+
+    def _bericht_bauen(self, bilanz: dict, block_nummer: int | None = None) -> str:
         """Baut den Bericht für die Zwischenablage: Auftrag, Antwort, geänderte
-        Dateien und Tokenverbrauch des letzten Aufrufs."""
+        Dateien und Tokenverbrauch des letzten Aufrufs. Trug der Auftrag eine
+        Blocknummer (core/bloecke.py, "Block N" - die Zeile selbst wurde vor
+        der Übergabe an Claude Code entfernt), steht sie hier im Kopf, sonst
+        fehlte sie im Bericht ganz."""
         teile = [f"Projekt: {self.projekt.name}",
-                 f"Zeit: {datetime.now():%d.%m.%Y %H:%M}", ""]
+                 f"Zeit: {datetime.now():%d.%m.%Y %H:%M}"]
+        if block_nummer is not None:
+            teile.append(f"Block: {block_nummer}")
+        teile.append("")
         teile += ["Auftrag:", self.letzter_auftrag or "—", ""]
         teile += ["Antwort:", bilanz.get("antwort") or "—", ""]
 
@@ -1980,8 +2111,9 @@ class Werkbank(QMainWindow):
             len(text), art or "ohne Markierung", len(inhalt),
         )
         block_angesagt = False
+        block_nummer = None
         if art:
-            inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+            inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(art, inhalt)
             if not weiter:
                 return
         if art == "bild":
@@ -2012,7 +2144,7 @@ class Werkbank(QMainWindow):
             "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
         )
         self._absenden(vorspann=f"Aus Zwischenablage. {ansage}", art=art, inhalt=inhalt,
-                        block_angesagt=block_angesagt)
+                        block_angesagt=block_angesagt, block_nummer=block_nummer)
 
     @slot_geschuetzt
     def _ablage_auftrag(self, art: str, inhalt: str) -> None:
@@ -2026,7 +2158,7 @@ class Werkbank(QMainWindow):
         Eingabefeld neu geparst - sonst ginge die Markierung dabei verloren.
         Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
         ablagewaechter.py)."""
-        inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+        inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(art, inhalt)
         if not weiter:
             return
         if art == "bild":
@@ -2044,7 +2176,7 @@ class Werkbank(QMainWindow):
         if self._dublette_abgewiesen(art, inhalt):
             return
         self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
-                        block_angesagt=block_angesagt)
+                        block_angesagt=block_angesagt, block_nummer=block_nummer)
 
     def _eingang_auftrag(self, auftrag) -> None:
         """Duenner, ABSICHTLICH nicht mit @slot_geschuetzt versehener
@@ -2090,7 +2222,7 @@ class Werkbank(QMainWindow):
         if von_bruecke:
             log.info("Brücke: Auftrag gestartet (Nummer %s, Art %s)",
                       bruecke_nummer, art or "ohne Markierung")
-        inhalt, weiter, block_angesagt = self._block_verarbeiten(
+        inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(
             art, inhalt, herkunft="von Claude" if von_bruecke else "")
         if not weiter:
             return
@@ -2108,7 +2240,7 @@ class Werkbank(QMainWindow):
             return
         self._absenden(vorspann=f"Auftrag aus dem Eingangsordner ({auftrag.quelle}).",
                         art=art, inhalt=inhalt, block_angesagt=block_angesagt,
-                        bruecke_nummer=bruecke_nummer)
+                        bruecke_nummer=bruecke_nummer, block_nummer=block_nummer)
 
     # -- Bruecke (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) ----------------
 
@@ -2237,7 +2369,7 @@ class Werkbank(QMainWindow):
             self._dublette_melden("Läuft bereits.", art, "laufender Auftrag")
             return True
         if geglaettet:
-            for wartender_text, _bilder, _bruecke_nummer in self._warteschlange:
+            for wartender_text, _bilder, _bruecke_nummer, _block_nummer in self._warteschlange:
                 if self._text_glaetten(wartender_text) == geglaettet:
                     self._dublette_melden("Wartet schon.", art, "Warteschlange")
                     return True
@@ -2264,14 +2396,16 @@ class Werkbank(QMainWindow):
 
     def _block_verarbeiten(self, art: str, inhalt: str,
                             bilder: list[Path] | None = None, *,
-                            herkunft: str = "") -> tuple[str, bool, bool]:
+                            herkunft: str = "") -> tuple[str, bool, bool, int | None]:
         """Erkennt und entfernt eine Blocknummer am Anfang/Ende von `inhalt`
         (core/bloecke.py, Block 56) und sagt Annahme, Luecke oder
         Unvollstaendigkeit an. Wird fuer alle vier Wege (Waechter, F7,
         Eingabefeld, Eingangsordner) und alle vier Markierungen aufgerufen,
         jeweils bevor der Inhalt an Claude Code oder das Terminal geht.
 
-        Rueckgabe: (bereinigter Inhalt, ausfuehren, schon_angesagt).
+        Rueckgabe: (bereinigter Inhalt, ausfuehren, schon_angesagt, nummer).
+        `nummer` ist die erkannte Blocknummer (None ohne Blockzeile) - sie
+        wandert bei einem #CODE#-Auftrag bis in den Bericht (_fertig).
 
         Ohne Blockzeile bleibt der Inhalt unveraendert, es wird nichts
         gesagt, `schon_angesagt` ist Falsch - der Aufrufer sagt wie bisher
@@ -2288,7 +2422,7 @@ class Werkbank(QMainWindow):
         bleibt die Ansage wie bisher ohne Quellenangabe."""
         nummer, bereinigt, vollstaendig = block_erkennen(art, inhalt)
         if nummer is None:
-            return inhalt, True, False
+            return inhalt, True, False, None
         luecke = block_zaehler_aktualisieren(self.projekt.name, nummer)
         if luecke:
             log.warning("Block-Luecke (Projekt %s, Block %d): %s",
@@ -2306,19 +2440,20 @@ class Werkbank(QMainWindow):
             self._verlauf_anhaengen(satz, "hinweis")
             self._status_zeigen(satz)
             self.sprecher.sprich(satz, art="fehler")
-            return bereinigt, False, True
+            return bereinigt, False, True, nummer
         mitte = f" {herkunft}" if herkunft else ""
         satz = f"Block {nummer}{mitte} erhalten."
         if luecke:
             satz += f" {luecke}"
         log.info("Block %d erkannt und angenommen (Art %s)", nummer, art or "code")
         self.sprecher.sprich(satz, art="auftrag")
-        return bereinigt, True, True
+        return bereinigt, True, True, nummer
 
     @slot_geschuetzt
     def _absenden(self, vorspann: str = "", *, art: str | None = None,
                   inhalt: str | None = None, block_angesagt: bool = False,
-                  bruecke_nummer: int | None = None) -> None:
+                  bruecke_nummer: int | None = None,
+                  block_nummer: int | None = None) -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
@@ -2346,7 +2481,8 @@ class Werkbank(QMainWindow):
         if art is None:
             roh = self.eingabe.toPlainText()
             art, text = markierung_erkennen(roh)
-            text, weiter, block_angesagt = self._block_verarbeiten(art, text, self.bilder)
+            text, weiter, block_angesagt, block_nummer = self._block_verarbeiten(
+                art, text, self.bilder)
             if not weiter:
                 self.eingabe.clear()
                 return
@@ -2417,11 +2553,13 @@ class Werkbank(QMainWindow):
         self.bilder.clear()
         self.eingabe.clear()
 
-        if self._auftrag_laeuft:
-            # Es laeuft schon einer. Der neue geht nicht verloren und blockiert
+        if self._auftrag_laeuft or self._kontingent_info is not None:
+            # Es laeuft schon einer - oder die Sitzung wartet gerade auf ein
+            # erschoepftes Kontingent (core/sitzung.py, auftrag(),
+            # "kontingent"). Der neue geht nicht verloren und blockiert
             # nichts, sondern reiht sich ein und laeuft los, sobald der
             # vorherige fertig ist.
-            self._warteschlange.append((text, bilder, bruecke_nummer))
+            self._warteschlange.append((text, bilder, bruecke_nummer, block_nummer))
             self._warteschlange_zeigen()
             satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
             if vorspann:
@@ -2441,11 +2579,12 @@ class Werkbank(QMainWindow):
             return
 
         self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt,
-                               bruecke_nummer=bruecke_nummer)
+                               bruecke_nummer=bruecke_nummer, block_nummer=block_nummer)
 
     def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
                           ansagen: bool = True, block_angesagt: bool = False,
-                          bruecke_nummer: int | None = None) -> None:
+                          bruecke_nummer: int | None = None,
+                          block_nummer: int | None = None) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
@@ -2459,9 +2598,12 @@ class Werkbank(QMainWindow):
 
         `bruecke_nummer` ist nur bei einem #CODE#-Auftrag aus der Bruecke
         gesetzt (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) - gemerkt, bis
-        `_fertig()` den Bericht dorthin hochlaedt."""
+        `_fertig()` den Bericht dorthin hochlaedt. `block_nummer` ist die
+        Blocknummer (core/bloecke.py, "Block N", None ohne Nummer) - gemerkt,
+        bis `_fertig()` sie in den Bericht schreibt."""
         self._auftrag_laeuft = True
         self._bruecke_code_nummer = bruecke_nummer
+        self._aktueller_block_nummer = block_nummer
         # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
         # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
         # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
@@ -2471,6 +2613,7 @@ class Werkbank(QMainWindow):
         self._ausgabe_leeren("Auftrag an Claude Code")
         self._verlauf_anhaengen(text, "auftrag")
         self.letzter_auftrag = text
+        self._aktuelle_bilder = list(bilder)
         self.letzter_verbrauch = {}
         # Die Statuszeile zeigt keine laufende Arbeit an, nur Ergebnisse.
         self._status_zeigen("")
@@ -2517,7 +2660,7 @@ class Werkbank(QMainWindow):
         self._warteschlange_zeigen()
         if not self._warteschlange:
             return
-        text, bilder, bruecke_nummer = self._warteschlange.pop(0)
+        text, bilder, bruecke_nummer, block_nummer = self._warteschlange.pop(0)
         self._warteschlange_zeigen()
         log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
         rest = len(self._warteschlange)
@@ -2527,7 +2670,8 @@ class Werkbank(QMainWindow):
         # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
         # nicht abgeschnitten werden.
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
-        self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer)
+        self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer,
+                               block_nummer=block_nummer)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
@@ -2696,11 +2840,16 @@ class Werkbank(QMainWindow):
         verworfen = len(self._warteschlange)
         self._warteschlange.clear()
         self._warteschlange_zeigen()
+        kontingent_verworfen = self._kontingent_info is not None
+        self._kontingent_uhr.stop()
+        self._kontingent_info = None
         satz = "Not-Aus."
         if verworfen == 1:
             satz += " Ein wartender Auftrag verworfen."
         elif verworfen > 1:
             satz += f" {verworfen} wartende Aufträge verworfen."
+        if kontingent_verworfen:
+            satz += " Kontingent-Pause beendet, wartender Auftrag verworfen."
         werte = einstellungen_lesen()
         if bool(werte.get("bruecke_aktiv", False)):
             werte["bruecke_aktiv"] = False

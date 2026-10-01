@@ -59,6 +59,7 @@ QToolTip {
 #balken[zustand="fuehrt_aus"]  { background-color: #ff8a1f; }  /* Orange      */
 #balken[zustand="netz"]        { background-color: #00d0ff; }  /* Cyan        */
 #balken[zustand="wartet"]      { background-color: #ff4fd8; }  /* Magenta     */
+#balken[zustand="wartet_kontingent"] { background-color: #5566ff; }  /* Indigo - Kontingent erschoepft */
 #balken[zustand="fertig"]      { background-color: #ffffff; }  /* Weiss       */
 #balken[zustand="abgebrochen"] { background-color: #8892a4; }  /* Grau        */
 #balken[zustand="fehler"]      { background-color: #ff2d2d; }  /* Rot         */
@@ -160,10 +161,10 @@ QToolTip {
     border-radius: 6px;
 }
 
-/* "Suche gespart" (Block C10): eine ruhige Kennzahl zwischen Freigaben- und
+/* "Such-Effizienz" (Block C10): eine ruhige Kennzahl zwischen Freigaben- und
    Tokenzaehler, kein Warnsignal wie die Warteanzeige - deshalb gedeckte
    Farbe statt Warnton, ohne eigenen Rahmen wie die Freigabenanzeige. */
-#suchersparnis {
+#such_effizienz {
     color: #8fa8c8;
     font-size: 13pt;
 }
