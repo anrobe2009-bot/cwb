@@ -6,7 +6,9 @@ Eine einzige Zeile ueber dem Ausgabefeld traegt alles, was zum Stand der
 Arbeit gehoert: das Zeichen fuer aktive Rueckfrage-Ausnahmen (Internet,
 Loeschen im Projekt, Installieren), die Zahl der aktiven Freigaben
 (Einstellungen, Reiter Freigaben), die Warteanzeige mit der Zahl der
-vorgemerkten Auftraege (leer, solange keiner wartet), die drei Tokenzaehler
+vorgemerkten Auftraege (leer, solange keiner wartet), die Eingangsanzeige mit
+der Zahl der Auftragsdateien im Eingangsordner, die auf ein anderes Projekt
+warten (Block 63, ebenfalls leer im Regelfall), die drei Tokenzaehler
 und, ganz rechts, die kleine Schaltflaeche zum Kopieren. Die Zaehler stehen
 unmittelbar nebeneinander in der Reihenfolge "Auftrag", "Sitzung", "Heute" -
 gleiche Breite, gleiche Gestalt, ohne Zwischenraum. Ein eigenes Feld fuer die
@@ -122,6 +124,15 @@ SUCH_EFFIZIENZ_KURZ_BEISPIELE = ("–", "999 %")
 # Warteanzeige kurz: nur die Zahl, ohne das Wort "Warten".
 WARTE_KURZ_BEISPIELE = ("99",)
 
+# Eingangsanzeige (Block 63): wie viele Auftragsdateien im Eingangsordner auf
+# ein ANDERES, nicht offenes Projekt warten (core/eingangsordner.py,
+# fremde_projekte) - leer, solange keine solche Datei da liegt. Nur die
+# Gesamtzahl ist fest breit messbar (die Liste der Projektnamen waere
+# beliebig lang und wuerde wieder eine Mindestbreite erzwingen wie vor
+# Block 49); die Aufschluesselung je Projekt steht im Kurzhinweis/Vorlesetext.
+EINGANG_BEISPIELE = ("Eingang 99",)
+EINGANG_KURZ_BEISPIELE = ("99",)
+
 # Beispieltexte fuer die festen Breiten der Zahlenfelder rechts. Alle drei
 # Zaehler werden an allen drei Texten gemessen und bekommen dieselbe Breite,
 # damit sie als gleich grosse Reihe nebeneinander stehen.
@@ -232,6 +243,7 @@ class Ausgabekopf(QWidget):
         self._bruecke_an = False
         self._such_prozent: int | None = None
         self._warte_anzahl = 0
+        self._eingang_fremde: dict = {}
         self._verbrauch: dict = {}
         self._heute = 0
         # Je Feld die bei masse_festlegen gemessene (Breite lang, Breite
@@ -306,6 +318,17 @@ class Ausgabekopf(QWidget):
         # Zaehlerreihe stehen bleiben.
         self.warteanzeige.setVisible(False)
         quer.addWidget(self.warteanzeige)
+
+        # Eingangsanzeige (Block 63): Zahl der Auftragsdateien im
+        # Eingangsordner, die auf ein anderes, nicht offenes Projekt warten.
+        # Leer und verborgen, solange keine da liegt - der Normalfall.
+        self.eingangsanzeige = Schrumpffeld("")
+        self.eingangsanzeige.setObjectName("eingangsanzeige")
+        self.eingangsanzeige.setAccessibleName("Aufträge für andere Projekte")
+        self.eingangsanzeige.setAlignment(Qt.AlignCenter)
+        self.eingangsanzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.eingangsanzeige.setVisible(False)
+        quer.addWidget(self.eingangsanzeige)
 
         # Der freie Platz liegt in der Mitte: dadurch stehen Hinweis, Freigaben
         # und Warteanzeige links, Zaehler und Kopieren-Knopf rechts, ohne dass
@@ -388,6 +411,8 @@ class Ausgabekopf(QWidget):
                  SUCH_EFFIZIENZ_BEISPIELE, SUCH_EFFIZIENZ_KURZ_BEISPIELE),
                 ("warteanzeige", self.warteanzeige,
                  WARTE_BEISPIELE, WARTE_KURZ_BEISPIELE),
+                ("eingangsanzeige", self.eingangsanzeige,
+                 EINGANG_BEISPIELE, EINGANG_KURZ_BEISPIELE),
                 ("tokenzaehler", self.tokenzaehler,
                  ZAEHLER_BEISPIELE, ZAEHLER_KURZ_BEISPIELE),
                 ("sitzungszaehler", self.sitzungszaehler,
@@ -442,6 +467,7 @@ class Ausgabekopf(QWidget):
         self._bruecke_zeichnen()
         self._such_effizienz_zeichnen()
         self._warteschlange_zeichnen()
+        self._eingang_fremde_zeichnen()
         self._verbrauch_zeichnen()
         self._tag_zeichnen()
 
@@ -483,6 +509,35 @@ class Ausgabekopf(QWidget):
             self.warteanzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Warteanzeige nicht gesetzt: %s", fehler)
+
+    # -- Eingangsordner, fremde Projekte (Block 63) --------------------------
+
+    def eingang_fremde_zeigen(self, projekte: dict) -> None:
+        """Zeigt, wie viele Auftragsdateien im Eingangsordner auf ein anderes,
+        nicht offenes Projekt warten (core/eingangsordner.py,
+        fremde_projekte). `projekte` ist ein dict Projektname -> Anzahl; leer
+        heisst keine. Nur die Gesamtzahl steht im Feld selbst (feste Breite,
+        siehe EINGANG_BEISPIELE), die Aufschluesselung je Projekt im
+        Kurzhinweis und Vorlesetext."""
+        self._eingang_fremde = dict(projekte)
+        self._eingang_fremde_zeichnen()
+
+    def _eingang_fremde_zeichnen(self) -> None:
+        try:
+            projekte = self._eingang_fremde
+            gesamt = sum(projekte.values())
+            text = str(gesamt) if self._schmal else f"Eingang {gesamt}"
+            self.eingangsanzeige.setText(text if gesamt else "")
+            self.eingangsanzeige.setVisible(gesamt > 0)
+            if not projekte:
+                satz = "Keine Aufträge für andere Projekte im Eingang."
+            else:
+                aufzaehlung = ", ".join(f"{name} ({anzahl})" for name, anzahl in projekte.items())
+                satz = f"Aufträge für andere Projekte im Eingang: {aufzaehlung}."
+            self.eingangsanzeige.setToolTip(satz)
+            self.eingangsanzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Eingangsanzeige nicht gesetzt: %s", fehler)
 
     # -- Statusmeldung ------------------------------------------------------
 

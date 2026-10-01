@@ -13,6 +13,7 @@ Aufruf: python -m unittest core.test_eingangsordner -v
 """
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -307,6 +308,91 @@ class WartendeDateienTest(EingangsordnerTestBasis):
 
     def test_leerer_ordner_ergibt_leere_liste(self):
         self.assertEqual(eingangsordner.wartende_dateien(), [])
+
+
+class FremdeProjekteTest(EingangsordnerTestBasis):
+    """core/eingangsordner.py: fremde_projekte() - Grundlage fuer den
+    Kopfzeilen- und Ansage-Hinweis in core/fenster.py (Block 63)."""
+
+    def test_ohne_dateien_ist_leer(self):
+        self.assertEqual(eingangsordner.fremde_projekte("max-friends"), {})
+
+    def test_eigenes_projekt_zaehlt_nicht_mit(self):
+        self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "CWB", "text": "x"})
+        self.assertEqual(eingangsordner.fremde_projekte("CWB"), {})
+
+    def test_datei_ohne_projektfeld_zaehlt_nicht_mit(self):
+        self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
+        self.assertEqual(eingangsordner.fremde_projekte("CWB"), {})
+
+    def test_fremde_dateien_werden_je_projekt_gezaehlt(self):
+        self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
+        self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
+        self._datei_anlegen("c.json", {"quelle": "bruecke", "projekt": "hausgemacht", "text": "x"})
+        ergebnis = eingangsordner.fremde_projekte("max-friends")
+        self.assertEqual(ergebnis, {"CWB": 2, "hausgemacht": 1})
+
+    def test_gross_klein_schreibung_zaehlt_zusammen(self):
+        self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
+        self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "cwb", "text": "x"})
+        ergebnis = eingangsordner.fremde_projekte("max-friends")
+        self.assertEqual(ergebnis, {"CWB": 2})
+
+
+class GemischteWarteschlangeTest(EingangsordnerTestBasis):
+    """Block 63: Bildet den Blick des Eingangswaechters nach (core/
+    eingangsordner.py, Eingangswaechter._nachsehen) - fuer jede wartende
+    Datei, aelteste zuerst, wird ohne passendes Projekt uebersprungen, sonst
+    verarbeitet. Reproduziert den gemeldeten Fehler: drei Auftraege fuer
+    Projekt CWB vor einem fuer max-friends, geoeffnet ist max-friends."""
+
+    def _blick(self, projekt_name: str, ausfuehren) -> None:
+        for pfad in eingangsordner.wartende_dateien():
+            if not eingangsordner.passend_fuer_projekt(pfad, projekt_name):
+                continue
+            eingangsordner.verarbeiten(pfad, markierung_erkennen, ausfuehren)
+
+    def test_passender_auftrag_laeuft_trotz_aelterer_fremder_auftraege(self):
+        namen = ["a.json", "b.json", "c.json", "d.json"]
+        projekte = ["CWB", "CWB", "CWB", "max-friends"]
+        for index, (name, projekt) in enumerate(zip(namen, projekte)):
+            pfad = self._datei_anlegen(
+                name, {"quelle": "bruecke", "projekt": projekt, "text": f"#CODE#\nAuftrag {name}"}
+            )
+            os.utime(pfad, (1000 + index, 1000 + index))
+
+        empfangen = []
+        self._blick("max-friends", lambda auftrag: empfangen.append(auftrag.datei.name))
+
+        # Nur der passende (juengste) Auftrag lief - die drei fuer CWB
+        # blockieren ihn nicht und bleiben unangetastet liegen.
+        self.assertEqual(empfangen, ["d.json"])
+        verbliebene = {p.name for p in eingangsordner.wartende_dateien()}
+        self.assertEqual(verbliebene, {"a.json", "b.json", "c.json"})
+        # Keine der drei wurde je beansprucht (ausgefuehrt, verschoben o. ae.) -
+        # einzig der gelaufene Auftrag (d.json) landet in erledigt/.
+        self.assertFalse(list(eingangsordner.in_bearbeitung_ordner().glob("*.json")))
+        erledigt = {p.name for p in eingangsordner.erledigt_ordner().glob("*.json")}
+        self.assertEqual(erledigt, {"d.json"})
+
+    def test_urspruengliche_reihenfolge_bleibt_beim_naechsten_blick_erhalten(self):
+        for index, name in enumerate(["a.json", "b.json"]):
+            pfad = self._datei_anlegen(
+                name, {"quelle": "bruecke", "projekt": "CWB", "text": f"#CODE#\n{name}"}
+            )
+            os.utime(pfad, (1000 + index, 1000 + index))
+
+        # Oeffnet zunaechst ein fremdes Projekt: nichts laeuft, nichts wird
+        # beansprucht - die Reihenfolge der beiden wartenden Dateien bleibt.
+        self._blick("max-friends", lambda auftrag: None)
+        self.assertEqual(
+            [p.name for p in eingangsordner.wartende_dateien()], ["a.json", "b.json"]
+        )
+
+        # Erst wenn CWB offen ist, laufen beide, aelteste zuerst.
+        empfangen = []
+        self._blick("CWB", lambda auftrag: empfangen.append(auftrag.datei.name))
+        self.assertEqual(empfangen, ["a.json", "b.json"])
 
 
 if __name__ == "__main__":

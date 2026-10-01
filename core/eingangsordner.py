@@ -193,6 +193,28 @@ def passend_fuer_projekt(pfad: Path, projekt_name: str) -> bool:
     return not ziel or ziel.lower() == projekt_name.strip().lower()
 
 
+def fremde_projekte(projekt_name: str) -> dict[str, int]:
+    """Zaehlt die wartenden Auftragsdateien, deren Feld "projekt" gesetzt ist
+    und nicht zu `projekt_name` passt - je genanntem Projekt eine Anzahl, in
+    der Reihenfolge ihres ersten Auftretens unter den wartenden Dateien.
+    Dateien ohne Feld "projekt" zaehlen nicht mit: sie passen zu jedem
+    offenen Fenster (siehe `passend_fuer_projekt`) und warten nicht auf ein
+    bestimmtes Projekt. Block 63: Grundlage fuer den Hinweis "Es warten
+    Aufträge für Projekt X" und die Kopfzeilen-Anzeige in core/fenster.py."""
+    ergebnis: dict[str, int] = {}
+    for pfad in wartende_dateien():
+        try:
+            daten = _daten_lesen(pfad)
+        except (OSError, ValueError, EingangsFehler):
+            continue
+        ziel = str(daten.get("projekt", "")).strip()
+        if not ziel or ziel.lower() == projekt_name.strip().lower():
+            continue
+        schluessel = next((k for k in ergebnis if k.lower() == ziel.lower()), ziel)
+        ergebnis[schluessel] = ergebnis.get(schluessel, 0) + 1
+    return ergebnis
+
+
 def wartende_dateien() -> list[Path]:
     """Alle *.json direkt im Eingangsordner, älteste zuerst - so holt ein
     nachts liegen gebliebener Stapel seine Reihenfolge nicht durcheinander."""
@@ -292,14 +314,19 @@ class Eingangswaechter(QObject):
     liefert den Namen des in diesem Fenster offenen Projekts (für
     `passend_fuer_projekt`), `ausfuehren` bekommt den fertigen
     `EingangsAuftrag` - wie beim Zwischenablage-Wächter liegt die
-    Dublettenprüfung beim Aufrufer."""
+    Dublettenprüfung beim Aufrufer. `fremde_melden` (Block 63, optional) wird
+    nach jedem Blick mit `fremde_projekte(projekt_name)` aufgerufen - auch mit
+    einem leeren dict, damit der Aufrufer eine verschwundene Wartestellung
+    ebenso bemerkt wie eine neue."""
 
-    def __init__(self, markierung_erkennen, aktiv, projekt_name, ausfuehren, eltern=None):
+    def __init__(self, markierung_erkennen, aktiv, projekt_name, ausfuehren, eltern=None,
+                 fremde_melden=None):
         super().__init__(eltern)
         self._markierung_erkennen = markierung_erkennen
         self._aktiv = aktiv
         self._projekt_name = projekt_name
         self._ausfuehren = ausfuehren
+        self._fremde_melden = fremde_melden
         self._beobachter = QFileSystemWatcher(self)
         self._beobachter.directoryChanged.connect(self._nachsehen)
         self._uhr = QTimer(self)
@@ -346,3 +373,9 @@ class Eingangswaechter(QObject):
             if not passend_fuer_projekt(pfad, projekt_name):
                 continue
             verarbeiten(pfad, self._markierung_erkennen, self._ausfuehren)
+
+        if self._fremde_melden is not None:
+            try:
+                self._fremde_melden(fremde_projekte(projekt_name))
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)

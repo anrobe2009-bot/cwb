@@ -1,16 +1,16 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 10:02.
+Automatisch erzeugt am 01.10.2026 17:32.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 3134 |  |
+| core\fenster.py | 3215 |  |
 | core\einstellungen.py | 1747 |  |
-| core\sitzung.py | 1652 |  |
+| core\sitzung.py | 1722 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
 | core\sprache.py | 853 |  |
-| core\kopfzeile.py | 557 |  |
+| core\kopfzeile.py | 750 |  |
 | core\grundlagen.py | 521 |  |
 | core\zielfenster.py | 517 |  |
 | memory_hub\memory_db.py | 506 | Memory Hub - Kernmodul. |
@@ -20,8 +20,8 @@ Automatisch erzeugt am 01.10.2026 10:02.
 | memory_hub\aufraeumen.py | 421 | Memory Hub - Aufraeummodus. |
 | core\terminal.py | 414 |  |
 | core\android_screenshot.py | 384 |  |
+| core\eingangsordner.py | 381 |  |
 | core\landkarte.py | 351 |  |
-| core\eingangsordner.py | 348 |  |
 | core\tastenleiste.py | 343 |  |
 | core\bruecke.py | 329 |  |
 | core\zuordnung.py | 301 |  |

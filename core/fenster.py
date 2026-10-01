@@ -778,12 +778,20 @@ class Werkbank(QMainWindow):
         # ueber die Zwischenablage hereinkommen - Zeitschaltung, von Hand,
         # spaeter die Bruecke zu claude.ai im Browser. Laeuft bei gesperrter
         # Sitzung genauso weiter wie der Arbeitsfaden selbst.
+        # Block 63: Namen der fremden Projekte, fuer die zuletzt angesagt
+        # wurde, dass Auftraege im Eingang warten - verhindert, dass dieselbe
+        # Ansage bei jedem Blick des Waechters (alle paar Sekunden) wiederholt
+        # wird. Nur bei Stillstand aktualisiert (siehe _eingang_fremde_melden);
+        # laeuft gerade ein Auftrag, bleibt der alte Stand stehen, damit die
+        # Ansage nachgeholt wird, sobald wieder Ruhe ist.
+        self._eingang_fremde_angesagt: frozenset = frozenset()
         self.eingang_waechter = Eingangswaechter(
             markierung_erkennen,
             lambda: True,
             lambda: self.projekt.name,
             self._eingang_auftrag,
             self,
+            fremde_melden=self._eingang_fremde_melden,
         )
         self.eingang_waechter.starten()
 
@@ -2266,7 +2274,38 @@ class Werkbank(QMainWindow):
             return
         self._absenden(vorspann=f"Auftrag aus dem Eingangsordner ({auftrag.quelle}).",
                         art=art, inhalt=inhalt, block_angesagt=block_angesagt,
-                        bruecke_nummer=bruecke_nummer, block_nummer=block_nummer)
+                        bruecke_nummer=bruecke_nummer, block_nummer=block_nummer,
+                        projekt_vorgegeben=auftrag.projekt)
+
+    def _eingang_fremde_melden(self, projekte: dict) -> None:
+        """Rueckruf des Eingangswaechters (core/eingangsordner.py, Block 63):
+        `projekte` ist Projektname -> Anzahl der wartenden Auftragsdateien,
+        die nicht zum hier offenen Projekt passen. Die Kopfzeilenanzeige wird
+        bei jedem Blick aktualisiert; gesprochen wird nur einmal je neuer
+        Wartestellung und nur, solange gerade kein eigener Auftrag laeuft -
+        sonst wuerde die Ansage mitten in eine laufende Antwort platzen."""
+        if not hasattr(self, "ausgabekopf"):
+            # Eingangswaechter.starten() blickt sofort einmal nach (siehe
+            # core/eingangsordner.py) - zu diesem Zeitpunkt in _aufbauen()
+            # existiert die Kopfzeile noch nicht. Der naechste Blick
+            # (PRUEF_ABSTAND_MS) holt die Anzeige nach.
+            return
+        try:
+            self.ausgabekopf.eingang_fremde_zeigen(projekte)
+            namen = frozenset(projekte.keys())
+            if not namen:
+                self._eingang_fremde_angesagt = frozenset()
+                return
+            if namen == self._eingang_fremde_angesagt or self._auftrag_laeuft:
+                return
+            self._eingang_fremde_angesagt = namen
+            geordnet = sorted(namen)
+            ziel = geordnet[0] if len(geordnet) == 1 else \
+                ", ".join(geordnet[:-1]) + " und " + geordnet[-1]
+            self.sprecher.sprich(f"Es warten Aufträge für Projekt {ziel}.",
+                                  unterbrechen=False, art="hinweis")
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)
 
     # -- Bruecke (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) ----------------
 
@@ -2479,13 +2518,24 @@ class Werkbank(QMainWindow):
     def _absenden(self, vorspann: str = "", *, art: str | None = None,
                   inhalt: str | None = None, block_angesagt: bool = False,
                   bruecke_nummer: int | None = None,
-                  block_nummer: int | None = None) -> None:
+                  block_nummer: int | None = None,
+                  projekt_vorgegeben: str = "") -> None:
         """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
         schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
         Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
         eine zweite Ansage kurz danach auszuloesen. Leer heisst: normaler
         Weg, die Ansage entsteht ganz in dieser Methode und in
         `_auftrag_starten`.
+
+        `projekt_vorgegeben` kommt vom Eingangsordner (core/eingangsordner.py,
+        `EingangsAuftrag.projekt`) - gesetzt, wenn die Datei ein Feld
+        "projekt" trug und darueber schon VOR dem Beanspruchen gegen
+        `passend_fuer_projekt()` geprueft wurde, also nur bei einem Fenster
+        mit passendem offenem Projekt ankommt. Dann gilt diese Zuordnung ohne
+        erneute Pruefung (Block 63): die Wort- und Dateiregel aus
+        core/zuordnung.py wuerde sonst faelschlich auf eine "Projekt: X"-Zeile
+        im Auftragstext selbst anspringen und ihn vormerken statt ausfuehren,
+        obwohl die Zuordnung laengst feststeht.
 
         `art`/`inhalt` kommen vom Wächter und von F7 schon fertig zerlegt
         herein - beide haben die Dublettensperre (`_dublette_abgewiesen`)
@@ -2544,9 +2594,14 @@ class Werkbank(QMainWindow):
             # es hier nicht gibt, wohl aber in einem anderen Projekt - oder er
             # nennt den Namen eines anderen Projekts aus der Projektliste. In
             # beiden Faellen wird er vorgemerkt und dort ausgefuehrt, sobald
-            # das Projekt geoeffnet wird.
-            fremd = (fremdes_projekt_erkennen(text, self.projekt)
-                     or genanntes_projekt(text, self.projekt))
+            # das Projekt geoeffnet wird. Bei ausdruecklich vorgegebenem
+            # Projekt (siehe Docstring) entfaellt das - sonst koennte eine
+            # "Projekt: X"-Kopfzeile im eigenen Auftragstext ihn faelschlich
+            # als fremd einstufen, obwohl er genau hier hingehoert.
+            fremd = None if projekt_vorgegeben else (
+                fremdes_projekt_erkennen(text, self.projekt)
+                or genanntes_projekt(text, self.projekt)
+            )
             if fremd:
                 # Die Warnung haelt niemanden auf: sie merkt den Auftrag nur
                 # vor. F9 wechselt zum genannten Projekt, F5 fuehrt ihn hier
