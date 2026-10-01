@@ -143,3 +143,7 @@ Einstiegspunkt ist `fenster.main()`.
   durchsuchen, indem du sie einliest.
 - Nie lesen: `.stimmen/`, `.ablage/`, `.cwb/`, `__pycache__/`, `.git/`.
 - Jede Datei nur einmal pro Sitzung lesen.
+
+## Landkarte
+Vor jeder Suche im Code zuerst wissen/landkarte.md lesen: Sie sagt, welche Datei wofür zuständig ist. Neue Dateien dort mit einer Zeile eintragen.
+

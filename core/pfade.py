@@ -251,6 +251,15 @@ INDEX_ORDNER = CWB_WURZEL / "index"
 INDEX_DATEN = _datenordner.index_datenordner()
 
 
+# -- Eingangsordner -----------------------------------------------------------
+# Aufträge, die nicht über die Zwischenablage hereinkommen, sondern als Datei
+# abgelegt werden (Zeitschaltung, später die Brücke zu claude.ai im Browser -
+# siehe wissen/plan_bruecke.md). core/eingangsordner.py legt die drei
+# Unterordner selbst an.
+
+EINGANG_ORDNER = DATENORDNER / "eingang"
+
+
 # -- Zusatzprojekte ----------------------------------------------------------
 # Projekte ausserhalb der Projektwurzel: von Hand eingetragen im Reiter
 # "Projekte" der Einstellungen, mit frei waehlbarem Anzeigenamen. Sie stehen

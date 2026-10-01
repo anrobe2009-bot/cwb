@@ -73,6 +73,7 @@ try:
     from .android_screenshot import screenshot_ablegen
     from .bloecke import block_erkennen, block_zaehler_aktualisieren
     from .datenordner import erstuebernahme
+    from .eingangsordner import Eingangswaechter
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
     from .faden import SitzungsFaden
@@ -130,6 +131,7 @@ except ImportError:
     from android_screenshot import screenshot_ablegen
     from bloecke import block_erkennen, block_zaehler_aktualisieren
     from datenordner import erstuebernahme
+    from eingangsordner import Eingangswaechter
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
     from faden import SitzungsFaden
@@ -712,6 +714,20 @@ class Werkbank(QMainWindow):
             self,
         )
         self.ablage_waechter.starten()
+
+        # Eingangsordner (core/eingangsordner.py, Vorhaben "Bruecke", Stufe
+        # B1, siehe wissen/plan_bruecke.md): Auftraege, die als Datei statt
+        # ueber die Zwischenablage hereinkommen - Zeitschaltung, von Hand,
+        # spaeter die Bruecke zu claude.ai im Browser. Laeuft bei gesperrter
+        # Sitzung genauso weiter wie der Arbeitsfaden selbst.
+        self.eingang_waechter = Eingangswaechter(
+            markierung_erkennen,
+            lambda: True,
+            lambda: self.projekt.name,
+            self._eingang_auftrag,
+            self,
+        )
+        self.eingang_waechter.starten()
 
         # Systemweiter Hotkey auf die Pause-Taste (core/pausetaste.py): loest
         # denselben Screenshot-Ablauf wie #BILD# aus, egal welches Fenster
@@ -1940,6 +1956,39 @@ class Werkbank(QMainWindow):
         self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
                         block_angesagt=block_angesagt)
 
+    @slot_geschuetzt
+    def _eingang_auftrag(self, auftrag) -> None:
+        """Ein Auftrag aus dem Eingangsordner (core/eingangsordner.py,
+        Vorhaben "Bruecke" Stufe B1, siehe wissen/plan_bruecke.md) -
+        Zeitschaltung, von Hand ueber werkzeuge/in_eingang.ps1, spaeter die
+        Bruecke zu claude.ai im Browser. #ADMIN# ist schon in
+        core.eingangsordner.verarbeiten() ausgeschlossen, ausser die Quelle
+        ist "lokal" - diese Methode bekommt es nur noch dann zu sehen. Sonst
+        identisch zu `_ablage_auftrag`: gleiche Blocknummern-, Dubletten- und
+        Projektpruefung; nur `vorspann` nennt zusaetzlich die Quelle."""
+        art, inhalt = auftrag.art, auftrag.inhalt
+        log.info(
+            "Eingangsordner: Auftrag erhalten (Quelle %s, Projekt %r, Art %s, %d Zeichen)",
+            auftrag.quelle, auftrag.projekt, art or "ohne Markierung", len(inhalt),
+        )
+        inhalt, weiter, block_angesagt = self._block_verarbeiten(art, inhalt)
+        if not weiter:
+            return
+        if art == "bild":
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung()
+            return
+        if art in ("run", "admin"):
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._terminal_markierung(art, inhalt)
+            return
+        if self._dublette_abgewiesen(art, inhalt):
+            return
+        self._absenden(vorspann=f"Auftrag aus dem Eingangsordner ({auftrag.quelle}).",
+                        art=art, inhalt=inhalt, block_angesagt=block_angesagt)
+
     # -- Dublettensperre ------------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
     # der Zwischenablage, kurz genug, dass ein am naechsten Tag bewusst
@@ -2627,6 +2676,9 @@ class Werkbank(QMainWindow):
             waechter = getattr(self, "ablage_waechter", None)
             if waechter is not None:
                 waechter.anhalten()
+            eingang_waechter = getattr(self, "eingang_waechter", None)
+            if eingang_waechter is not None:
+                eingang_waechter.anhalten()
             pausetaste = getattr(self, "_pausetaste", None)
             if pausetaste is not None:
                 pausetaste.abmelden()
