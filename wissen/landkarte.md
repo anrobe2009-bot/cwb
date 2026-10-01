@@ -1,29 +1,30 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 01.10.2026 18:08.
+Automatisch erzeugt am 01.10.2026 18:26.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 3423 |  |
-| core\einstellungen.py | 1759 |  |
+| core\fenster.py | 3636 |  |
+| core\einstellungen.py | 1853 |  |
 | core\sitzung.py | 1722 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
 | core\sprache.py | 853 |  |
-| core\kopfzeile.py | 795 |  |
+| core\kopfzeile.py | 834 |  |
 | core\eingangsordner.py | 541 |  |
 | core\grundlagen.py | 521 |  |
 | core\zielfenster.py | 517 |  |
 | memory_hub\memory_db.py | 506 | Memory Hub - Kernmodul. |
+| core\pfade.py | 466 |  |
 | core\datenordner.py | 462 |  |
 | index\indexer.py | 460 |  |
-| core\pfade.py | 453 |  |
+| core\leitstand.py | 451 |  |
 | memory_hub\aufraeumen.py | 421 | Memory Hub - Aufraeummodus. |
 | core\terminal.py | 414 |  |
 | core\android_screenshot.py | 384 |  |
+| core\bruecke.py | 378 |  |
 | core\landkarte.py | 351 |  |
 | core\tastenleiste.py | 343 |  |
-| core\bruecke.py | 329 |  |
 | core\zuordnung.py | 301 |  |
 | memory_hub\memory_mcp.py | 296 | Memory Hub - MCP-Server. |
 | core\zeigeransage.py | 259 |  |
@@ -33,7 +34,7 @@ Automatisch erzeugt am 01.10.2026 18:08.
 | core\projektwahl.py | 166 |  |
 | core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
-| core\bloecke.py | 120 |  |
+| core\bloecke.py | 137 |  |
 | core\pausetaste.py | 84 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |
 | memory_hub\sdk_werkzeuge.py | 73 |  |

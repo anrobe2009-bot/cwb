@@ -42,7 +42,7 @@ LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
 # Einzige Stelle, an der die Versionsnummer steht - Fenstertitel, Einstellungen,
 # Hilfe (F1) und der Start-Logeintrag lesen sie von hier. Wie sie kuenftig
 # steigt, steht in CLAUDE.md unter "Versionsnummer".
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Das Log waechst sonst unbegrenzt. Ist die Datei voll, wandert sie nach
 # cwb_fehler.log.1, die aelteren rutschen nach; alles jenseits der dritten
@@ -276,6 +276,19 @@ EINGANG_ORDNER = DATENORDNER / "eingang"
 # enthaelt und nie in Git landen darf; core/bruecke.py loggt ihren Inhalt nie.
 
 BRUECKE_ZUGANG_DATEI = DATENORDNER / "bruecke_zugang.txt"
+
+
+# -- Leitstand -----------------------------------------------------------------
+# Block 72 (siehe wissen/plan_leitstand.md, core/leitstand.py): nachts oder wenn
+# Robert nicht da ist, uebernimmt Gemini die Rolle der KI im Chat, die nicht
+# selbststaendig auf Berichte reagieren darf. Der Schluessel liegt wie beim
+# PC-Token der Bruecke im Datenordner, nie in Git, nie geloggt. Der
+# Zustand (Zaehler der Nacht, Wiederholungen je Schritt, Haltepunkte) liegt
+# in einer eigenen Datei statt in einstellungen.json, weil es Laufzeitstand
+# ist, keine Einstellung.
+
+LEITSTAND_ZUGANG_DATEI = DATENORDNER / "leitstand_zugang.txt"
+LEITSTAND_ZUSTAND_DATEI = DATENORDNER / "leitstand_zustand.json"
 
 
 # -- Zusatzprojekte ----------------------------------------------------------

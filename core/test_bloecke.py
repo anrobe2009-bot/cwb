@@ -135,5 +135,48 @@ class BlockZaehlerTest(unittest.TestCase):
         self.assertEqual(satz, "")
 
 
+class NaechsteBlockNummerTest(unittest.TestCase):
+    """Block 72 (core/leitstand.py): die Nummer, die ein selbst erzeugter
+    Block heute tragen sollte, ohne den Zaehler zu veraendern."""
+
+    def setUp(self):
+        self._speicher: dict = {}
+
+        def lesen():
+            return copy.deepcopy(self._speicher)
+
+        def schreiben(werte):
+            self._speicher = copy.deepcopy(werte)
+
+        self._patches = [
+            mock.patch.object(bloecke, "einstellungen_lesen", lesen),
+            mock.patch.object(bloecke, "einstellungen_schreiben", schreiben),
+        ]
+        for patch in self._patches:
+            patch.start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_ohne_vorherigen_block_ist_eins(self):
+        self.assertEqual(bloecke.naechste_block_nummer("CWB"), 1)
+
+    def test_naechste_nach_bestehendem_zaehler(self):
+        bloecke.block_zaehler_aktualisieren("CWB", 10)
+        self.assertEqual(bloecke.naechste_block_nummer("CWB"), 11)
+
+    def test_veraendert_den_zaehler_nicht(self):
+        bloecke.block_zaehler_aktualisieren("CWB", 10)
+        bloecke.naechste_block_nummer("CWB")
+        bloecke.naechste_block_nummer("CWB")
+        self.assertEqual(bloecke.naechste_block_nummer("CWB"), 11)
+
+    def test_anderer_kalendertag_beginnt_bei_eins(self):
+        self._speicher = {
+            bloecke.BLOCK_ZAEHLER_SCHLUESSEL: {
+                "CWB": {"datum": "2000-01-01", "letzte": 5},
+            }
+        }
+        self.assertEqual(bloecke.naechste_block_nummer("CWB"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,23 @@ def block_erkennen(art: str, inhalt: str) -> tuple[int | None, str, bool]:
     return nummer, "\n".join(bereinigt).strip("\n"), True
 
 
+def naechste_block_nummer(projekt: str) -> int:
+    """Die Nummer, die ein selbst erzeugter Block (core/leitstand.py, Block 72)
+    heute fuer `projekt` tragen sollte, ohne den Zaehler zu veraendern - das
+    tut erst `block_zaehler_aktualisieren`, wenn der Block tatsaechlich bei
+    `core.fenster._block_verarbeiten` ankommt. Ohne gemerkten Eintrag von
+    heute: 1."""
+    try:
+        werte = einstellungen_lesen()
+        alle = werte.get(BLOCK_ZAEHLER_SCHLUESSEL)
+        eintrag = alle.get(projekt) if isinstance(alle, dict) else None
+        if isinstance(eintrag, dict) and eintrag.get("datum") == date.today().isoformat():
+            return int(eintrag.get("letzte", 0)) + 1
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Naechste Blocknummer nicht ermittelbar (Projekt %s): %s", projekt, fehler)
+    return 1
+
+
 def block_zaehler_aktualisieren(projekt: str, nummer: int) -> str:
     """Merkt `nummer` als zuletzt angenommenen Block fuer `projekt` am
     heutigen Kalendertag in einstellungen.json und gibt den

@@ -171,6 +171,19 @@ def bericht_hochladen(zugang: Zugangsdaten, auftrag_nummer, text: str) -> None:
              json={"auftrag_nummer": auftrag_nummer, "text": text})
 
 
+def nachtbericht_hochladen(zugang: Zugangsdaten, projekt: str, text: str) -> None:
+    """POST .../nachtbericht mit {projekt, text} - fuer Leitstand (Block 72,
+    core/leitstand.py, wissen/plan_leitstand.md), wenn er anhaelt und
+    wissen/nachtbericht.md geschrieben hat, damit die KI im Chat ihn morgens
+    holen kann, ohne CWB dafuer erst zu oeffnen. Anders als
+    `bericht_hochladen` haengt dieser Bericht an keinem Brücken-Auftrag,
+    darum ein eigener Endpunkt. Der Connector-Dienst (Projekt max-friends)
+    muss ihn dafuer kennen - wirft BrueckenFehler wie jede andere Anfrage,
+    wenn er es (noch) nicht tut; der Aufrufer behandelt das als
+    best-effort und loggt nur."""
+    _anfrage("POST", "/nachtbericht", zugang, json={"projekt": projekt, "text": text})
+
+
 def quittieren(zugang: Zugangsdaten, auftrag_nummer) -> None:
     """POST .../quittung mit {auftrag_nummer}. Erst danach gilt ein Auftrag
     beim Server endgueltig als abgeholt (server.py, cwb_quittung) - ohne
@@ -292,6 +305,42 @@ class BrueckenFaden(QThread):
                       "%d s erneut aus", nummer, QUITTUNG_SCHWELLE_SEKUNDEN)
             return
         log.info("Brücke: Auftrag quittiert (Nummer %s)", nummer)
+
+
+class NachtberichtFaden(QThread):
+    """Laedt einen Nachtbericht hoch (core/leitstand.py, Block 72,
+    wissen/plan_leitstand.md) - eigener Thread wie BerichtFaden, ein
+    Netzfehler beim Hochladen darf die Oberflaeche nie blockieren. Anders als
+    BerichtFaden haengt dieser Bericht an keinem Brücken-Auftrag, sondern am
+    Projektnamen (core.bruecke.nachtbericht_hochladen)."""
+
+    fertig_da = Signal(bool)
+
+    def __init__(self, projekt: str, text: str, eltern=None):
+        super().__init__(eltern)
+        self._projekt = projekt
+        self._text = text
+
+    def run(self) -> None:
+        zugang = zugangsdaten_lesen()
+        if zugang is None:
+            log.info("Nachtbericht nicht hochgeladen (Projekt %s): keine Zugangsdaten",
+                      self._projekt)
+            self.fertig_da.emit(False)
+            return
+        try:
+            nachtbericht_hochladen(zugang, self._projekt, self._text)
+        except BrueckenFehler:
+            log.info("Nachtbericht nicht hochgeladen (Projekt %s): Brücke nicht erreichbar",
+                      self._projekt)
+            self.fertig_da.emit(False)
+            return
+        except Exception:  # noqa: BLE001
+            log.exception("Nachtbericht nicht hochgeladen (Projekt %s)", self._projekt)
+            self.fertig_da.emit(False)
+            return
+        log.info("Nachtbericht hochgeladen (Projekt %s)", self._projekt)
+        self.fertig_da.emit(True)
 
 
 class BerichtFaden(QThread):

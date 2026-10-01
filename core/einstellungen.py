@@ -88,7 +88,9 @@ try:
         tagesverbrauch_lesen,
     )
     from .kopfzeile import zahl_lang
+    from . import leitstand
     from .pfade import (
+        LEITSTAND_ZUGANG_DATEI,
         VERSION,
         freigabe_entfernen,
         freigabe_hinzufuegen,
@@ -120,7 +122,9 @@ except ImportError:
         tagesverbrauch_lesen,
     )
     from kopfzeile import zahl_lang
+    import leitstand
     from pfade import (
+        LEITSTAND_ZUGANG_DATEI,
         VERSION,
         freigabe_entfernen,
         freigabe_hinzufuegen,
@@ -625,6 +629,7 @@ class EinstellungenFenster(QDialog):
             self._reiterseite(self._gruppe_verhalten(), self._gruppe_modell()),
             "Verhalten",
         )
+        self.reiter.addTab(self._reiterseite(self._gruppe_leitstand()), "Leitstand")
         self.reiter.addTab(self._reiterseite(self._gruppe_kacheln()), "Kacheln")
         self.reiter.addTab(self._reiterseite(self._gruppe_skills()), "Skills")
         self.reiter.addTab(self._reiterseite(self._gruppe_pfade()), "Pfade")
@@ -1087,6 +1092,95 @@ class EinstellungenFenster(QDialog):
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe
+
+    # -- Bereich Leitstand ----------------------------------------------------
+
+    def _gruppe_leitstand(self) -> Gruppe:
+        """Block 72 (siehe wissen/plan_leitstand.md, core/leitstand.py): nachts
+        oder wenn Robert nicht da ist, fragt Leitstand nach jedem
+        abgeschlossenen #CODE#-Auftrag eines Projekts mit wissen/nachtplan.md
+        Gemini um die naechste Entscheidung. Ab Werk aus."""
+        gruppe = Gruppe(
+            "Leitstand",
+            "Übernimmt nachts die Rolle der KI im Chat für Projekte mit "
+            "wissen/nachtplan.md. Chat und Claude Code bleiben unverändert im "
+            "Max-Abo; Leitstand fragt nur Gemini, ob und wie es weitergeht.",
+        )
+        werte = self._werte_lesen()
+
+        self.leitstand_aktiv = self._schalter(
+            gruppe,
+            "leitstand_aktiv",
+            "Leitstand",
+            "Fragt nach jedem abgeschlossenen #CODE#-Auftrag eines Projekts "
+            "mit wissen/nachtplan.md Gemini (gemini-3.5-flash-lite) um die "
+            "nächste Entscheidung und legt bei „weiter“ oder „wiederholen“ "
+            "selbst den nächsten #CODE#-Block ab. Ohne Schlüssel in "
+            f"{LEITSTAND_ZUGANG_DATEI.name} bleibt er wirkungslos. Auch über "
+            "die Kachel „Leitstand“ und Umschalt+F9 schaltbar; Not-Aus (F8) "
+            "schaltet Leitstand zusätzlich aus. Ab Werk aus.",
+            bool(werte.get("leitstand_aktiv", False)),
+        )
+
+        self.leitstand_max_auftraege = self._grenze_zahl(
+            gruppe,
+            "leitstand_max_auftraege",
+            "Aufträge pro Nacht",
+            "Höchstzahl der Aufträge, die Leitstand in einer Nacht selbst "
+            "auslöst, bevor er anhält.",
+            1, 50, "",
+            int(werte.get("leitstand_max_auftraege", leitstand.STANDARD_MAX_AUFTRAEGE_PRO_NACHT)),
+        )
+        self.leitstand_max_wiederholungen = self._grenze_zahl(
+            gruppe,
+            "leitstand_max_wiederholungen",
+            "Wiederholungen je Schritt",
+            "Wie oft Leitstand denselben Schritt des Nachtplans erneut "
+            "versuchen lässt, bevor er anhält.",
+            1, 10, "",
+            int(werte.get("leitstand_max_wiederholungen",
+                          leitstand.STANDARD_MAX_WIEDERHOLUNGEN_JE_SCHRITT)),
+        )
+        self.leitstand_zeitlimit = self._grenze_zahl(
+            gruppe,
+            "leitstand_zeitlimit_sekunden",
+            "Zeitlimit je Gemini-Aufruf",
+            "Wie lange Leitstand auf die Antwort von Gemini wartet, bevor er "
+            "den Aufruf als gescheitert wertet und anhält.",
+            5, 120, " s",
+            int(werte.get("leitstand_zeitlimit_sekunden", leitstand.STANDARD_ZEITLIMIT_SEKUNDEN)),
+        )
+
+        schluessel_hinweis = QLabel(
+            f"Gemini-Schlüssel: {'hinterlegt' if leitstand.api_schluessel_lesen() else 'fehlt'} "
+            f"({LEITSTAND_ZUGANG_DATEI}). Nur bei „fehlt“ eintragen, nie hier "
+            "anzeigen oder bearbeiten."
+        )
+        schluessel_hinweis.setObjectName("gruppenhinweis")
+        schluessel_hinweis.setWordWrap(True)
+        gruppe.feld(schluessel_hinweis)
+        return gruppe
+
+    def _grenze_zahl(self, gruppe: Gruppe, schluessel: str, titel: str, erklaerung: str,
+                      minimum: int, maximum: int, einheit: str, wert: int) -> QSpinBox:
+        feld = QSpinBox()
+        feld.setObjectName("grenzenzahl")
+        feld.setAccessibleName(titel)
+        feld.setAccessibleDescription(erklaerung)
+        feld.setToolTip(erklaerung)
+        feld.setRange(minimum, maximum)
+        if einheit:
+            feld.setSuffix(einheit)
+        feld.setValue(wert)
+        feld.valueChanged.connect(partial(self._grenze_geaendert, schluessel, titel))
+        gruppe.zeile(titel, feld)
+        return feld
+
+    def _grenze_geaendert(self, schluessel: str, titel: str, wert: int) -> None:
+        werte = self._werte_lesen()
+        werte[schluessel] = int(wert)
+        self._sichern(werte)
+        self.sprecher.sprich(f"{titel}: {wert}.")
 
     def _verbrauchsliste_anlegen(self, gruppe: Gruppe) -> None:
         """Zeigt den Tokenverbrauch der letzten dreissig Tage als einfache

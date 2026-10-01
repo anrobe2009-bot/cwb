@@ -72,14 +72,15 @@ from PySide6.QtWidgets import (
 try:
     from .ablagewaechter import Zwischenablagewaechter
     from .android_screenshot import screenshot_ablegen
-    from .bloecke import block_erkennen, block_zaehler_aktualisieren
-    from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden
+    from .bloecke import block_erkennen, block_zaehler_aktualisieren, naechste_block_nummer
+    from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from .datenordner import erstuebernahme
-    from .eingangsordner import AuftragSpaeter, Eingangswaechter, abschliessen, \
+    from .eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
         naechste_fremde_projekt_datei, projekt_gleichwertig, verwerfen, wieder_aufnehmen
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
     from .faden import SitzungsFaden
+    from . import leitstand
     from .grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
@@ -134,14 +135,15 @@ try:
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from android_screenshot import screenshot_ablegen
-    from bloecke import block_erkennen, block_zaehler_aktualisieren
-    from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden
+    from bloecke import block_erkennen, block_zaehler_aktualisieren, naechste_block_nummer
+    from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from datenordner import erstuebernahme
-    from eingangsordner import AuftragSpaeter, Eingangswaechter, abschliessen, \
+    from eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
         naechste_fremde_projekt_datei, projekt_gleichwertig, verwerfen, wieder_aufnehmen
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
     from faden import SitzungsFaden
+    import leitstand
     from grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
@@ -229,6 +231,15 @@ BRUECKE_SYMBOL_AUS = "🌉"
 BRUECKE_SYMBOL_AN = "🛰"
 BRUECKE_FARBE_AUS = "1"
 BRUECKE_FARBE_AN = "4"
+
+# Kachel fuer den Schalter "Leitstand" (Block 72, siehe
+# wissen/plan_leitstand.md). Die Aufschrift beim Aufbau dient zugleich als
+# Kennung zum Wiederfinden, genau wie bei BRUECKE_KENNUNG.
+LEITSTAND_KENNUNG = "Leitstand"
+LEITSTAND_SYMBOL_AUS = "🌙"
+LEITSTAND_SYMBOL_AN = "🛸"
+LEITSTAND_FARBE_AUS = "1"
+LEITSTAND_FARBE_AN = "4"
 
 # Kontingent-Pause (Max-Abo): bricht ein Auftrag mit einer RateLimitEvent-
 # Meldung status="rejected" ab (core/sitzung.py, auftrag()), haelt CWB die
@@ -661,6 +672,9 @@ class Werkbank(QMainWindow):
         # #CODE#-Auftrag kann in der Warteschlange stehen, darum traegt dort
         # jeder Eintrag seine eigene Nummer mit (siehe _warteschlange).
         self.bruecke_faden: BrueckenFaden | None = None
+        self.leitstand_faden: leitstand.EntscheidungsFaden | None = None
+        self._leitstand_plan_mtime: float | None = None
+        self._nachtberichte: list[NachtberichtFaden] = []
         self._bruecke_berichte: list[BerichtFaden] = []
         self._bruecke_code_nummer: int | None = None
         self._terminal_bruecke_nummer: int | None = None
@@ -860,6 +874,12 @@ class Werkbank(QMainWindow):
         # gemerkten Stand, auch wenn er aus einer frueheren Sitzung noch an war.
         self._bruecke_zustand_anwenden()
 
+        # Leitstand (core/leitstand.py, Block 72): bringt Kachel und
+        # Kopfzeile auf den Stand des Schalters "leitstand_aktiv", ohne beim
+        # stillen Start selbst etwas anzusagen - reagiert erst nach dem
+        # naechsten abgeschlossenen Auftrag.
+        self._leitstand_zustand_anwenden()
+
         # Systemweiter Hotkey auf die Pause-Taste (core/pausetaste.py): loest
         # denselben Screenshot-Ablauf wie #BILD# aus, egal welches Fenster
         # gerade vorn ist. Schlaegt die Registrierung fehl (Taste von einem
@@ -920,6 +940,7 @@ class Werkbank(QMainWindow):
             ("Strg+F4", "Kompletter Neustart", self._neustart),
             ("F12", "Einstellungen", self._einstellungen_zeigen),
             ("Umschalt+F8", "Brücke ein- oder ausschalten", self._bruecke_umschalten),
+            ("Umschalt+F9", "Leitstand ein- oder ausschalten", self._leitstand_umschalten),
         ]
 
     def _kachel_eintraege(self) -> list[tuple[str, str, str, str, object]]:
@@ -942,6 +963,10 @@ class Werkbank(QMainWindow):
             # ab Werk aus.
             (BRUECKE_SYMBOL_AUS, BRUECKE_KENNUNG, "Umschalt+F8",
              BRUECKE_FARBE_AUS, self._bruecke_umschalten),
+            # Zeigt den Zustand des Schalters "Leitstand" (F12 -> Leitstand),
+            # ab Werk aus.
+            (LEITSTAND_SYMBOL_AUS, LEITSTAND_KENNUNG, "Umschalt+F9",
+             LEITSTAND_FARBE_AUS, self._leitstand_umschalten),
             # Steht nur da, solange ein Auftrag vorgemerkt ist; sonst
             # ausgeblendet (_vormerkung_zeigen).
             (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
@@ -1143,6 +1168,7 @@ class Werkbank(QMainWindow):
             ("F9", self._projekt_wechseln),
             ("F12", self._einstellungen_zeigen),
             ("Shift+F8", self._bruecke_umschalten),
+            ("Shift+F9", self._leitstand_umschalten),
             ("Return", self._enter),
         ]
         # Alle Kuerzel gelten nur im eigenen Fenster, nicht in anderen.
@@ -1948,6 +1974,11 @@ class Werkbank(QMainWindow):
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
 
+        # Leitstand (core/leitstand.py, Block 72): reagiert nur, wenn der
+        # Schalter an ist und das Projekt wissen/nachtplan.md hat - sonst
+        # kehrt die Methode sofort zurueck.
+        self._leitstand_nach_auftrag(bilanz, block_nummer, satz)
+
     def _kontingent_pause_behandeln(self, kontingent: dict, bruecke_nummer: int | None,
                                      block_nummer: int | None,
                                      eingang_datei: Path | None = None) -> None:
@@ -2575,6 +2606,183 @@ class Werkbank(QMainWindow):
         if not erfolg:
             log.info("Bruecken-Bericht nicht hochgeladen (Netzfehler, bleibt stumm)")
 
+    # -- Leitstand (core/leitstand.py, Block 72, wissen/plan_leitstand.md) ----
+
+    def _leitstand_zustand_anwenden(self) -> None:
+        """Bringt Kachel und Kopfzeile auf den Stand des Schalters
+        "leitstand_aktiv" (einstellungen.json). Aufgerufen beim Start und
+        nach jedem Schliessen der Einstellungen (F12), wie
+        `_bruecke_zustand_anwenden`."""
+        an = leitstand.aktiv()
+        self.ausgabekopf.leitstand_zeigen(an)
+        text = "Leitstand an" if an else "Leitstand aus"
+        symbol = LEITSTAND_SYMBOL_AN if an else LEITSTAND_SYMBOL_AUS
+        self.kacheln.kachel_beschriften(LEITSTAND_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(LEITSTAND_KENNUNG,
+                                    LEITSTAND_FARBE_AN if an else LEITSTAND_FARBE_AUS)
+
+    @slot_geschuetzt
+    def _leitstand_umschalten(self) -> None:
+        """Kachel "Leitstand" / Umschalt+F9: schaltet den persistierten
+        Schalter um - dieselbe Einstellung wie F12 -> Leitstand, nur ohne den
+        Umweg ueber das Einstellungsfenster."""
+        werte = einstellungen_lesen()
+        an = not bool(werte.get("leitstand_aktiv", False))
+        werte["leitstand_aktiv"] = an
+        einstellungen_schreiben(werte)
+        self._leitstand_zustand_anwenden()
+        if an and leitstand.api_schluessel_lesen() is None:
+            self.sprecher.sprich("Leitstand an. Kein Gemini-Schlüssel hinterlegt.", art="fehler")
+        else:
+            self.sprecher.sprich(f"Leitstand {'an' if an else 'aus'}.", art="immer")
+
+    def _leitstand_nach_auftrag(self, bilanz: dict, block_nummer: int | None,
+                                 satz: str) -> None:
+        """Block 72: nach jedem abgeschlossenen #CODE#-Auftrag (aufgerufen aus
+        `_fertig`) eines Projekts mit wissen/nachtplan.md fragt Leitstand
+        Gemini, ob und wie es weitergeht. Prueft dafuer zuerst synchron die
+        Grenzen (Fehlschlaege, Aufträge pro Nacht, Aenderung ausserhalb des
+        Projekts) - erst danach laeuft der Gemini-Aufruf selbst in
+        core.leitstand.EntscheidungsFaden, damit ein langsamer oder
+        haengender Netzaufruf das Fenster nie blockiert."""
+        try:
+            if not leitstand.aktiv():
+                return
+            plan_pfad = self.projekt.pfad / "wissen" / "nachtplan.md"
+            if not plan_pfad.is_file():
+                return
+            plan_mtime = plan_pfad.stat().st_mtime
+            zustand = leitstand.zustand_lesen()
+            if leitstand.ist_angehalten(zustand, self.projekt.name, plan_mtime):
+                return
+            leitstand.verlauf_anhaengen(zustand, self.projekt.name, block_nummer, satz)
+            if bilanz.get("abgebrochen"):
+                self._leitstand_anhalten(zustand, plan_mtime,
+                                          "Von Hand abgebrochen (Not-Aus).")
+                return
+            aussen = leitstand.aenderung_ausserhalb(
+                self.projekt.pfad, bilanz.get("geaendert", []))
+            if aussen:
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"Auftrag hat außerhalb des Projektordners geändert ({aussen}).")
+                return
+            if bilanz.get("fehler"):
+                zustand.fehlschlaege_in_folge += 1
+            else:
+                zustand.fehlschlaege_in_folge = 0
+            if zustand.fehlschlaege_in_folge >= leitstand.MAX_FEHLSCHLAEGE_IN_FOLGE:
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"{zustand.fehlschlaege_in_folge} Fehlschläge hintereinander.")
+                return
+            if zustand.anzahl_auftraege >= leitstand.max_auftraege_pro_nacht():
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"Höchstzahl von {leitstand.max_auftraege_pro_nacht()} "
+                    "Aufträgen pro Nacht erreicht.")
+                return
+            api_schluessel = leitstand.api_schluessel_lesen()
+            if api_schluessel is None:
+                self.sprecher.sprich("Kein Gemini-Schlüssel hinterlegt.", art="fehler")
+                self._leitstand_anhalten(zustand, plan_mtime,
+                                          "Kein Gemini-Schlüssel hinterlegt.")
+                return
+            try:
+                plan_text = plan_pfad.read_text(encoding="utf-8")
+            except OSError as fehler:
+                log.error("Leitstand: nachtplan.md nicht lesbar: %s", fehler)
+                self._leitstand_anhalten(zustand, plan_mtime, "nachtplan.md nicht lesbar.")
+                return
+            offen_pfad = self.projekt.pfad / "wissen" / "offen.md"
+            try:
+                offen_text = offen_pfad.read_text(encoding="utf-8") if offen_pfad.is_file() \
+                    else ""
+            except OSError:
+                offen_text = ""
+            leitstand.zustand_schreiben(zustand)
+            self._leitstand_plan_mtime = plan_mtime
+            self.leitstand_faden = leitstand.EntscheidungsFaden(
+                api_schluessel, plan_text, offen_text, self._letzter_bericht or satz,
+                leitstand.zeitlimit_sekunden(), self)
+            self.leitstand_faden.fertig.connect(self._leitstand_entschieden)
+            self.leitstand_faden.start()
+            log.info("Leitstand: Gemini-Anfrage gestartet (Projekt %s)", self.projekt.name)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Leitstand: Nachbearbeitung fehlgeschlagen: %s", fehler)
+
+    @slot_geschuetzt
+    def _leitstand_entschieden(self, ergebnis: dict) -> None:
+        """Kommt von core.leitstand.EntscheidungsFaden. `self._leitstand_plan_mtime`
+        wurde direkt vor dem Start des Fadens gesetzt (`_leitstand_nach_auftrag`)
+        und gehoert zu genau dieser Anfrage."""
+        plan_mtime = self._leitstand_plan_mtime
+        if plan_mtime is None:
+            return
+        zustand = leitstand.zustand_lesen()
+        if not ergebnis.get("ok"):
+            self._leitstand_anhalten(
+                zustand, plan_mtime, f"Gemini-Anfrage gescheitert ({ergebnis.get('text', '')}).")
+            return
+        entscheidung = ergebnis["entscheidung"]
+        schritt = ergebnis.get("schritt")
+        auftrag_text = ergebnis.get("auftrag", "")
+        grund = ergebnis.get("grund", "")
+        if entscheidung == "stopp":
+            self._leitstand_anhalten(zustand, plan_mtime, grund or "Gemini: Stopp.")
+            return
+        verboten = leitstand.markierung_verboten(auftrag_text)
+        if verboten:
+            self._leitstand_anhalten(
+                zustand, plan_mtime,
+                f"Gemini schlug eine gesperrte Markierung vor ({verboten}).")
+            return
+        if entscheidung == "wiederholen":
+            anzahl = leitstand.wiederholung_erhoehen(zustand, self.projekt.name, schritt)
+            if anzahl > leitstand.max_wiederholungen_je_schritt():
+                self._leitstand_anhalten(
+                    zustand, plan_mtime, f"Schritt {schritt} zu oft wiederholt ({anzahl}).")
+                return
+        zustand.anzahl_auftraege += 1
+        leitstand.zustand_schreiben(zustand)
+        nummer = naechste_block_nummer(self.projekt.name)
+        block = leitstand.codeblock_bauen(self.projekt.name, nummer, auftrag_text)
+        ablegen(leitstand.QUELLE_LEITSTAND, block, projekt=self.projekt.name)
+        log.info("Leitstand: nächster Auftrag abgelegt (Projekt %s, Schritt %s, Block %d)",
+                  self.projekt.name, schritt, nummer)
+
+    def _leitstand_anhalten(self, zustand: "leitstand.Zustand", plan_mtime: float,
+                             grund: str) -> None:
+        """Haelt Leitstand fuer das aktuelle Projekt an: merkt den Zeitstempel
+        des Plans (eine neue nachtplan.md hebt das wieder auf), schreibt
+        wissen/nachtbericht.md aus dem bisherigen Verlauf und laedt ihn bei
+        aktiver Brücke hoch."""
+        leitstand.anhalten_merken(zustand, self.projekt.name, plan_mtime)
+        verlauf = leitstand.verlauf_abholen(zustand, self.projekt.name)
+        leitstand.verlauf_leeren(zustand, self.projekt.name)
+        leitstand.zustand_schreiben(zustand)
+        text = leitstand.nachtbericht_bauen(self.projekt.name, verlauf, grund)
+        try:
+            (self.projekt.pfad / "wissen").mkdir(parents=True, exist_ok=True)
+            (self.projekt.pfad / "wissen" / "nachtbericht.md").write_text(
+                text, encoding="utf-8")
+        except OSError as fehler:
+            log.error("Leitstand: nachtbericht.md nicht schreibbar: %s", fehler)
+        if bool(einstellungen_lesen().get("bruecke_aktiv", False)):
+            faden = NachtberichtFaden(self.projekt.name, text, self)
+            faden.fertig_da.connect(functools.partial(self._leitstand_nachtbericht_fertig, faden))
+            self._nachtberichte.append(faden)
+            faden.start()
+        log.warning("Leitstand angehalten (Projekt %s): %s", self.projekt.name, grund)
+        self.sprecher.sprich(f"Leitstand angehalten: {kurzfassen(grund)}", art="fehler")
+
+    @slot_geschuetzt
+    def _leitstand_nachtbericht_fertig(self, faden, erfolg: bool) -> None:
+        if faden in self._nachtberichte:
+            self._nachtberichte.remove(faden)
+        if not erfolg:
+            log.info("Nachtbericht nicht hochgeladen (Netzfehler, bleibt stumm)")
+
     # -- Dublettensperre ------------------------------------------------------
     # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
     # der Zwischenablage, kurz genug, dass ein am naechsten Tag bewusst
@@ -3146,6 +3354,12 @@ class Werkbank(QMainWindow):
             self._bruecke_zustand_anwenden()
             satz += " Brücke aus."
             log.info("Not-Aus: Brücke zusätzlich ausgeschaltet")
+        if bool(werte.get("leitstand_aktiv", False)):
+            werte["leitstand_aktiv"] = False
+            einstellungen_schreiben(werte)
+            self._leitstand_zustand_anwenden()
+            satz += " Leitstand aus."
+            log.info("Not-Aus: Leitstand zusätzlich ausgeschaltet")
         log.info("Not-Aus, wartende Auftraege verworfen: %d", verworfen)
         # "Abgebrochen." kommt gleich ueber _fertig - diese Zwischenmeldung
         # bleibt still, sonst spricht CWB zweimal fuer denselben Abbruch.

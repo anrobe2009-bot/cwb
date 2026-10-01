@@ -114,6 +114,12 @@ FREIGABEN_KURZ_BEISPIELE = ("99",)
 BRUECKE_BEISPIELE = ("Brücke an",)
 BRUECKE_KURZ_BEISPIELE = ("Brücke",)
 
+# Statushinweis fuer den Schalter "Leitstand" (Einstellungen, Reiter
+# Leitstand, Umschalt+F9, core/leitstand.py, Block 72). Bleibt leer, solange
+# Leitstand aus ist - ab Werk der Fall.
+LEITSTAND_BEISPIELE = ("Leitstand an",)
+LEITSTAND_KURZ_BEISPIELE = ("Leitstand",)
+
 # "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"): Grundwert vom
 # 21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep, Glob,
 # lesende Bash-Befehle) vor der ersten Dateiänderung, mal 100 - keine
@@ -251,6 +257,7 @@ class Ausgabekopf(QWidget):
         self._sicherheit_installieren = False
         self._freigaben_namen: list = []
         self._bruecke_an = False
+        self._leitstand_an = False
         self._such_prozent: int | None = None
         self._modell_lang = ""
         self._modell_kurz = ""
@@ -302,6 +309,16 @@ class Ausgabekopf(QWidget):
         self.bruecke_anzeige.setAlignment(Qt.AlignCenter)
         self.bruecke_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.bruecke_anzeige)
+
+        # Statushinweis, solange Leitstand an ist (Einstellungen, Reiter
+        # Leitstand, Umschalt+F9). Aus ist der Normalfall, dann bleibt das
+        # Feld leer.
+        self.leitstand_anzeige = Schrumpffeld("")
+        self.leitstand_anzeige.setObjectName("leitstandanzeige")
+        self.leitstand_anzeige.setAccessibleName("Leitstand-Status")
+        self.leitstand_anzeige.setAlignment(Qt.AlignCenter)
+        self.leitstand_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.leitstand_anzeige)
 
         # "Such-Effizienz" (Block C10): zwischen Freigaben-Zahl und
         # Tokenzaehler, wie in der Kopfzeile vereinbart. Nicht gesprochen -
@@ -430,6 +447,8 @@ class Ausgabekopf(QWidget):
                  FREIGABEN_BEISPIELE, FREIGABEN_KURZ_BEISPIELE),
                 ("bruecke_anzeige", self.bruecke_anzeige,
                  BRUECKE_BEISPIELE, BRUECKE_KURZ_BEISPIELE),
+                ("leitstand_anzeige", self.leitstand_anzeige,
+                 LEITSTAND_BEISPIELE, LEITSTAND_KURZ_BEISPIELE),
                 ("such_effizienz", self.such_effizienz,
                  SUCH_EFFIZIENZ_BEISPIELE, SUCH_EFFIZIENZ_KURZ_BEISPIELE),
                 ("modellanzeige", self.modellanzeige,
@@ -465,8 +484,8 @@ class Ausgabekopf(QWidget):
             # dazwischen (die Warteanzeige bleibt aussen vor, sie ist im
             # Regelfall verborgen und traegt dann nichts zur Breite bei).
             dauerhaft = ("sicherheitshinweis", "freigabenanzeige", "bruecke_anzeige",
-                         "such_effizienz", "modellanzeige", "tokenzaehler",
-                         "sitzungszaehler", "tageszaehler")
+                         "leitstand_anzeige", "such_effizienz", "modellanzeige",
+                         "tokenzaehler", "sitzungszaehler", "tageszaehler")
             abstand = self.layout().spacing() if self.layout() else 4
             self._breite_lang_benoetigt = (
                 sum(breiten[name][0] for name in dauerhaft)
@@ -490,6 +509,7 @@ class Ausgabekopf(QWidget):
         self._sicherheitshinweis_zeichnen()
         self._freigaben_zeichnen()
         self._bruecke_zeichnen()
+        self._leitstand_zeichnen()
         self._such_effizienz_zeichnen()
         self._modell_zeichnen()
         self._warteschlange_zeichnen()
@@ -638,6 +658,25 @@ class Ausgabekopf(QWidget):
             self.bruecke_anzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Brücken-Statushinweis nicht gesetzt: %s", fehler)
+
+    def leitstand_zeigen(self, an: bool) -> None:
+        """Zeigt "Leitstand an", solange der Schalter an ist (Einstellungen,
+        Reiter Leitstand, Umschalt+F9). Aus bleibt das Feld leer - das ist
+        der Normalfall."""
+        self._leitstand_an = bool(an)
+        self._leitstand_zeichnen()
+
+    def _leitstand_zeichnen(self) -> None:
+        try:
+            an = self._leitstand_an
+            text = ("Leitstand" if self._schmal else "Leitstand an") if an else ""
+            self.leitstand_anzeige.setText(text)
+            satz = "Leitstand an: entscheidet nachts selbst über den Nachtplan." if an \
+                else "Leitstand aus."
+            self.leitstand_anzeige.setToolTip(satz)
+            self.leitstand_anzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Leitstand-Statushinweis nicht gesetzt: %s", fehler)
 
     def freigaben_zeigen(self, namen: list) -> None:
         """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage
