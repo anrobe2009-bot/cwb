@@ -330,8 +330,16 @@ class Abspieler:
             self._abbruch.clear()
             self._zaehler += 1
             alias = f"cwb{self._zaehler}"
-            if not self._befehl(f'open "{datei}" type mpegvideo alias {alias}'):
-                return
+        # Der eigentliche MCI-Aufruf laeuft bewusst AUSSERHALB von
+        # `_sperre`: haengt er an einer echten Geraete-/Treiberstoerung
+        # (Block 106, Fall A), darf das `stopp()` aus einem anderen Faden
+        # (jedes `sprich()` mit unterbrechen=True ruft es im GUI-Faden auf)
+        # nicht ebenfalls fuer die Dauer dieses Aufrufs blockieren - sonst
+        # friert die Oberflaeche ein, bis der Not-Aus kommt. `stopp()` sieht
+        # waehrenddessen einfach noch kein `_laufend` und tut nichts.
+        if not self._befehl(f'open "{datei}" type mpegvideo alias {alias}'):
+            return
+        with self._sperre:
             self._laufend = alias
         if not self._befehl(f"play {alias}"):
             with self._sperre:

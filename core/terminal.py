@@ -29,6 +29,7 @@ import hmac
 import json
 import logging
 import os
+import queue
 import secrets
 import subprocess
 import sys
@@ -100,17 +101,45 @@ class Ergebnis:
     ausgabe: str
     code: int
     fehler: str = ""
+    abgebrochen: bool = False
+
+
+def _baum_beenden(pid: int) -> None:
+    """Beendet einen Prozess samt aller seiner Kindprozesse (z.B. das von
+    PowerShell gestartete eigentliche Programm) hart ueber taskkill /T /F -
+    ein blosses prozess.kill() traefe nur den PowerShell-Host selbst, nicht
+    was er seinerseits gestartet hat, und das haengende Kind liefe weiter."""
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as fehler:
+        log.error("Prozessbaum (PID %d) nicht beendbar: %s", pid, fehler)
 
 
 def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
-                       teil_callback=None) -> Ergebnis:
+                       teil_callback=None, abbruch: threading.Event | None = None) -> Ergebnis:
     """Fuehrt einen Befehl als PowerShell-Aufruf im angegebenen Ordner aus.
     Der Befehl wird zuerst in eine temporaere .ps1-Datei geschrieben (UTF-8
     ohne Bytereihenfolgezeichen, Zeilenenden nur LF) und ueber -File
     aufgerufen, damit Mehrzeiler und verschachtelte Anfuehrungszeichen
     zuverlaessig ankommen. Ist `teil_callback` gesetzt, bekommt er jede
     Ausgabezeile sofort, waehrend der Befehl noch laeuft; Stdout und Stderr
-    kommen gemeinsam zurueck."""
+    kommen gemeinsam zurueck. Ist `abbruch` gesetzt (F8, Not-Aus) und wird es
+    waehrenddessen ausgeloest, wird genauso hart abgebrochen wie bei
+    Zeitueberschreitung.
+
+    Die Ausgabe wird ueber einen eigenen Lesefaden eingesammelt, nicht direkt
+    im Aufrufer per `for zeile in prozess.stdout:` - dieses Muster blockiert
+    auf readline() und prueft das Zeitlimit erst, NACHDEM eine Zeile ankam.
+    Bleibt ein Befehl ganz ohne Ausgabe haengen (z.B. ein fehlerhafter
+    Unit-Test ohne Konsolenausgabe), kam diese Pruefung nie zum Zug und das
+    Zeitlimit griff nicht - genau das liess Block 106 trotz ZEITLIMIT_RUN
+    unbegrenzt haengen. Die Warteschlange hier bekommt dagegen unabhaengig
+    von der Ausgabe alle `_ABFRAGE_SEKUNDEN` die Kontrolle zurueck."""
     vollbefehl = (
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "$OutputEncoding = [System.Text.Encoding]::UTF8; " + befehl
@@ -148,32 +177,68 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
             pass
         return Ergebnis(False, "", -1, str(fehler))
 
+    # Eigener Lesefaden statt "for zeile in prozess.stdout": readline()
+    # blockiert, bis eine Zeile ankommt oder der Strom endet - ohne Ausgabe
+    # kaeme die Zeitlimit-Pruefung unten nie zum Zug. Der Lesefaden legt jede
+    # Zeile in eine Queue; `zeilen_queue.get(timeout=...)` gibt die Kontrolle
+    # dagegen garantiert alle 0.2s zurueck, egal ob der Befehl etwas ausgibt.
+    zeilen_queue: queue.Queue = queue.Queue()
+    ABFRAGE_SEKUNDEN = 0.2
+
+    def _lesen() -> None:
+        try:
+            for zeile in prozess.stdout:
+                zeilen_queue.put(zeile)
+        except (OSError, ValueError):
+            pass
+        finally:
+            zeilen_queue.put(None)  # Ende der Ausgabe
+
+    lesefaden = threading.Thread(target=_lesen, daemon=True)
+    lesefaden.start()
+
     zeilen: list[str] = []
     ablauf = time.monotonic() + zeitlimit
     zeitueberschritten = False
-    try:
-        for zeile in prozess.stdout:
-            zeilen.append(zeile)
-            if teil_callback is not None:
-                try:
-                    teil_callback(zeile)
-                except Exception as fehler:  # noqa: BLE001
-                    log.exception("Live-Ausgabe nicht weitergereicht: %s", fehler)
-            if time.monotonic() > ablauf:
-                zeitueberschritten = True
-                prozess.kill()
-                break
-    finally:
+    abgebrochen = False
+    strom_zu_ende = False
+    while not strom_zu_ende:
+        if abbruch is not None and abbruch.is_set():
+            abgebrochen = True
+            break
+        if time.monotonic() > ablauf:
+            zeitueberschritten = True
+            break
         try:
-            prozess.stdout.close()
-        except OSError:
-            pass
+            zeile = zeilen_queue.get(timeout=ABFRAGE_SEKUNDEN)
+        except queue.Empty:
+            continue
+        if zeile is None:
+            strom_zu_ende = True
+            break
+        zeilen.append(zeile)
+        if teil_callback is not None:
+            try:
+                teil_callback(zeile)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Live-Ausgabe nicht weitergereicht: %s", fehler)
+
+    if zeitueberschritten or abgebrochen:
+        _baum_beenden(prozess.pid)
 
     try:
-        code = prozess.wait(timeout=10)
+        code = prozess.wait(timeout=15)
     except subprocess.TimeoutExpired:
-        prozess.kill()
-        code = -1
+        _baum_beenden(prozess.pid)
+        try:
+            code = prozess.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            code = -1
+
+    try:
+        prozess.stdout.close()
+    except OSError:
+        pass
 
     try:
         skript_datei.unlink(missing_ok=True)
@@ -181,6 +246,9 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
         log.error("Temporaere Datei nicht loeschbar: %s (%s)", skript_datei, fehler)
 
     ausgabe = "".join(zeilen).strip()
+    if abgebrochen:
+        log.error("Terminalbefehl abgebrochen (Not-Aus): %s", befehl)
+        return Ergebnis(False, ausgabe, -1, "Abgebrochen (Not-Aus)", abgebrochen=True)
     if zeitueberschritten:
         log.error("Terminalbefehl abgebrochen (Zeitueberschreitung): %s", befehl)
         return Ergebnis(False, ausgabe, -1, f"Zeitueberschreitung nach {zeitlimit} Sekunden")
@@ -265,11 +333,15 @@ class AdminWorkerVerwaltung:
             log.info("Admin-Worker angestossen (%s)", skript)
 
     def auftrag_ausfuehren(self, befehl: str, ordner: Path,
-                           zeitlimit: int = ZEITLIMIT_ADMIN_WARTEN) -> Ergebnis:
+                           zeitlimit: int = ZEITLIMIT_ADMIN_WARTEN,
+                           abbruch: threading.Event | None = None) -> Ergebnis:
         """Reicht einen Befehl an den erhoehten Worker weiter und wartet auf
         die Antwort. Startet den Worker beim allerersten Aufruf; lehnt der
         Nutzer die Rechteanforderung ab, laeuft diese Methode bis zum
-        Zeitlimit und meldet dann einen Fehlschlag - kein zweiter Versuch."""
+        Zeitlimit und meldet dann einen Fehlschlag - kein zweiter Versuch.
+        Wird `abbruch` (F8, Not-Aus) waehrenddessen gesetzt, gibt CWB das
+        Warten sofort auf - der erhoehte Worker selbst beendet den haengenden
+        Befehl ohnehin spaetestens nach ZEITLIMIT_ADMIN ueber befehl_ausfuehren."""
         self._sicherstellen()
         with self._sperre:
             self._auftrag_id += 1
@@ -287,6 +359,9 @@ class AdminWorkerVerwaltung:
 
         ablauf = time.monotonic() + zeitlimit
         while time.monotonic() < ablauf:
+            if abbruch is not None and abbruch.is_set():
+                log.error("Admin-Auftrag %d: Warten per Not-Aus abgebrochen", auftrag_id)
+                return Ergebnis(False, "", -1, "Abgebrochen (Not-Aus)", abgebrochen=True)
             time.sleep(0.25)
             try:
                 if not ADMIN_RES_DATEI.exists():
@@ -401,14 +476,24 @@ class TerminalFaden(QThread):
         self.art = art
         self.befehl = befehl
         self.ordner = ordner
+        # F8 (Not-Aus) setzt dieses Ereignis - befehl_ausfuehren bzw.
+        # AdminWorkerVerwaltung.auftrag_ausfuehren pruefen es unabhaengig vom
+        # Zeitlimit und brechen dann genauso hart (Prozessbaum, nicht nur den
+        # direkten Kindprozess) ab.
+        self._abbruch = threading.Event()
+
+    def not_aus(self) -> None:
+        self._abbruch.set()
 
     def run(self) -> None:
         if self.art == "admin":
             if ADMIN_WORKER.uac_bevorstehend():
                 self.admin_wartet_auf_uac.emit()
-            ergebnis = ADMIN_WORKER.auftrag_ausfuehren(self.befehl, self.ordner)
+            ergebnis = ADMIN_WORKER.auftrag_ausfuehren(self.befehl, self.ordner,
+                                                        abbruch=self._abbruch)
         else:
             ergebnis = befehl_ausfuehren(
-                self.befehl, self.ordner, ZEITLIMIT_RUN, teil_callback=self.teil_da.emit
+                self.befehl, self.ordner, ZEITLIMIT_RUN, teil_callback=self.teil_da.emit,
+                abbruch=self._abbruch,
             )
         self.fertig_da.emit(ergebnis)

@@ -37,8 +37,17 @@ class FalscherWinmm:
     Befehl, aus welchem Python-Faden er kam, und protokolliert jeden
     Zeitpunkt, an dem ein Geraet offen UND im Modus "playing" war."""
 
+    # Nach so vielen "status...playing"-Abfragen fuer denselben Alias faellt
+    # das Geraet von selbst auf "stopped" - wie ein echtes Stueck, das
+    # irgendwann zu Ende ist. Ohne das koennte Abspieler._bis_fertig_warten
+    # unbegrenzt weiterfragen, wenn eine stopp()-Anfrage aus einem anderen
+    # Faden einmal zu spaet eintrifft (Block 106: genau das liess den
+    # Testlauf frueher an einem echten Zeit-Wettlauf haengen).
+    _AUTO_ENDE_NACH_ABFRAGEN = 5
+
     def __init__(self):
         self.geraete = {}  # alias -> {"modus": str, "offen": bool}
+        self._abfragen = {}  # alias -> Anzahl "status...playing"-Abfragen
         self.sperre = threading.Lock()
         self.befehle = []  # (faden_id, text, erfolg)
         self.ueberlappung_gesehen = False
@@ -86,6 +95,12 @@ class FalscherWinmm:
                 alias = teile[1]
                 geraet = self.geraete.get(alias)
                 modus = geraet["modus"] if geraet and geraet["offen"] else ""
+                if modus == "playing":
+                    anzahl = self._abfragen.get(alias, 0) + 1
+                    self._abfragen[alias] = anzahl
+                    if anzahl >= self._AUTO_ENDE_NACH_ABFRAGEN:
+                        geraet["modus"] = "stopped"
+                        modus = "stopped"
                 if puffer is not None:
                     puffer.value = modus
             else:
@@ -134,7 +149,10 @@ class AbspielerTest(unittest.TestCase):
             sprech_faden_id["wert"] = threading.get_ident()
             ab.spiele(Path("x.mp3"), warten=True)
 
-        t = threading.Thread(target=sprech_faden_lauf)
+        # daemon=True: haengt dieser Faden trotz der Zeitgrenzen unten fest,
+        # darf das nicht den ganzen Testlauf (python -m unittest) unbegrenzt
+        # blockieren - das war genau die Ursache des Hängers in Block 106.
+        t = threading.Thread(target=sprech_faden_lauf, daemon=True)
         t.start()
         # Warten, bis das Geraet wirklich offen und am Spielen ist.
         ende = time.monotonic() + 1.0
@@ -157,22 +175,38 @@ class AbspielerTest(unittest.TestCase):
         """Wie im echten Betrieb: EIN Sprech-Faden spielt mehrere Stuecke
         nacheinander (wie _sprech_schleife), ein zweiter Faden unterbricht
         wiederholt per stopp() (wie schweig() aus der Oberflaeche) - nie
-        zwei Geraete gleichzeitig offen und 'playing'."""
+        zwei Geraete gleichzeitig offen und 'playing'.
+
+        Frueher hing dieser Test an einem echten Zeit-Wettlauf: die
+        Abbruch-Schleife in Abspieler._bis_fertig_warten fragt alle
+        _ABFRAGE_SEKUNDEN (50 ms) ab, ob stopp() ein Ende angefordert hat -
+        kam dieser Aufruf (z. B. durch einen Scheduler-Ruckler) einmal zu
+        spaet, drehte der Sprech-Faden sich endlos weiter, ohne dass je
+        wieder jemand stopp() aufrief. Da der Faden kein Daemon war, hing
+        danach der ganze Testlauf (python -m unittest core.test_sprache)
+        unbegrenzt - genau der Fehler aus Block 106. Die Abfrage laeuft
+        hier darum mit 1 ms statt 50 ms, und die Schleife ist auf eine feste
+        Anzahl kurzer Versuche begrenzt statt auf echte 5 Sekunden Wartezeit."""
         fake = FalscherWinmm()
         ab = _abspieler_mit_fake(fake)
+        ab._ABFRAGE_SEKUNDEN = 0.001
         anzahl = 8
 
         def sprech_faden_lauf():
             for i in range(anzahl):
                 ab.spiele(Path(f"{i}.mp3"), warten=True)
 
-        t = threading.Thread(target=sprech_faden_lauf)
+        # daemon=True: ein haengender Faden darf nie den ganzen Testlauf mit
+        # sich blockieren - die Assertion unten meldet das Problem stattdessen
+        # als normalen Testfehlschlag.
+        t = threading.Thread(target=sprech_faden_lauf, daemon=True)
         t.start()
-        ende = time.monotonic() + 5.0
-        while t.is_alive() and time.monotonic() < ende:
+        for _ in range(500):
+            if not t.is_alive():
+                break
             ab.stopp()
-            time.sleep(0.02)
-        t.join(timeout=1)
+            time.sleep(0.001)
+        t.join(timeout=0.5)
         self.assertFalse(t.is_alive(), "Sprech-Faden kam nicht rechtzeitig zu Ende")
         ab.stopp()
 
@@ -207,7 +241,7 @@ class AbspielerTest(unittest.TestCase):
             sprech_faden_id["wert"] = threading.get_ident()
             ab.spiele(Path("x.mp3"), warten=True)
 
-        t = threading.Thread(target=sprech_faden_lauf)
+        t = threading.Thread(target=sprech_faden_lauf, daemon=True)
         t.start()
         t.join(timeout=2)
 

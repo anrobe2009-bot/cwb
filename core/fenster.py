@@ -3588,7 +3588,13 @@ class Werkbank(QMainWindow):
         dabei mit verworfen - sonst liefe nach dem Not-Aus der naechste von
         allein los, was niemand erwartet, der eben alles gestoppt hat.
         Schaltet zusaetzlich die Bruecke aus, falls sie an war
-        (wissen/plan_bruecke.md, Stufe B3)."""
+        (wissen/plan_bruecke.md, Stufe B3). Bricht ausserdem einen laufenden
+        #run#/#admin#-Terminalbefehl hart ab (Block 106) - frueher rief diese
+        Methode nur self.faden.not_aus() (die Claude-Code-Sitzung), ein
+        haengender Terminalbefehl lief dabei unbeeinflusst weiter."""
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            self._terminal_faden.not_aus()
+            log.info("Not-Aus: laufender Terminalbefehl abgebrochen")
         verworfen = len(self._warteschlange)
         for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
                 _modell_grund in self._warteschlange:
