@@ -1,4 +1,4 @@
-"""
+﻿"""
 CWB - Code Workbench
 Baustein 3: Hauptfenster (Werkbank) und Programmstart.
 
@@ -3167,7 +3167,7 @@ class Werkbank(QMainWindow):
         # Block 77, Punkte 1 und 3: "Modell: …" und "Dringend: ja" gelten nur
         # fuer Auftraege, die tatsaechlich an Claude Code gehen (#RUN#/
         # #ADMIN#/#BILD# sind hier laengst per return verlassen, siehe oben).
-        text, modell_wunsch, dringend = kopf_metadaten_entfernen(text)
+        text, modell_wunsch, dringend = text, None, False  # NOTFALL-UMGEHUNG Block 91, siehe wissen/offen.md
         modell_grund: str | None = None
         # Punkt 2: Hochstufung nach Fehlschlaegen - nur fuer Auftraege aus
         # Eingang, Bruecke oder Leitstand (erkennbar an eingang_datei, siehe

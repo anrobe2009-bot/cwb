@@ -1,15 +1,15 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 02.10.2026 06:00.
+Automatisch erzeugt am 02.10.2026 06:31.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 3858 |  |
+| core\fenster.py | 3895 |  |
 | core\einstellungen.py | 1904 |  |
-| core\sitzung.py | 1807 |  |
+| core\sitzung.py | 1821 |  |
+| core\kopfzeile.py | 975 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
-| core\kopfzeile.py | 880 |  |
 | core\sprache.py | 853 |  |
 | core\leitstand.py | 642 |  |
 | core\eingangsordner.py | 541 |  |
@@ -35,7 +35,6 @@ Automatisch erzeugt am 02.10.2026 06:00.
 | core\projektwahl.py | 166 |  |
 | core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
-| core\test_kopfzeile.py | 124 | Unit-Tests fuer Block 81 (core/kopfzeile.py): die reinen Hilfsfunktionen |
 | core\pausetaste.py | 84 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |
 | memory_hub\sdk_werkzeuge.py | 73 |  |
