@@ -1,6 +1,6 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 02.10.2026 10:09.
+Automatisch erzeugt am 02.10.2026 11:22.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
@@ -10,7 +10,7 @@ Automatisch erzeugt am 02.10.2026 10:09.
 | core\kopfzeile.py | 975 |  |
 | core\wissen.py | 963 |  |
 | core\sicherheit.py | 930 |  |
-| core\sprache.py | 853 |  |
+| core\sprache.py | 889 |  |
 | core\leitstand.py | 642 |  |
 | core\eingangsordner.py | 541 |  |
 | core\grundlagen.py | 521 |  |
@@ -35,6 +35,7 @@ Automatisch erzeugt am 02.10.2026 10:09.
 | core\projektwahl.py | 166 |  |
 | core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
+| _test_doppelstimme.py | 140 | Stummer Test: simuliert MCI (keine echte Audioausgabe), um zu pruefen, |
 | core\pausetaste.py | 84 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |
 | memory_hub\sdk_werkzeuge.py | 73 |  |
