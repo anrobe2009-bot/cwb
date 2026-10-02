@@ -2171,11 +2171,33 @@ class Werkbank(QMainWindow):
         den pausierten Auftrag mit dem Fortsetzungs-Vorspann fort - in
         derselben Sitzung, wenn sie noch lebt, sonst verbindet
         core/sitzung.py (_neu_verbinden) von selbst neu, bevor der Auftrag
-        gesendet wird."""
+        gesendet wird.
+
+        Block 80: vorher dieselbe Eingangsreihenfolge-Pruefung wie im
+        Leerlauf (_naechstes_fremdes_projekt/_auto_projekt_pruefen) - sonst
+        wuerde nach jeder Pause immer das zuletzt aktive Projekt fortgesetzt,
+        auch wenn laut Eingangsordner ein anderes Projekt laenger wartet. Nur
+        bei einem Auftrag aus dem Eingangsordner (eingang_datei gesetzt):
+        seine Datei liegt bereits unveraendert in eingang/laeuft/ (Block 70,
+        Teil A) und wird beim naechsten Oeffnen dieses Projekts von
+        wieder_aufnehmen() erneut angestossen - ein von Hand eingegebener
+        Auftrag ohne Eingangsdatei hat keine solche Ablage und wird deshalb
+        immer fortgesetzt, sonst ginge er verloren."""
         info, self._kontingent_info = self._kontingent_info, None
         if info is None:
             # F8 (Not-Aus) hat die Pause inzwischen verworfen.
             return
+        if info.get("eingang_datei") is not None:
+            projekt = self._naechstes_fremdes_projekt()
+            if projekt is not None:
+                log.info(
+                    "Kontingent-Pause vorbei, aber Projekt %s wartet laenger in der "
+                    "Eingangsreihenfolge - wechsle, statt eigenen Auftrag fortzusetzen",
+                    projekt.name,
+                )
+                QTimer.singleShot(
+                    0, lambda zielprojekt=projekt: self._auto_projekt_wechseln(zielprojekt))
+                return
         log.info("Kontingent-Pause vorbei, setze Auftrag fort: %s", info["text"][:120])
         self._auftrag_starten(
             f"{KONTINGENT_VORSPANN}{info['text']}", info["bilder"], ansagen=False,
@@ -2595,26 +2617,22 @@ class Werkbank(QMainWindow):
             log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)
         self._auto_projekt_pruefen()
 
-    def _auto_projekt_pruefen(self) -> None:
-        """Block 70, Teil C: wechselt im Leerlauf von selbst zu einem anderen
-        bekannten Projekt, sobald dort der aelteste wartende Auftrag aus
-        Eingang oder Bruecke wartet (core/eingangsordner.py,
-        naechste_fremde_projekt_datei) - wie F9, nur ohne Roberts Zutun.
-        Aufgerufen nach jedem Blick des Eingangswaechters (_eingang_fremde_
-        melden), auch dann, wenn gerade kein eigener Auftrag lief. Kein
-        Wechsel, solange ein eigener Auftrag laeuft, die Warteschlange nicht
-        leer ist, eine Kontingent-Pause laeuft, eine Rueckfrage offen ist
-        oder ein Wechsel schon im Gang ist - sonst verschwaende das Fenster
-        unter der Hand, waehrend noch etwas darauf wartet."""
+    def _naechstes_fremdes_projekt(self) -> Projekt | None:
+        """Liefert das Projekt des aeltesten wartenden Eingangs-/Bruecken-
+        Auftrags, der nicht zum hier offenen Projekt passt (core/
+        eingangsordner.py, naechste_fremde_projekt_datei) - None, wenn keiner
+        wartet, der Schalter "Automatisch Projekt wechseln" aus ist oder das
+        genannte Projekt unbekannt ist (dann nur einmalig angesagt). Block
+        80: gemeinsame Grundlage fuer den Leerlauf-Wechsel
+        (_auto_projekt_pruefen) UND die Pruefung beim Ende einer Kontingent-
+        Pause (_kontingent_fortsetzen) - beide muessen dieselbe
+        Eingangsreihenfolge befolgen, nicht nur der Leerlauf."""
         if not einstellungen_lesen().get("auto_projektwechsel", True):
-            return
-        if (self._auftrag_laeuft or self._warteschlange or self._kontingent_info is not None
-                or self.frage_offen or self.wechselt):
-            return
+            return None
         ziel_roh = naechste_fremde_projekt_datei(self.projekt.name)
         if ziel_roh is None:
             self._auto_projekt_unbekannt_angesagt = None
-            return
+            return None
         projekt = next(
             (p for p in projekte_finden() if projekt_gleichwertig(p.name, ziel_roh)), None
         )
@@ -2625,8 +2643,27 @@ class Werkbank(QMainWindow):
                 self.sprecher.sprich(
                     f"Ein Auftrag für ein unbekanntes Projekt namens {ziel_roh} "
                     "wartet im Eingang.", unterbrechen=False, art="hinweis")
-            return
+            return None
         self._auto_projekt_unbekannt_angesagt = None
+        return projekt
+
+    def _auto_projekt_pruefen(self) -> None:
+        """Block 70, Teil C: wechselt im Leerlauf von selbst zu einem anderen
+        bekannten Projekt, sobald dort der aelteste wartende Auftrag aus
+        Eingang oder Bruecke wartet (_naechstes_fremdes_projekt) - wie F9,
+        nur ohne Roberts Zutun. Aufgerufen nach jedem Blick des
+        Eingangswaechters (_eingang_fremde_melden), auch dann, wenn gerade
+        kein eigener Auftrag lief. Kein Wechsel, solange ein eigener Auftrag
+        laeuft, die Warteschlange nicht leer ist, eine Kontingent-Pause
+        laeuft, eine Rueckfrage offen ist oder ein Wechsel schon im Gang ist
+        - sonst verschwaende das Fenster unter der Hand, waehrend noch etwas
+        darauf wartet."""
+        if (self._auftrag_laeuft or self._warteschlange or self._kontingent_info is not None
+                or self.frage_offen or self.wechselt):
+            return
+        projekt = self._naechstes_fremdes_projekt()
+        if projekt is None:
+            return
         # Ueber den Ereignisumlauf entkoppelt, statt den Wechsel (der dieses
         # Fenster schliesst) noch innerhalb des Waechter-Rueckrufs
         # auszufuehren, aus dem diese Methode selbst aufgerufen wird.

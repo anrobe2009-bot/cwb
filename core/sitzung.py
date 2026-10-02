@@ -714,6 +714,28 @@ class Sitzung:
         log.warning("Hintergrund abgelehnt: %s | Ziel: %s", name, ziel)
         self._protokoll_ablehnung_erfassen(ziel, begruendung)
 
+    async def _hintergrund_gestartet(self, nachricht: TaskStartedMessage) -> None:
+        """Reaktion auf eine TaskStartedMessage (Block 52/80): SYSTEM_ZUSATZ
+        und disallowed_tools verbieten Hintergrundaufgaben; trifft trotzdem
+        eine ein (z. B. Bash im Hintergrund, das disallowed_tools nicht
+        sperren kann, oder ein Skill, der von sich aus im Hintergrund laeuft,
+        ohne dass run_in_background im Werkzeugaufruf auftaucht -
+        _darf_werkzeug() kann das vorher nicht erkennen), wird sie hier nicht
+        nur vermerkt, sondern sofort abgebrochen (client.stop_task) - sonst
+        bliebe sie unbemerkt im Hintergrund weiterlaufen, waehrend der
+        Auftrag laengst als fertig gilt."""
+        self._hintergrundaufgaben[nachricht.task_id] = nachricht.description
+        log.warning(
+            "Hintergrundaufgabe gestartet trotz Verbot, wird abgebrochen: %s (%s)",
+            nachricht.task_id, nachricht.description,
+        )
+        try:
+            await self.klient.stop_task(nachricht.task_id)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception(
+                "Hintergrundaufgabe nicht abbrechbar: %s (%s)", nachricht.task_id, fehler,
+            )
+
     def _suchpflicht_verletzt(self, name: str, eingabe: dict[str, Any]) -> bool:
         """Wahr, wenn dieser Aufruf eine schreibende Aktion ist, die
         Suchpflicht eingeschaltet ist, in dieser Sitzung mindestens ein
@@ -1508,15 +1530,7 @@ class Sitzung:
                     self._protokoll_ergebnisse_erfassen(nachricht)
 
                 elif isinstance(nachricht, TaskStartedMessage):
-                    # Block 52: SYSTEM_ZUSATZ und disallowed_tools verbieten
-                    # Hintergrundaufgaben; trifft trotzdem eine ein (z. B.
-                    # Bash im Hintergrund, das disallowed_tools nicht sperren
-                    # kann, siehe _einstellungen()), wird sie hier vermerkt.
-                    self._hintergrundaufgaben[nachricht.task_id] = nachricht.description
-                    log.warning(
-                        "Hintergrundaufgabe gestartet trotz Verbot: %s (%s)",
-                        nachricht.task_id, nachricht.description,
-                    )
+                    await self._hintergrund_gestartet(nachricht)
 
                 elif isinstance(nachricht, (TaskNotificationMessage, TaskUpdatedMessage)):
                     if nachricht.status in TERMINAL_TASK_STATUSES:
