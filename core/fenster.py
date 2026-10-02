@@ -72,7 +72,8 @@ from PySide6.QtWidgets import (
 try:
     from .ablagewaechter import Zwischenablagewaechter
     from .android_screenshot import screenshot_ablegen
-    from .bloecke import block_erkennen, block_zaehler_aktualisieren, naechste_block_nummer
+    from .bloecke import block_erkennen, block_zaehler_aktualisieren, kopf_metadaten_entfernen, \
+        naechste_block_nummer
     from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from .datenordner import erstuebernahme
     from .eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
@@ -135,7 +136,8 @@ try:
 except ImportError:
     from ablagewaechter import Zwischenablagewaechter
     from android_screenshot import screenshot_ablegen
-    from bloecke import block_erkennen, block_zaehler_aktualisieren, naechste_block_nummer
+    from bloecke import block_erkennen, block_zaehler_aktualisieren, kopf_metadaten_entfernen, \
+        naechste_block_nummer
     from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from datenordner import erstuebernahme
     from eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
@@ -3167,7 +3169,7 @@ class Werkbank(QMainWindow):
         # Block 77, Punkte 1 und 3: "Modell: …" und "Dringend: ja" gelten nur
         # fuer Auftraege, die tatsaechlich an Claude Code gehen (#RUN#/
         # #ADMIN#/#BILD# sind hier laengst per return verlassen, siehe oben).
-        text, modell_wunsch, dringend = text, None, False  # NOTFALL-UMGEHUNG Block 91, siehe wissen/offen.md
+        text, modell_wunsch, dringend = kopf_metadaten_entfernen(text)
         modell_grund: str | None = None
         # Punkt 2: Hochstufung nach Fehlschlaegen - nur fuer Auftraege aus
         # Eingang, Bruecke oder Leitstand (erkennbar an eingang_datei, siehe
@@ -3276,7 +3278,8 @@ class Werkbank(QMainWindow):
 
         self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt,
                                bruecke_nummer=bruecke_nummer, block_nummer=block_nummer,
-                               eingang_datei=eingang_datei)
+                               eingang_datei=eingang_datei, modell_wunsch=modell_wunsch,
+                               modell_grund=modell_grund)
 
     def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
                           ansagen: bool = True, block_angesagt: bool = False,
