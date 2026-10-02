@@ -247,15 +247,28 @@ class Abspieler:
     Stuecks. Ein "close" von einem anderen Faden - etwa Escape ueber
     `schweig()` - reihte sich dann hinter diesem blockierenden Befehl ein und
     kam faktisch nie rechtzeitig an, die Ansage liess sich nicht abbrechen.
-    Jetzt startet `play` ohne `wait`, ein eigener Wartelauf fragt den Stand
-    ab - `stopp()` bleibt so aus jedem Faden jederzeit sofort wirksam."""
+    Jetzt startet `play` ohne `wait`, ein eigener Wartelauf fragt den Stand ab.
+
+    MCI bindet ein per `open` angelegtes Geraet an den Faden, der es geoeffnet
+    hat: `stop`/`close` aus einem ANDEREN Faden scheitern dort mit "Geraet ist
+    nicht geoeffnet", OHNE dass die Wiedergabe wirklich endet - frueher rief
+    `stopp()` diese Befehle direkt im aufrufenden Faden auf (bei `schweig()`
+    meist der Oberflaechen-Faden), waehrend `open`/`play` immer im Sprech-
+    Faden liefen. Genau das erzeugte zwei gleichzeitig hoerbare Stimmen: die
+    naechste Ansage startete, obwohl die vorige mangels wirksamem Stop
+    weiterlief. `stopp()` schickt darum selbst keine MCI-Befehle mehr; es
+    fordert nur per `_abbruch` ein Ende an und wartet, bis der Sprech-Faden
+    (in `_bis_fertig_warten`) das Geraet tatsaechlich - auf dem richtigen
+    Faden - gestoppt und geschlossen hat."""
 
     _ABFRAGE_SEKUNDEN = 0.05
+    _ABBRUCH_TIMEOUT_SEKUNDEN = 1.0
 
     def __init__(self):
         self._zaehler = 0
         self._laufend: str | None = None
         self._sperre = threading.Lock()
+        self._abbruch = threading.Event()
         try:
             self._winmm = WinDLL("winmm.dll")
         except OSError as fehler:
@@ -281,32 +294,49 @@ class Abspieler:
             return ""
         return puffer.value.strip().lower()
 
-    def stopp(self) -> None:
-        with self._sperre:
-            alias, self._laufend = self._laufend, None
-        if not alias:
-            return
+    def _stoppen_und_schliessen(self, alias: str) -> None:
+        """Schickt die eigentlichen MCI-Befehle `stop`/`close`. Darf nur aus
+        dem Faden aufgerufen werden, der `alias` per `open` angelegt hat -
+        also nur aus `spiele()`/`_bis_fertig_warten()` im Sprech-Faden."""
         self._befehl(f"stop {alias}")
         # Auf die Bestaetigung warten, statt sofort zu schliessen: "stop"
         # kehrt bei komprimiertem Ton (mp3) manchmal zurueck, bevor die
-        # Hardware wirklich still ist. Wird direkt danach ein neues Stueck
-        # geoeffnet und gespielt, ueberlagern sich beide kurz - zwei Stimmen
-        # gleichzeitig. Die Wartezeit ist eng begrenzt, damit eine haengende
-        # Abfrage nicht die naechste Ansage blockiert.
+        # Hardware wirklich still ist. Die Wartezeit ist eng begrenzt, damit
+        # eine haengende Abfrage nicht die naechste Ansage blockiert.
         ende = time.monotonic() + 0.5
         while self._status(alias) == "playing" and time.monotonic() < ende:
             time.sleep(0.01)
         self._befehl(f"close {alias}")
 
+    def stopp(self) -> None:
+        """Aus jedem Faden aufrufbar. Fordert das Beenden der laufenden
+        Wiedergabe an und wartet, bis der Sprech-Faden sie wirklich beendet
+        hat - schickt aber selbst keine MCI-Befehle (siehe Klassen-Docstring)."""
+        with self._sperre:
+            if self._laufend is None:
+                return
+            self._abbruch.set()
+        ende = time.monotonic() + self._ABBRUCH_TIMEOUT_SEKUNDEN
+        while time.monotonic() < ende:
+            with self._sperre:
+                if self._laufend is None:
+                    return
+            time.sleep(self._ABFRAGE_SEKUNDEN)
+        log.warning("Wiedergabe liess sich nicht rechtzeitig abbrechen")
+
     def spiele(self, datei: Path, warten: bool = True) -> None:
         self.stopp()
         with self._sperre:
+            self._abbruch.clear()
             self._zaehler += 1
             alias = f"cwb{self._zaehler}"
             if not self._befehl(f'open "{datei}" type mpegvideo alias {alias}'):
                 return
             self._laufend = alias
         if not self._befehl(f"play {alias}"):
+            with self._sperre:
+                if self._laufend == alias:
+                    self._laufend = None
             return
         if warten:
             self._bis_fertig_warten(alias)
@@ -314,16 +344,22 @@ class Abspieler:
     def _bis_fertig_warten(self, alias: str) -> None:
         """Fragt den Wiedergabestatus ab, statt mit `play ... wait` zu
         blockieren. So merkt diese Methode sofort, wenn `stopp()` aus einem
-        anderen Faden den Alias schon entfernt hat, statt bis zum natuerlichen
-        Ende des Stuecks zu warten."""
+        anderen Faden ein Ende angefordert hat, statt bis zum natuerlichen
+        Ende des Stuecks zu warten - und beendet die Wiedergabe dann selbst,
+        im richtigen Faden."""
         while True:
             with self._sperre:
                 if self._laufend != alias:
                     return
-            if self._status(alias) != "playing":
+                abgebrochen = self._abbruch.is_set()
+            if abgebrochen or self._status(alias) != "playing":
                 break
             time.sleep(self._ABFRAGE_SEKUNDEN)
-        self.stopp()
+        self._stoppen_und_schliessen(alias)
+        with self._sperre:
+            if self._laufend == alias:
+                self._laufend = None
+            self._abbruch.clear()
 
 
 # ---------------------------------------------------------------------------
