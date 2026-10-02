@@ -1089,6 +1089,17 @@ class EinstellungenFenster(QDialog):
             "eine Kontingent-Pause läuft. Ab Werk an.",
             bool(werte.get("auto_projektwechsel", True)),
         )
+        self.sparmodus_wochenkontingent = self._schalter(
+            gruppe,
+            "sparmodus_wochenkontingent",
+            "Sparmodus bei knappem Wochenkontingent",
+            "Meldet das Claude Agent SDK das Wochenkontingent als knapp "
+            "(allowed_warning), laufen nur noch Aufträge mit der Zeile "
+            "„Dringend: ja“ sofort; alle anderen warten, bis die Warnung "
+            "endet. Steht der Schalter aus, laufen alle Aufträge wie "
+            "gewohnt durch. Ab Werk an.",
+            bool(werte.get("sparmodus_wochenkontingent", True)),
+        )
 
         self._verbrauchsliste_anlegen(gruppe)
         return gruppe

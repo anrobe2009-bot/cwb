@@ -1,7 +1,8 @@
 # CWB – Anweisung für die KI im Chat
 
-Stand: 30.09.2026 (Block 56: Blocknummern mit Lücken- und Vollständigkeitsprüfung,
-siehe Abschnitt 3, „Blocknummern“; Block C6: Gedächtnis wird technisch erzwungen,
+Stand: 01.10.2026 (Block 56: Blocknummern mit Lücken- und Vollständigkeitsprüfung,
+Block 77: Modell/Dringlichkeit je Auftrag und Sparmodus bei knappem
+Wochenkontingent, siehe Abschnitt 3; Block C6: Gedächtnis wird technisch erzwungen,
 siehe Abschnitt 4 und 7).
 Abgelesen aus dem Code im Ordner `C:\Users\Entwickler\Desktop\start\CWB`
 (core/*.py, index/*.py, memory_hub/*.py, CLAUDE.md, stil.qss, verlauf.css, Startskripte,
@@ -142,6 +143,38 @@ nicht.
   Inhalt → ganzer Text als Auftrag. (c) Eingabefeld + Strg+Eingabe: dieselbe Erkennung.
 - Aufträge **ohne** Markierung gehen (über F7 oder Eingabefeld) als gewöhnlicher
   Claude-Code-Auftrag durch; der Wächter ignoriert sie.
+
+### Modell und Dringlichkeit je Auftrag (Block 77, `core/bloecke.py`)
+
+- **Format:** Direkt unter `Block N` (bzw. `Projekt: X`) können zwei weitere
+  eigene Zeilen stehen, Reihenfolge und Groß-/Kleinschreibung egal, nur
+  innerhalb der ersten `KOPF_ZEILEN_MAX` (6) Zeilen des Auftrags:
+  - `Modell: Opus` / `Modell: Sonnet` / `Modell: Haiku` – verbindet CWB
+    **nur für diesen einen Auftrag** mit dem genannten Modell (Ansage
+    „Modell Opus 5 für Block N.“) und direkt danach wieder mit dem in F12
+    gewählten Standard. Ohne diese Zeile gilt immer der Standard.
+  - `Dringend: ja` – läuft auch dann sofort, wenn CWB wegen knappen
+    Wochenkontingents im Sparmodus ist (siehe unten); alles andere ohne
+    diese Zeile wartet dann.
+  Beide Zeilen werden vor der Übergabe an Claude Code entfernt, wie die
+  Block-/Ende-Zeilen. Ein unbekanntes Modell (`Modell: Fable`) wird nicht
+  erkannt und bleibt als normaler Auftragstext stehen.
+- **Hochstufung bei Misserfolg:** Scheitert ein Auftrag aus Eingangsordner,
+  Brücke oder Leitstand zweimal in Folge (Fehler, keine Antwort der Sitzung,
+  oder der Leitstand entscheidet „wiederholen“), läuft der dritte Versuch
+  automatisch mit Opus, sofern der F12-Standard nicht schon Opus ist – ohne
+  eigene Ansage, nur ein Vermerk im Bericht. Ein von Hand abgeschickter
+  Auftrag (Zwischenablage/Eingabefeld) zählt nicht mit und setzt auch nicht
+  zurück.
+- **Sparmodus bei knappem Wochenkontingent:** Meldet das Claude Agent SDK
+  das Wochenfenster als `allowed_warning`, schaltet CWB in den Sparmodus
+  (F12 → Verhalten → „Sparmodus bei knappem Wochenkontingent“, ab Werk an):
+  nur noch Aufträge mit `Dringend: ja` laufen, alle anderen warten, bis die
+  Warnung endet – einmalige Ansage „Wochenkontingent wird knapp, nur noch
+  dringende Aufträge.“ und ein Kopfzeilenhinweis.
+- **Kontingent-Zustand:** Kopfzeile und F2 nennen kurz „normal“, „Kontingent
+  knapp“ oder „Kontingent erschöpft bis HH:MM Uhr“, sofern das SDK in dieser
+  Sitzung schon eine entsprechende Meldung geschickt hat.
 
 ### Blocknummern (Block 56, `core/bloecke.py`)
 

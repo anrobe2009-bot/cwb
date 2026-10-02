@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 try:
-    from . import grundlagen, sitzung
+    from . import fenster, grundlagen, sitzung
 except ImportError:
+    import fenster
     import grundlagen
     import sitzung
 
@@ -158,6 +159,32 @@ class KontingentZustandBerechnenTest(unittest.TestCase):
             None, {"status": "rejected", "resets_at": None})
         self.assertEqual(ergebnis["stufe"], "erschoepft")
         self.assertNotIn(":", ergebnis["text"])
+
+
+class ModellIstOpusTest(unittest.TestCase):
+    """Block 77, Punkt 2: core/fenster.py, _modell_ist_opus() - ob der in
+    F12 gewaehlte Standard eine Hochstufung ueberhaupt noch braucht."""
+
+    def test_leer_gilt_als_default_also_opus(self):
+        self.assertTrue(fenster._modell_ist_opus(""))
+
+    def test_default_ist_opus(self):
+        self.assertTrue(fenster._modell_ist_opus("default"))
+
+    def test_opus_kurzname_ist_opus(self):
+        self.assertTrue(fenster._modell_ist_opus("opus"))
+
+    def test_opus_mit_zusatz_ist_opus(self):
+        self.assertTrue(fenster._modell_ist_opus("opus[1m]"))
+
+    def test_sonnet_ist_kein_opus(self):
+        self.assertFalse(fenster._modell_ist_opus("sonnet"))
+
+    def test_haiku_ist_kein_opus(self):
+        self.assertFalse(fenster._modell_ist_opus("haiku"))
+
+    def test_gross_klein_egal(self):
+        self.assertTrue(fenster._modell_ist_opus("OPUS"))
 
 
 if __name__ == "__main__":

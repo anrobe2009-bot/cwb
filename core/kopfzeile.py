@@ -120,6 +120,12 @@ BRUECKE_KURZ_BEISPIELE = ("Brücke",)
 LEITSTAND_BEISPIELE = ("Leitstand an",)
 LEITSTAND_KURZ_BEISPIELE = ("Leitstand",)
 
+# Kontingent-Zustand (Block 77, Punkt 4): "normal" bleibt leer wie Bruecke/
+# Leitstand im Ruhezustand - nur "knapp" und "erschoepft" zeigen etwas.
+# Laengster moeglicher Text bestimmt die Breite (erschoepft samt Uhrzeit).
+KONTINGENT_BEISPIELE = ("Kontingent erschöpft bis 23:59 Uhr",)
+KONTINGENT_KURZ_BEISPIELE = ("Erschöpft",)
+
 # "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"): Grundwert vom
 # 21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep, Glob,
 # lesende Bash-Befehle) vor der ersten Dateiänderung, mal 100 - keine
@@ -258,6 +264,8 @@ class Ausgabekopf(QWidget):
         self._freigaben_namen: list = []
         self._bruecke_an = False
         self._leitstand_an = False
+        self._kontingent_stufe = "normal"
+        self._kontingent_text = ""
         self._such_prozent: int | None = None
         self._modell_lang = ""
         self._modell_kurz = ""
@@ -319,6 +327,15 @@ class Ausgabekopf(QWidget):
         self.leitstand_anzeige.setAlignment(Qt.AlignCenter)
         self.leitstand_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.leitstand_anzeige)
+
+        # Kontingent-Zustand (Block 77, Punkt 4): bleibt leer, solange das
+        # Max-Kontingent laut Sitzung normal ist - der Regelfall.
+        self.kontingent_anzeige = Schrumpffeld("")
+        self.kontingent_anzeige.setObjectName("kontingentanzeige")
+        self.kontingent_anzeige.setAccessibleName("Kontingent-Zustand")
+        self.kontingent_anzeige.setAlignment(Qt.AlignCenter)
+        self.kontingent_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        quer.addWidget(self.kontingent_anzeige)
 
         # "Such-Effizienz" (Block C10): zwischen Freigaben-Zahl und
         # Tokenzaehler, wie in der Kopfzeile vereinbart. Nicht gesprochen -
@@ -449,6 +466,8 @@ class Ausgabekopf(QWidget):
                  BRUECKE_BEISPIELE, BRUECKE_KURZ_BEISPIELE),
                 ("leitstand_anzeige", self.leitstand_anzeige,
                  LEITSTAND_BEISPIELE, LEITSTAND_KURZ_BEISPIELE),
+                ("kontingent_anzeige", self.kontingent_anzeige,
+                 KONTINGENT_BEISPIELE, KONTINGENT_KURZ_BEISPIELE),
                 ("such_effizienz", self.such_effizienz,
                  SUCH_EFFIZIENZ_BEISPIELE, SUCH_EFFIZIENZ_KURZ_BEISPIELE),
                 ("modellanzeige", self.modellanzeige,
@@ -484,8 +503,8 @@ class Ausgabekopf(QWidget):
             # dazwischen (die Warteanzeige bleibt aussen vor, sie ist im
             # Regelfall verborgen und traegt dann nichts zur Breite bei).
             dauerhaft = ("sicherheitshinweis", "freigabenanzeige", "bruecke_anzeige",
-                         "leitstand_anzeige", "such_effizienz", "modellanzeige",
-                         "tokenzaehler", "sitzungszaehler", "tageszaehler")
+                         "leitstand_anzeige", "kontingent_anzeige", "such_effizienz",
+                         "modellanzeige", "tokenzaehler", "sitzungszaehler", "tageszaehler")
             abstand = self.layout().spacing() if self.layout() else 4
             self._breite_lang_benoetigt = (
                 sum(breiten[name][0] for name in dauerhaft)
@@ -510,6 +529,7 @@ class Ausgabekopf(QWidget):
         self._freigaben_zeichnen()
         self._bruecke_zeichnen()
         self._leitstand_zeichnen()
+        self._kontingent_zeichnen()
         self._such_effizienz_zeichnen()
         self._modell_zeichnen()
         self._warteschlange_zeichnen()
@@ -677,6 +697,32 @@ class Ausgabekopf(QWidget):
             self.leitstand_anzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Leitstand-Statushinweis nicht gesetzt: %s", fehler)
+
+    def kontingent_zeigen(self, stufe: str, text: str) -> None:
+        """Zeigt den Kontingent-Zustand (Block 77, Punkt 4,
+        core/sitzung.py, `kontingent_zustand`): "normal" bleibt leer wie
+        Bruecke/Leitstand im Ruhezustand, "knapp" und "erschoepft" zeigen
+        ein kurzes Wort bzw. Wort samt Uhrzeit. `text` ist der fertige Satz
+        aus der Sitzung, hier nur fuer Kurzhinweis/Vorlesetext verwendet."""
+        self._kontingent_stufe = stufe or "normal"
+        self._kontingent_text = text or ""
+        self._kontingent_zeichnen()
+
+    def _kontingent_zeichnen(self) -> None:
+        try:
+            stufe = self._kontingent_stufe
+            if stufe == "erschoepft":
+                lang, kurz = "Kontingent erschöpft", "Erschöpft"
+            elif stufe == "knapp":
+                lang, kurz = "Kontingent knapp", "Knapp"
+            else:
+                lang = kurz = ""
+            self.kontingent_anzeige.setText(kurz if self._schmal else lang)
+            satz = self._kontingent_text or "Kontingent normal."
+            self.kontingent_anzeige.setToolTip(satz)
+            self.kontingent_anzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kontingent-Anzeige nicht gesetzt: %s", fehler)
 
     def freigaben_zeigen(self, namen: list) -> None:
         """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage

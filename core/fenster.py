@@ -1951,6 +1951,10 @@ class Werkbank(QMainWindow):
         # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
         # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
         self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+        # Block 77, Punkte 3/4: Kontingent-Zustand (Kopfzeile/F2) und
+        # Sparmodus-Umschaltung - unabhaengig davon, ob der Auftrag gleich
+        # als Kontingent-Pause zurueckkehrt oder normal fertig wird.
+        self._kontingent_anzeige_aktualisieren()
 
         kontingent = bilanz.get("kontingent")
         if kontingent is not None:
@@ -1968,6 +1972,17 @@ class Werkbank(QMainWindow):
         # als erledigt.
         if eingang_datei is not None:
             abschliessen(eingang_datei)
+            # Block 77, Punkt 2: Hochstufung bei Misserfolg - nur Auftraege
+            # aus Eingang, Bruecke oder Leitstand zaehlen mit (erkennbar an
+            # eingang_datei), ein manuell abgeschickter Auftrag weder zaehlt
+            # noch setzt zurueck (siehe Docstring von
+            # self._fehlschlaege_eingang_folge). "Abgebrochen" (Not-Aus) ist
+            # keine Modell-Schwaeche und bleibt neutral - weder Zaehlung noch
+            # Ruecksetzung.
+            if bilanz.get("fehler"):
+                self._fehlschlaege_eingang_folge += 1
+            elif not bilanz.get("abgebrochen"):
+                self._fehlschlaege_eingang_folge = 0
 
         # `satz` steht in der Statuszeile und muss in eine Zeile passen.
         # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
@@ -2034,6 +2049,47 @@ class Werkbank(QMainWindow):
         # Schalter an ist und das Projekt wissen/nachtplan.md hat - sonst
         # kehrt die Methode sofort zurueck.
         self._leitstand_nach_auftrag(bilanz, block_nummer, satz)
+
+    def _kontingent_anzeige_aktualisieren(self) -> None:
+        """Block 77, Punkte 3 und 4: liest nach jedem beendeten Auftrag die
+        zuletzt gemeldeten RateLimitEvent-Meldungen der Sitzung
+        (core/sitzung.py, `kontingent_zustand`/`sparmodus_aktiv`) und zieht
+        daraus zwei Dinge: den kurzen Kontingent-Zustand fuer die Kopfzeile
+        (Punkt 4, F2 nennt denselben Zustand ueber `Sitzung.stand()`) sowie,
+        sofern F12 -> Verhalten -> "Sparmodus bei knappem Wochenkontingent"
+        an ist (Ab Werk an), die Sparmodus-Umschaltung (Punkt 3): beim
+        Eintritt eine einmalige Ansage, beim Austritt laufen die
+        zurueckgestellten Auftraege (`self._sparmodus_wartend`) wieder in
+        die normale Warteschlange ein. Ohne Sitzung (ganz am Anfang,
+        Verbindung steht noch nicht) geschieht nichts."""
+        faden = getattr(self, "faden", None)
+        sitzung = getattr(faden, "sitzung", None) if faden else None
+        if sitzung is None:
+            return
+        try:
+            zustand = sitzung.kontingent_zustand()
+            self.ausgabekopf.kontingent_zeigen(zustand.get("stufe", "normal"),
+                                                zustand.get("text", ""))
+            schalter_an = einstellungen_lesen().get("sparmodus_wochenkontingent", True)
+            soll_aktiv = schalter_an and sitzung.sparmodus_aktiv()
+            if soll_aktiv and not self._sparmodus_aktiv:
+                self._sparmodus_aktiv = True
+                log.info("Sparmodus eingeschaltet: Wochenkontingent wird knapp")
+                self.sprecher.sprich(
+                    "Wochenkontingent wird knapp, nur noch dringende Aufträge.",
+                    art="immer")
+            elif not soll_aktiv and self._sparmodus_aktiv:
+                self._sparmodus_aktiv = False
+                log.info("Sparmodus ausgeschaltet, %d zurückgestellte Aufträge laufen wieder an",
+                          len(self._sparmodus_wartend))
+                if self._sparmodus_wartend:
+                    self._warteschlange.extend(self._sparmodus_wartend)
+                    self._sparmodus_wartend = []
+                    self._warteschlange_zeigen()
+                    if not self._auftrag_laeuft and self._kontingent_info is None:
+                        self._naechsten_starten()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kontingent-Anzeige/Sparmodus nicht aktualisiert: %s", fehler)
 
     def _kontingent_pause_behandeln(self, kontingent: dict, bruecke_nummer: int | None,
                                      block_nummer: int | None,
@@ -2814,6 +2870,11 @@ class Werkbank(QMainWindow):
                 self._leitstand_anhalten(
                     zustand, plan_mtime, f"Schritt {schritt} zu oft wiederholt ({anzahl}).")
                 return
+            # Block 77, Punkt 2: "der Leitstand entscheidet wiederholen"
+            # zaehlt wie ein Fehlschlag des Eingang-Auftrags fuer die
+            # Modell-Hochstufung - der naechste von _fertig abgelegte Block
+            # laeuft wieder ueber eingang_datei und liest den Zaehler.
+            self._fehlschlaege_eingang_folge += 1
         zustand.anzahl_auftraege += 1
         leitstand.zustand_schreiben(zustand)
         nummer = naechste_block_nummer(self.projekt.name)
