@@ -1554,9 +1554,10 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _terminal_fertig(self, ergebnis) -> None:
-        # Gehoerte der Befehl zur Bruecke (core/bruecke.py, Vorhaben
-        # "Bruecke" Stufe B3), wird die Ausgabe weiter unten dorthin
-        # hochgeladen statt per Strg+V in ein Fenster eingefuegt zu werden.
+        # Gehoerte der Befehl zur Bruecke (core/bruecke.py), wird die Ausgabe
+        # weiter unten zusaetzlich dorthin hochgeladen - die Rueckspielung ins
+        # zuletzt aktive fremde Fenster (Zwischenablage + Strg+V) laeuft
+        # trotzdem mit, genau wie bei allen anderen Wegen.
         bruecke_nummer, self._terminal_bruecke_nummer = self._terminal_bruecke_nummer, None
         # Block 70, Teil A: der Befehl ist jetzt wirklich fertig (Erfolg oder
         # Fehler) - erst jetzt gilt sein Eingangsordner-Auftrag als erledigt.
@@ -1595,25 +1596,26 @@ class Werkbank(QMainWindow):
                 befehl_lief,
             )
         if bruecke_nummer is not None:
-            # Ausgabe aus der Bruecke wird NIE per Strg+V eingefuegt, nur
-            # hochgeladen (wissen/plan_bruecke.md, Stufe B3).
+            # Hochladen an die Bruecke - zusaetzlich zur Rueckspielung unten,
+            # nicht statt ihr (wissen/plan_bruecke.md, Stufe B3).
             self._bruecke_bericht_hochladen(bruecke_nummer, text)
+        # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
+        # Auftrag kam (siehe zielfenster.py) - das gilt gleich fuer Auftraege
+        # aus dem Eingabefeld, der Zwischenablage und der Bruecke. Ist beim
+        # Auftragsstart keins gemerkt worden, nimmt zielfenster.einfuegen()
+        # das zuletzt bekannte Ziel. Nur wenn noch nie eins bekannt war,
+        # bleibt das Ergebnis in der Zwischenablage liegen.
         if bild_bleibt:
             # Das Skript hat sein Bild schon selbst in die Zwischenablage
             # gelegt - die Text-Rueckspielung wuerde es sofort wieder mit der
             # gedruckten Meldung ueberschreiben, darum bleibt sie hier aus.
             satz += " Bild liegt in der Zwischenablage."
-        elif bruecke_nummer is not None:
-            satz += " Ergebnis an Brücke hochgeladen."
-        # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
-        # Auftrag kam (siehe zielfenster.py). Ist beim Auftragsstart keins
-        # gemerkt worden, nimmt zielfenster.einfuegen() das zuletzt bekannte
-        # Ziel. Nur wenn noch nie eins bekannt war, bleibt das Ergebnis in
-        # der Zwischenablage liegen.
         elif zielfenster.einfuegen(self._terminal_ziel, text):
             satz += " Ergebnis eingefügt."
         else:
             satz += " Ergebnis liegt in der Zwischenablage."
+        if bruecke_nummer is not None:
+            satz += " Auch an Brücke hochgeladen."
         self._terminal_ziel = None
         self._status_zeigen(satz)
         # Abschluss eines #run#/#admin#-Auftrags - die eine Ansage am Ende.
