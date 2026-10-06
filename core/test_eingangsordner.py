@@ -431,14 +431,16 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
 
     def test_ohne_laeuft_dateien_passiert_nichts(self):
         self.assertEqual(eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB",
-                                                           lambda a: None), 0)
+                                                           lambda a: None), (0, 0))
 
     def test_passende_datei_wird_wieder_angenommen(self):
         self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB",
                                             "text": "#CODE#\nBlock 65"})
         empfangen = []
-        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", empfangen.append)
         self.assertEqual(anzahl, 1)
+        self.assertEqual(verworfen, 0)
         self.assertEqual(len(empfangen), 1)
         self.assertEqual(empfangen[0].inhalt, "Block 65")
         # Die Datei bleibt in laeuft/ liegen, bis core/fenster.py einen
@@ -450,8 +452,10 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht",
                                             "text": "x"})
         empfangen = []
-        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", empfangen.append)
         self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 0)
         self.assertEqual(empfangen, [])
         self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
 
@@ -463,22 +467,52 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self.assertEqual([a.inhalt for a in empfangen], ["erster", "zweiter"])
 
     def test_auftrag_spaeter_legt_datei_in_eingang_zurueck(self):
-        self._in_laeuft_anlegen("a.json", {"quelle": "lokal", "text": "#RUN#\nipconfig"})
+        self._in_laeuft_anlegen("a.json", {"quelle": "lokal", "text": "kein Markierungswort"})
 
         def ausfuehren(_auftrag):
             raise eingangsordner.AuftragSpaeter("Terminal belegt")
 
-        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", ausfuehren)
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", ausfuehren)
         self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 0)
         self.assertTrue((self._ordner / "a.json").exists())
         self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
 
     def test_kaputte_datei_landet_in_abgelehnt(self):
         pfad = eingangsordner.laeuft_ordner() / "a.json"
         pfad.write_text("kein json", encoding="utf-8")
-        anzahl = eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", lambda a: None)
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", lambda a: None)
         self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 0)
         self.assertTrue((eingangsordner.abgelehnt_ordner() / "a.json").exists())
+
+    def test_run_wird_nicht_automatisch_wiederholt(self):
+        """Der eigentliche Auslöser des Fehlers (Robert, 06.10.2026): ein
+        #RUN#-Befehl, der beim letzten Mal nicht fertig wurde, darf beim
+        naechsten CWB-Start nicht blind erneut laufen - er koennte schon
+        gewirkt oder ein eigenes Programm gestartet haben."""
+        self._in_laeuft_anlegen("a.json", {"quelle": "lokal",
+                                            "text": "#RUN#\nStart-Sleep 55"})
+        aufgerufen = []
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", aufgerufen.append)
+        self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 1)
+        self.assertEqual(aufgerufen, [], "Der Befehl wurde tatsaechlich erneut ausgefuehrt")
+        self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
+        ziel = eingangsordner.abgelehnt_ordner() / "a.json"
+        self.assertTrue(ziel.exists())
+
+    def test_admin_wird_nicht_automatisch_wiederholt(self):
+        self._in_laeuft_anlegen("a.json", {"quelle": "lokal", "text": "#ADMIN#\nipconfig"})
+        aufgerufen = []
+        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", aufgerufen.append)
+        self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 1)
+        self.assertEqual(aufgerufen, [])
 
 
 class WartendeDateienTest(EingangsordnerTestBasis):

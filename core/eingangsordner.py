@@ -440,7 +440,7 @@ def verwerfen(datei: Path, grund: str) -> None:
     _verschieben(datei, abgelehnt_ordner(), grund)
 
 
-def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
+def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> tuple[int, int]:
     """Block 70, Teil A: nimmt beim Öffnen eines Projekts alle Aufträge
     wieder auf, die beim letzten Mal nicht fertig wurden - ihre Datei liegt
     noch in laeuft/, weil `verarbeiten()` sie dort erst durch `abschliessen()`
@@ -449,17 +449,27 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
     (F9) ab: in beiden Fällen geht der im Fenster gemerkte Zustand (Faden,
     Warteschlange) verloren, die Datei in laeuft/ aber nicht.
 
+    #RUN#/#ADMIN# werden hier NICHT erneut angestoßen: anders als ein
+    #CODE#-Auftrag (der ohne Wirkung ist, solange er nicht erneut an Claude
+    geschickt wird) kann ein Shell-Befehl beim ersten Mal schon gewirkt haben
+    oder ein eigenes Programm gestartet haben, das noch läuft - ein
+    automatischer zweiter Lauf beim nächsten CWB-Start wäre blind gegenüber
+    beidem. Solche Dateien landen stattdessen in abgelehnt/, mit Begründung,
+    und müssen von Hand erneut gesendet werden.
+
     Älteste zuerst, wie `wartende_dateien()`. Nur Dateien, die zu
     `projekt_name` passen (`passend_fuer_projekt`), werden hier angefasst -
-    andere bleiben liegen, bis das richtige Fenster sie holt. Gibt die Zahl
-    der tatsächlich wieder angenommenen Aufträge zurück."""
+    andere bleiben liegen, bis das richtige Fenster sie holt. Gibt ein Paar
+    zurück: Zahl der tatsächlich wieder angenommenen Aufträge, Zahl der
+    deswegen verworfenen #RUN#/#ADMIN#-Aufträge."""
     sicherstellen()
     ordner = laeuft_ordner()
     if not ordner.is_dir():
-        return 0
+        return 0, 0
     dateien = sorted((p for p in ordner.glob("*.json") if p.is_file()),
                       key=lambda p: p.stat().st_mtime)
     anzahl = 0
+    verworfen = 0
     for pfad in dateien:
         if not passend_fuer_projekt(pfad, projekt_name):
             continue
@@ -468,6 +478,14 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
         except EingangsFehler as fehler:
             log.warning("Wieder aufgenommene Datei kaputt (%s): %s", pfad.name, fehler)
             _verschieben(pfad, abgelehnt_ordner(), str(fehler))
+            continue
+        if auftrag.art in ("run", "admin"):
+            grund = (f"#{auftrag.art.upper()}# wird nach einem Neustart nicht automatisch "
+                     "wiederholt, da er bereits gewirkt oder ein eigenes Programm gestartet "
+                     "haben könnte")
+            log.warning("Wieder aufgenommener Befehl verworfen (%s): %s", pfad.name, grund)
+            _verschieben(pfad, abgelehnt_ordner(), grund)
+            verworfen += 1
             continue
         try:
             ausfuehren(auftrag)
@@ -481,7 +499,7 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
             _verschieben(pfad, erledigt_ordner())
             continue
         anzahl += 1
-    return anzahl
+    return anzahl, verworfen
 
 
 class Eingangswaechter(QObject):

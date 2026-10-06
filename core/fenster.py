@@ -907,12 +907,26 @@ class Werkbank(QMainWindow):
         # echter Abschluss (abschliessen(), siehe _fertig/_terminal_fertig/
         # _bild_fertig) sie je nach erledigt/ verschiebt - verarbeiten()
         # selbst tut das nicht mehr.
-        wieder_aufgenommen = wieder_aufnehmen(
+        wieder_aufgenommen, befehle_verworfen = wieder_aufnehmen(
             markierung_erkennen, self.projekt.name, self._eingang_auftrag)
         if wieder_aufgenommen:
             satz = (f"{wieder_aufgenommen} Aufträge wieder aufgenommen."
                      if wieder_aufgenommen > 1 else "Ein Auftrag wieder aufgenommen.")
             log.info("Beim Start wieder aufgenommen: %d Auftraege", wieder_aufgenommen)
+            self._verlauf_anhaengen(satz, "hinweis")
+            self.sprecher.sprich(satz, art="hinweis")
+        if befehle_verworfen:
+            # #RUN#/#ADMIN# werden beim Wiederaufnehmen nie automatisch
+            # erneut angestossen (core/eingangsordner.py, wieder_aufnehmen) -
+            # sie koennten schon gewirkt oder ein eigenes Programm gestartet
+            # haben. Die Datei liegt jetzt in abgelehnt/, Robert entscheidet,
+            # ob er sie erneut schickt.
+            satz = (f"{befehle_verworfen} Befehle aus dem letzten Mal wurden NICHT "
+                     "automatisch wiederholt, bitte bei Bedarf erneut senden."
+                     if befehle_verworfen > 1 else
+                     "Ein Befehl aus dem letzten Mal wurde NICHT automatisch wiederholt, "
+                     "bitte bei Bedarf erneut senden.")
+            log.info("Beim Start verworfen: %d #RUN#/#ADMIN#-Befehle", befehle_verworfen)
             self._verlauf_anhaengen(satz, "hinweis")
             self.sprecher.sprich(satz, art="hinweis")
 
