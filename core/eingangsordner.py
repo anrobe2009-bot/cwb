@@ -37,6 +37,7 @@ jedes offene Fenster holen.
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -69,6 +70,25 @@ IN_BEARBEITUNG_UNTERORDNER = ".in_bearbeitung"
 LAEUFT_UNTERORDNER = "laeuft"
 
 QUELLE_LOKAL = "lokal"
+
+# Bleibt eine Datei dauerhaft zurueckgestellt (z.B. weil das Terminal durch
+# einen langen Fremdbefehl belegt bleibt), wuerde jeder Blick des Waechters
+# (alle PRUEF_ABSTAND_MS) eine neue Logzeile erzeugen - das flutet die
+# rotierenden Logdateien binnen einer Stunde und verdraengt die eigentliche
+# Fehlerursache, bevor sie gelesen werden kann. Darum wird dieselbe Meldung
+# je Datei hoechstens alle MELDUNG_ABSTAND_S erneut geschrieben; der
+# eigentliche Versuch (verarbeiten/wieder_aufnehmen) laeuft unveraendert im
+# alten Takt weiter.
+MELDUNG_ABSTAND_S = 60.0
+_letzte_meldung: dict[str, float] = {}
+
+
+def _zurueckstellung_melden(name: str, grund) -> None:
+    jetzt = time.monotonic()
+    if jetzt - _letzte_meldung.get(name, 0.0) < MELDUNG_ABSTAND_S:
+        return
+    _letzte_meldung[name] = jetzt
+    log.info("Eingangsdatei zurückgestellt (%s): %s", name, grund)
 
 
 def erledigt_ordner() -> Path:
@@ -388,7 +408,7 @@ def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
     try:
         ausfuehren(auftrag)
     except AuftragSpaeter as grund:
-        log.info("Eingangsdatei zurückgestellt (%s): %s", pfad.name, grund)
+        _zurueckstellung_melden(pfad.name, grund)
         _zurueckstellen(laeuft)
     except Exception as fehler:  # noqa: BLE001
         log.exception("Auftrag aus dem Eingangsordner gescheitert (%s): %s", pfad.name, fehler)
@@ -452,7 +472,7 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> int:
         try:
             ausfuehren(auftrag)
         except AuftragSpaeter as grund:
-            log.info("Wieder aufgenommene Datei zurückgestellt (%s): %s", pfad.name, grund)
+            _zurueckstellung_melden(pfad.name, grund)
             _zurueckstellen(pfad)
             continue
         except Exception as fehler:  # noqa: BLE001

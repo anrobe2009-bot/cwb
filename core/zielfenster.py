@@ -71,9 +71,12 @@ _u32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _u32.BringWindowToTop.argtypes = [wintypes.HWND]
 _u32.SetActiveWindow.argtypes = [wintypes.HWND]
 _u32.SetActiveWindow.restype = wintypes.HWND
-_u32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-_u32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 _u32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_u32.SendMessageTimeoutW.argtypes = [
+    wintypes.HWND, wintypes.UINT, wintypes.WPARAM, ctypes.c_void_p,
+    wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t),
+]
+_u32.SendMessageTimeoutW.restype = ctypes.c_size_t
 _u32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 _u32.GetWindowThreadProcessId.restype = wintypes.DWORD
 _u32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
@@ -89,6 +92,19 @@ VK_UMSCHALT = 0x10
 VK_ALT = 0x12
 VK_FENSTER_LINKS = 0x5B
 VK_FENSTER_RECHTS = 0x5C
+
+WM_GETTEXT = 0x000D
+SMTO_ABORTIFHUNG = 0x0002
+# GetWindowTextW schickt fuer ein fremdes Fenster intern WM_GETTEXT per
+# SendMessage, ohne jedes Zeitlimit - antwortet das Zielfenster nicht (z.B.
+# eine Java/Kotlin-Oberflaeche waehrend des Starts oder mitten in einem
+# Build, der die CPU voll auslastet), blockiert der aufrufende Faden
+# unbegrenzt. Das traf hier sowohl den Beobachter-Faden als auch, ueber
+# zielfenster.einfuegen(), den Qt-GUI-Faden selbst - CWB wirkte dann als
+# haenge es. SendMessageTimeoutW mit SMTO_ABORTIFHUNG begrenzt das auf
+# TITEL_ZEITLIMIT_MS.
+TITEL_ZEITLIMIT_MS = 300
+TITEL_PUFFERGROESSE = 512
 
 TASTE_LOS = 0x0002
 TASTE_SCANCODE_ERWEITERT = 0x0001
@@ -147,15 +163,18 @@ def _pid_von(hwnd) -> int:
 
 
 def _titel_von(hwnd) -> str:
+    puffer = ctypes.create_unicode_buffer(TITEL_PUFFERGROESSE)
+    ergebnis = ctypes.c_size_t(0)
     try:
-        laenge = _u32.GetWindowTextLengthW(hwnd)
-        if laenge <= 0:
-            return ""
-        puffer = ctypes.create_unicode_buffer(laenge + 1)
-        _u32.GetWindowTextW(hwnd, puffer, laenge + 1)
-        return puffer.value
+        erfolg = _u32.SendMessageTimeoutW(
+            hwnd, WM_GETTEXT, TITEL_PUFFERGROESSE, ctypes.cast(puffer, ctypes.c_void_p),
+            SMTO_ABORTIFHUNG, TITEL_ZEITLIMIT_MS, ctypes.byref(ergebnis),
+        )
     except OSError:
         return ""
+    if not erfolg:
+        return ""
+    return puffer.value
 
 
 def _klasse_von(hwnd) -> str:
