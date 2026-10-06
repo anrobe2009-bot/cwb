@@ -14,6 +14,7 @@ import functools
 import logging
 import re
 import sys
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -497,6 +498,19 @@ def unbehandelte_ausnahme(typ, wert, spur) -> None:
         sys.__excepthook__(typ, wert, spur)
         return
     log.error("Unbehandelte Ausnahme", exc_info=(typ, wert, spur))
+
+
+def unbehandelte_ausnahme_im_faden(args) -> None:
+    """Dasselbe letzte Netz wie `unbehandelte_ausnahme`, aber fuer ungefangene
+    Ausnahmen in threading.Thread-Faeden: Pythons Vorgabe dafuer ist
+    threading.excepthook, nicht sys.excepthook - ohne eigene Zuweisung landet
+    so eine Ausnahme weiterhin auf dem unsichtbaren stderr von pythonw und
+    verschwindet spurlos, waehrend der betroffene Faden lautlos stirbt. Wird
+    in main() als threading.excepthook gesetzt."""
+    log.error(
+        "Unbehandelte Ausnahme im Faden %s", args.thread.name if args.thread else "?",
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+    )
 
 
 def slot_geschuetzt(funktion):

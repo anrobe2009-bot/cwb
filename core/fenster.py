@@ -98,6 +98,7 @@ try:
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
+        unbehandelte_ausnahme_im_faden,
         verlauf_stil_lesen,
     )
     from .kopfzeile import (
@@ -162,6 +163,7 @@ except ImportError:
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
         unbehandelte_ausnahme,
+        unbehandelte_ausnahme_im_faden,
         verlauf_stil_lesen,
     )
     from kopfzeile import (
@@ -1455,6 +1457,7 @@ class Werkbank(QMainWindow):
         # Satz). Der volle Wortlaut steht in Statuszeile und Ausgabefeld.
         self.sprecher.melde("wartet", kurz_satz, sprechen=True, art="frage")
 
+    @slot_geschuetzt
     def _frage_beantworten(self, ja: bool) -> None:
         self.frage_offen = False
         self._verlauf_anhaengen("Freigegeben." if ja else "Abgelehnt.", "hinweis")
@@ -3863,8 +3866,13 @@ def _admin_worker_starten_und_beenden() -> None:
 
 def main() -> None:
     # Muss vor allem anderen stehen: ab hier landet jeder Absturz im Log
-    # statt auf dem unsichtbaren stderr von pythonw.
+    # statt auf dem unsichtbaren stderr von pythonw. sys.excepthook faengt
+    # nur den Hauptfaden - threading.excepthook ist der eigene Zustaendige
+    # fuer alle ueber threading.Thread gestarteten Hintergrundfaeden und war
+    # bisher nicht gesetzt, Python schrieb dort mit seiner eigenen Vorgabe
+    # weiterhin auf das unsichtbare stderr.
     sys.excepthook = unbehandelte_ausnahme
+    threading.excepthook = unbehandelte_ausnahme_im_faden
 
     # Steht bei jedem Start im Log, damit bei einem Fehlerbericht klar ist,
     # welche Fassung lief.
