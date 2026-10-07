@@ -1093,12 +1093,23 @@ class EinstellungenFenster(QDialog):
             gruppe,
             "sparmodus_wochenkontingent",
             "Sparmodus bei knappem Wochenkontingent",
-            "Meldet das Claude Agent SDK das Wochenkontingent als knapp "
-            "(allowed_warning), laufen nur noch Aufträge mit der Zeile "
-            "„Dringend: ja“ sofort; alle anderen warten, bis die Warnung "
-            "endet. Steht der Schalter aus, laufen alle Aufträge wie "
-            "gewohnt durch. Ab Werk an.",
+            "Erreicht die Wochenauslastung laut Claude Agent SDK die unten "
+            "eingestellte Schwelle, laufen nur noch Aufträge mit der Zeile "
+            "„Dringend: ja“ sofort; alle anderen warten, bis die Auslastung "
+            "wieder darunter liegt. Steht der Schalter aus, laufen alle "
+            "Aufträge wie gewohnt durch. Ab Werk an.",
             bool(werte.get("sparmodus_wochenkontingent", True)),
+        )
+        self.sparmodus_schwelle_prozent = self._grenze_zahl(
+            gruppe,
+            "sparmodus_schwelle_prozent",
+            "Schwelle für Sparmodus",
+            "Ab dieser Wochenauslastung (siehe Kontingent-Anzeige in der "
+            "Kopfzeile) hält der Sparmodus neue, nicht dringende Aufträge "
+            "zurück - wirkt nur, wenn der Schalter oben an ist. Ab Werk "
+            "95 %.",
+            50, 99, " %",
+            int(werte.get("sparmodus_schwelle_prozent", 95)),
         )
 
         self._verbrauchsliste_anlegen(gruppe)

@@ -455,47 +455,142 @@ WOCHENFENSTER_TYPEN = {"seven_day", "seven_day_opus", "seven_day_sonnet"}
 
 def _limit_eintrag(info: Any) -> dict[str, Any] | None:
     """Macht aus einer RateLimitInfo (oder ihrer Nachbildung in Tests,
-    core/test_kontingent.py) ein einfaches dict mit den drei gebrauchten
-    Feldern - None ohne Meldung."""
+    core/test_kontingent.py) ein einfaches dict mit den vier gebrauchten
+    Feldern - None ohne Meldung. "utilization" (0.0-1.0) ist die Grundlage
+    der Prozentanzeige (Block 36); das SDK schickt sie mit jeder Meldung."""
     if info is None:
         return None
     return {
         "status": getattr(info, "status", None),
         "resets_at": getattr(info, "resets_at", None),
         "rate_limit_type": getattr(info, "rate_limit_type", None),
+        "utilization": getattr(info, "utilization", None),
     }
 
 
-def _sparmodus_erforderlich(limit_woche: dict | None) -> bool:
-    """Block 77, Punkt 3: wahr, wenn die zuletzt gemeldete Meldung zum
-    Wochenfenster status="allowed_warning" traegt - das Wochenkontingent wird
-    knapp, ohne schon erschoepft zu sein (status="rejected" meldet weiterhin
-    _kontingent_aus_limit, dort laeuft der laufende Auftrag auf eine Pause)."""
-    return bool(limit_woche) and limit_woche.get("status") == "allowed_warning"
+# Block 36 (Kontingent-Anzeige): Farbstufen fuer Kopfzeile und F2 - unter
+# KONTINGENT_FARBE_WARNUNG ruhig ("normal"), darueber gelblich/orange
+# ("warnung"), ab KONTINGENT_FARBE_KRITISCH rot ("kritisch"). Fest verdrahtet,
+# anders als die in F12 -> Verhalten einstellbare Sparmodus-Schwelle (Standard
+# ebenfalls 95 %, siehe Sitzung.sparmodus_aktiv) - das hier ist reine
+# Darstellung, nicht konfigurierbar.
+KONTINGENT_FARBE_WARNUNG = 90
+KONTINGENT_FARBE_KRITISCH = 95
+
+# Kurznamen der Wochentage fuer die Freigabezeit des Wochenfensters
+# ("Do 11:00") - das Fuenf-Stunden-Fenster braucht keinen Wochentag, es
+# setzt ohnehin binnen Stunden zurueck.
+WOCHENTAGE_KURZ = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+_KONTINGENT_RANG = {"normal": 0, "warnung": 1, "kritisch": 2, "erschoepft": 3}
+
+
+def _kontingent_prozent(eintrag: dict | None) -> int | None:
+    """Rundet das Feld "utilization" (0.0-1.0) einer RateLimitEvent-Meldung
+    auf ganze Prozent - None, wenn fuer dieses Fenster in der laufenden
+    Sitzung noch keine Meldung da war. Das SDK schickt eine Meldung erst,
+    sobald eine interne Warnschwelle erreicht ist (Block 36: im Log liefen
+    seit 14:17 laufend seven_day-Meldungen mit 0.76-0.80) - vorher gibt es
+    schlicht keine Zahl, nie eine erfundene."""
+    if not eintrag:
+        return None
+    utilization = eintrag.get("utilization")
+    return None if utilization is None else round(utilization * 100)
+
+
+def _kontingent_uhrzeit(resets_at: float | int | None, mit_wochentag: bool) -> str:
+    """'Do 11:00' (Wochenfenster) bzw. '11:00' (Fuenf-Stunden-Fenster) -
+    leer ohne bekannte Freigabezeit."""
+    if not resets_at:
+        return ""
+    zeitpunkt = datetime.fromtimestamp(resets_at)
+    if mit_wochentag:
+        return f"{WOCHENTAGE_KURZ[zeitpunkt.weekday()]} {zeitpunkt:%H:%M}"
+    return f"{zeitpunkt:%H:%M}"
+
+
+def _kontingent_fensteranzeige(bezeichnung: str, eintrag: dict | None,
+                                mit_wochentag: bool) -> str | None:
+    """Baut 'Woche 80 % · zurück Do 11:00' aus einer gemerkten RateLimit-
+    Meldung - None, wenn fuer dieses Fenster noch keine Prozentzahl vorliegt
+    (siehe _kontingent_prozent)."""
+    prozent = _kontingent_prozent(eintrag)
+    if prozent is None:
+        return None
+    text = f"{bezeichnung} {prozent} %"
+    uhrzeit = _kontingent_uhrzeit(eintrag.get("resets_at"), mit_wochentag)
+    return f"{text} · zurück {uhrzeit}" if uhrzeit else text
+
+
+def _kontingent_stufe_aus_prozent(prozent: int | None) -> str:
+    """Block 36, Punkt 2: ordnet eine Prozentzahl einer der drei Farbstufen
+    zu - None (noch keine Meldung) gilt als "normal", erfindet also nie eine
+    Warnung."""
+    if prozent is None:
+        return "normal"
+    if prozent >= KONTINGENT_FARBE_KRITISCH:
+        return "kritisch"
+    if prozent >= KONTINGENT_FARBE_WARNUNG:
+        return "warnung"
+    return "normal"
+
+
+def _sparmodus_erforderlich(limit_woche: dict | None, schwelle_prozent: int) -> bool:
+    """Block 36, Punkt 4: wahr, wenn die zuletzt gemeldete Wochenauslastung
+    (Feld "utilization") die in F12 -> Verhalten eingestellte Schwelle
+    erreicht oder ueberschreitet. Ersetzt die fruehere reine Statuspruefung
+    (status=="allowed_warning", SDK-intern unveraenderlich) durch einen von
+    Robert einstellbaren Prozentwert; ohne bekannte Prozentzahl nie aktiv."""
+    prozent = _kontingent_prozent(limit_woche)
+    return prozent is not None and prozent >= schwelle_prozent
 
 
 def _kontingent_zustand_berechnen(limit_funf_stunden: dict | None,
                                    limit_woche: dict | None) -> dict:
-    """Block 77, Punkt 4: baut aus den zuletzt gemeldeten RateLimitEvent-
-    Meldungen beider Fenster einen kurzen Zustand fuer Kopfzeile und F2 -
-    "normal" (keine Meldung oder keine davon warnt/ist erschoepft), "knapp"
-    (mindestens eine status="allowed_warning") oder "erschoepft" (mindestens
-    eine status="rejected", mit der spaetesten bekannten Freigabezeit). Ohne
-    jede Meldung (beide None) bleibt der Text leer - das SDK hat in dieser
-    Sitzung noch nichts gemeldet, siehe Docstring von Sitzung.kontingent_zustand."""
-    eintraege = [e for e in (limit_funf_stunden, limit_woche) if e]
-    if not eintraege:
-        return {"stufe": "normal", "text": ""}
-    erschoepft = [e for e in eintraege if e.get("status") == "rejected"]
-    if erschoepft:
-        zeiten = [e.get("resets_at") for e in erschoepft if e.get("resets_at")]
-        if zeiten:
-            uhrzeit = datetime.fromtimestamp(max(zeiten)).strftime("%H:%M")
-            return {"stufe": "erschoepft", "text": f"Kontingent erschöpft bis {uhrzeit} Uhr."}
-        return {"stufe": "erschoepft", "text": "Kontingent erschöpft."}
-    if any(e.get("status") == "allowed_warning" for e in eintraege):
-        return {"stufe": "knapp", "text": "Kontingent knapp."}
-    return {"stufe": "normal", "text": "Kontingent normal."}
+    """Block 36: baut aus den zuletzt gemeldeten RateLimitEvent-Meldungen
+    beider Fenster die Kontingent-Anzeige fuer Kopfzeile und F2 - mit echten
+    Prozentzahlen (Feld "utilization" des Agent-SDK), nicht nur dem groben
+    Status. "woche_anzeige" ist nie leer: ohne bekannte Prozentzahl steht
+    dort "Woche: unter Warnschwelle" statt einer erfundenen Zahl.
+    "sitzung_anzeige" ist None, bis das Fuenf-Stunden-Fenster zum ersten Mal
+    gemeldet hat - dann erst weiss CWB ueberhaupt etwas darueber.
+    status="rejected" (echte Kontingent-Pause, core/fenster.py
+    _kontingent_pause_behandeln) zeigt sich als Stufe "erschoepft", unabhaengig
+    von der Prozentzahl."""
+    woche_prozent = _kontingent_prozent(limit_woche)
+    sitzung_prozent = _kontingent_prozent(limit_funf_stunden)
+    stufe = "normal"
+
+    if limit_woche and limit_woche.get("status") == "rejected":
+        uhrzeit = _kontingent_uhrzeit(limit_woche.get("resets_at"), True)
+        woche_anzeige = f"Woche erschöpft, zurück {uhrzeit}" if uhrzeit else "Woche erschöpft"
+        stufe = "erschoepft"
+    elif woche_prozent is None:
+        woche_anzeige = "Woche: unter Warnschwelle"
+    else:
+        woche_anzeige = _kontingent_fensteranzeige("Woche", limit_woche, True)
+        stufe = _kontingent_stufe_aus_prozent(woche_prozent)
+
+    sitzung_anzeige = None
+    if limit_funf_stunden and limit_funf_stunden.get("status") == "rejected":
+        uhrzeit = _kontingent_uhrzeit(limit_funf_stunden.get("resets_at"), False)
+        sitzung_anzeige = f"Sitzung erschöpft, zurück {uhrzeit}" if uhrzeit else "Sitzung erschöpft"
+        stufe = "erschoepft"
+    elif sitzung_prozent is not None:
+        sitzung_anzeige = _kontingent_fensteranzeige("Sitzung", limit_funf_stunden, False)
+        stufe_sitzung = _kontingent_stufe_aus_prozent(sitzung_prozent)
+        if _KONTINGENT_RANG[stufe_sitzung] > _KONTINGENT_RANG[stufe]:
+            stufe = stufe_sitzung
+
+    satz = woche_anzeige if sitzung_anzeige is None else f"{woche_anzeige}; {sitzung_anzeige}"
+
+    return {
+        "stufe": stufe,
+        "text": f"{satz}.",
+        "woche_anzeige": woche_anzeige,
+        "sitzung_anzeige": sitzung_anzeige,
+        "woche_prozent": woche_prozent,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -622,11 +717,12 @@ class Sitzung:
         ohne jede bisherige RateLimitEvent-Meldung dieser Sitzung."""
         return _kontingent_zustand_berechnen(self.limit_funf_stunden, self.limit_woche)
 
-    def sparmodus_aktiv(self) -> bool:
-        """Block 77, Punkt 3: wahr, wenn das Wochenkontingent laut der
-        zuletzt gemeldeten RateLimitEvent-Meldung knapp wird
-        (status="allowed_warning")."""
-        return _sparmodus_erforderlich(self.limit_woche)
+    def sparmodus_aktiv(self, schwelle_prozent: int = 95) -> bool:
+        """Block 36, Punkt 4: wahr, wenn die zuletzt gemeldete
+        Wochenauslastung (Feld "utilization") `schwelle_prozent` erreicht
+        oder ueberschreitet - der Wert kommt aus F12 -> Verhalten
+        ("sparmodus_schwelle_prozent", Standard 95)."""
+        return _sparmodus_erforderlich(self.limit_woche, schwelle_prozent)
 
     def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
         """Haelt die Tokenwerte des letzten Auftrags fest und summiert die Sitzung.

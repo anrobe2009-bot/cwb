@@ -783,6 +783,13 @@ class Werkbank(QMainWindow):
         # erst eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
         self._sparmodus_aktiv = False
         self._sparmodus_wartend: list[tuple] = []
+        # Block 36: je eine einmalige Ansage beim Ueberschreiten von 90 %
+        # bzw. 95 % Wochenauslastung - zurueckgesetzt, sobald die Auslastung
+        # wieder unter 90 % faellt (neue Woche), damit eine spaetere
+        # Ueberschreitung erneut angesagt wird. Siehe
+        # _kontingent_anzeige_aktualisieren().
+        self._kontingent_warnung_90_gegeben = False
+        self._kontingent_warnung_95_gegeben = False
         # Auftraege, die abgeschickt wurden, bevor der Arbeitsfaden stand.
         # Sie gehen nicht verloren, sondern laufen los, sobald er da ist.
         self._wartende_auftraege: list[tuple[str, list[Path]]] = []
@@ -2102,27 +2109,46 @@ class Werkbank(QMainWindow):
         self._leitstand_nach_auftrag(bilanz, block_nummer, satz)
 
     def _kontingent_anzeige_aktualisieren(self) -> None:
-        """Block 77, Punkte 3 und 4: liest nach jedem beendeten Auftrag die
-        zuletzt gemeldeten RateLimitEvent-Meldungen der Sitzung
+        """Block 36 (vorher 77, Punkte 3 und 4): liest nach jedem beendeten
+        Auftrag die zuletzt gemeldeten RateLimitEvent-Meldungen der Sitzung
         (core/sitzung.py, `kontingent_zustand`/`sparmodus_aktiv`) und zieht
-        daraus zwei Dinge: den kurzen Kontingent-Zustand fuer die Kopfzeile
-        (Punkt 4, F2 nennt denselben Zustand ueber `Sitzung.stand()`) sowie,
-        sofern F12 -> Verhalten -> "Sparmodus bei knappem Wochenkontingent"
-        an ist (Ab Werk an), die Sparmodus-Umschaltung (Punkt 3): beim
-        Eintritt eine einmalige Ansage, beim Austritt laufen die
-        zurueckgestellten Auftraege (`self._sparmodus_wartend`) wieder in
-        die normale Warteschlange ein. Ohne Sitzung (ganz am Anfang,
-        Verbindung steht noch nicht) geschieht nichts."""
+        daraus drei Dinge: die Kontingent-Anzeige mit echten Prozentzahlen
+        fuer die Kopfzeile (F2 nennt denselben Zustand ueber
+        `Sitzung.stand()`), die einmalige Ansage beim Ueberschreiten von
+        90 % bzw. 95 % Wochenauslastung sowie, sofern F12 -> Verhalten ->
+        "Sparmodus bei knappem Wochenkontingent" an ist (Ab Werk an), die
+        Sparmodus-Umschaltung anhand der dort einstellbaren Prozent-Schwelle
+        (Ab Werk 95 %): beim Eintritt eine einmalige Ansage, beim Austritt
+        laufen die zurueckgestellten Auftraege (`self._sparmodus_wartend`)
+        wieder in die normale Warteschlange ein. Ohne Sitzung (ganz am
+        Anfang, Verbindung steht noch nicht) geschieht nichts."""
         faden = getattr(self, "faden", None)
         sitzung = getattr(faden, "sitzung", None) if faden else None
         if sitzung is None:
             return
         try:
             zustand = sitzung.kontingent_zustand()
-            self.ausgabekopf.kontingent_zeigen(zustand.get("stufe", "normal"),
-                                                zustand.get("text", ""))
-            schalter_an = einstellungen_lesen().get("sparmodus_wochenkontingent", True)
-            soll_aktiv = schalter_an and sitzung.sparmodus_aktiv()
+            self.ausgabekopf.kontingent_zeigen(
+                zustand.get("stufe", "normal"), zustand.get("text", ""),
+                zustand.get("woche_anzeige", ""), zustand.get("sitzung_anzeige"),
+            )
+
+            woche_prozent = zustand.get("woche_prozent")
+            if woche_prozent is not None:
+                if woche_prozent >= 90 and not self._kontingent_warnung_90_gegeben:
+                    self._kontingent_warnung_90_gegeben = True
+                    self.sprecher.sprich("Wochenkontingent 90 Prozent.", art="immer")
+                if woche_prozent >= 95 and not self._kontingent_warnung_95_gegeben:
+                    self._kontingent_warnung_95_gegeben = True
+                    self.sprecher.sprich("Wochenkontingent 95 Prozent.", art="immer")
+                if woche_prozent < 90:
+                    self._kontingent_warnung_90_gegeben = False
+                    self._kontingent_warnung_95_gegeben = False
+
+            einstellungen = einstellungen_lesen()
+            schalter_an = einstellungen.get("sparmodus_wochenkontingent", True)
+            schwelle_prozent = int(einstellungen.get("sparmodus_schwelle_prozent", 95))
+            soll_aktiv = schalter_an and sitzung.sparmodus_aktiv(schwelle_prozent)
             if soll_aktiv and not self._sparmodus_aktiv:
                 self._sparmodus_aktiv = True
                 log.info("Sparmodus eingeschaltet: Wochenkontingent wird knapp")

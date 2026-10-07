@@ -159,6 +159,7 @@ QToolTip {
 #brueckenanzeige,
 #leitstandanzeige,
 #kontingentanzeige,
+#kontingentsitzunganzeige,
 #eingangsanzeige {
     background-color: #171b22;
     color: #c7d0e0;
@@ -166,6 +167,26 @@ QToolTip {
     padding: 0.25em 0.6em;
     border: 2px solid #333a47;
     border-radius: 6px;
+}
+
+/* Kontingent-Anzeige (Block 36): Farbe als zusaetzliches Signal zur echten
+   Auslastung - Python setzt die Eigenschaft "kontingentstufe"
+   (core/kopfzeile.py, _kontingent_stufe_setzen) aus der vom Agent-SDK
+   gemeldeten Auslastung (Feld "utilization"). Unter 90 % bleibt die
+   neutrale Farbe oben; 90-95 % gelb/orange, ab 95 % sowie bei einer echten
+   Kontingent-Pause (status=rejected) rot. */
+#kontingentanzeige[kontingentstufe="warnung"],
+#kontingentsitzunganzeige[kontingentstufe="warnung"] {
+    color: #e0b36b;
+    border-color: #8a6a2f;
+}
+
+#kontingentanzeige[kontingentstufe="kritisch"],
+#kontingentsitzunganzeige[kontingentstufe="kritisch"],
+#kontingentanzeige[kontingentstufe="erschoepft"],
+#kontingentsitzunganzeige[kontingentstufe="erschoepft"] {
+    color: #ff8f8f;
+    border-color: #8a3030;
 }
 
 /* Warteanzeige: wie viele Auftraege hinter dem laufenden stehen. Sie faellt

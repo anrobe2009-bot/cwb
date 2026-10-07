@@ -36,11 +36,12 @@ except ImportError:
 @dataclass
 class FalscheRateLimitInfo:
     """Bildet claude_agent_sdk.RateLimitInfo nach, ohne das SDK zu
-    importieren - dieselben Felder, die sitzung._kontingent_aus_limit
-    tatsaechlich liest."""
+    importieren - dieselben Felder, die sitzung._kontingent_aus_limit und
+    sitzung._limit_eintrag tatsaechlich lesen."""
     status: str
     resets_at: int | None = None
     rate_limit_type: str | None = None
+    utilization: float | None = None
 
 
 class KontingentEntscheidungTest(unittest.TestCase):
@@ -117,59 +118,146 @@ class KontingentAusLimitTest(unittest.TestCase):
         self.assertIsNone(ergebnis["rate_limit_type"])
 
 
+class LimitEintragTest(unittest.TestCase):
+    """Block 36: core/sitzung.py, _limit_eintrag() - muss seit Block 36
+    zusaetzlich "utilization" uebernehmen, nicht nur Status/Freigabe/Typ."""
+
+    def test_keine_meldung_ergibt_none(self):
+        self.assertIsNone(sitzung._limit_eintrag(None))
+
+    def test_utilization_wird_uebernommen(self):
+        info = FalscheRateLimitInfo(status="allowed_warning", utilization=0.8)
+        ergebnis = sitzung._limit_eintrag(info)
+        self.assertEqual(ergebnis["utilization"], 0.8)
+        self.assertEqual(ergebnis["status"], "allowed_warning")
+
+
+class KontingentProzentTest(unittest.TestCase):
+    """core/sitzung.py, _kontingent_prozent() - rundet "utilization" auf
+    ganze Prozent, ohne je eine Zahl zu erfinden."""
+
+    def test_ohne_eintrag_kein_wert(self):
+        self.assertIsNone(sitzung._kontingent_prozent(None))
+
+    def test_ohne_utilization_kein_wert(self):
+        self.assertIsNone(sitzung._kontingent_prozent({"status": "allowed_warning"}))
+
+    def test_utilization_wird_gerundet(self):
+        self.assertEqual(sitzung._kontingent_prozent({"utilization": 0.764}), 76)
+        self.assertEqual(sitzung._kontingent_prozent({"utilization": 0.766}), 77)
+
+
 class SparmodusErforderlichTest(unittest.TestCase):
-    """Block 77, Punkt 3: core/sitzung.py, _sparmodus_erforderlich()."""
+    """Block 36, Punkt 4: core/sitzung.py, _sparmodus_erforderlich() - seit
+    Block 36 ein einstellbarer Prozentwert statt der reinen Statuspruefung
+    (status=="allowed_warning")."""
 
     def test_keine_meldung_kein_sparmodus(self):
-        self.assertFalse(sitzung._sparmodus_erforderlich(None))
+        self.assertFalse(sitzung._sparmodus_erforderlich(None, 95))
 
-    def test_allowed_kein_sparmodus(self):
-        self.assertFalse(sitzung._sparmodus_erforderlich({"status": "allowed"}))
+    def test_unter_schwelle_kein_sparmodus(self):
+        self.assertFalse(sitzung._sparmodus_erforderlich({"utilization": 0.80}, 95))
 
-    def test_allowed_warning_loest_sparmodus_aus(self):
-        self.assertTrue(sitzung._sparmodus_erforderlich({"status": "allowed_warning"}))
+    def test_ab_schwelle_loest_sparmodus_aus(self):
+        self.assertTrue(sitzung._sparmodus_erforderlich({"utilization": 0.95}, 95))
 
-    def test_rejected_ist_kein_sparmodus_sondern_kontingent_pause(self):
-        self.assertFalse(sitzung._sparmodus_erforderlich({"status": "rejected"}))
+    def test_niedrigere_schwelle_greift_frueher(self):
+        self.assertTrue(sitzung._sparmodus_erforderlich({"utilization": 0.80}, 75))
+
+    def test_rejected_ohne_utilization_kein_sparmodus(self):
+        # status=rejected laeuft ueber _kontingent_aus_limit auf eine echte
+        # Pause - ohne bekannte Prozentzahl loest es hier nichts aus.
+        self.assertFalse(sitzung._sparmodus_erforderlich({"status": "rejected"}, 95))
+
+
+class KontingentStufeAusProzentTest(unittest.TestCase):
+    """Block 36, Punkt 2: core/sitzung.py, _kontingent_stufe_aus_prozent() -
+    die Farbstufen fuer die Kopfzeile (unter 90 ruhig, 90-95 warnend, ab 95
+    kritisch)."""
+
+    def test_kein_wert_ist_normal(self):
+        self.assertEqual(sitzung._kontingent_stufe_aus_prozent(None), "normal")
+
+    def test_89_ist_normal(self):
+        self.assertEqual(sitzung._kontingent_stufe_aus_prozent(89), "normal")
+
+    def test_90_ist_warnung(self):
+        self.assertEqual(sitzung._kontingent_stufe_aus_prozent(90), "warnung")
+
+    def test_94_ist_warnung(self):
+        self.assertEqual(sitzung._kontingent_stufe_aus_prozent(94), "warnung")
+
+    def test_95_ist_kritisch(self):
+        self.assertEqual(sitzung._kontingent_stufe_aus_prozent(95), "kritisch")
 
 
 class KontingentZustandBerechnenTest(unittest.TestCase):
-    """Block 77, Punkt 4: core/sitzung.py, _kontingent_zustand_berechnen()."""
+    """Block 36: core/sitzung.py, _kontingent_zustand_berechnen() - jetzt
+    mit echten Prozentzahlen statt nur dem groben Status."""
 
-    def test_ohne_jede_meldung_ist_normal_mit_leerem_text(self):
+    def test_ohne_jede_meldung_zeigt_unter_warnschwelle(self):
         ergebnis = sitzung._kontingent_zustand_berechnen(None, None)
         self.assertEqual(ergebnis["stufe"], "normal")
-        self.assertEqual(ergebnis["text"], "")
+        self.assertEqual(ergebnis["woche_anzeige"], "Woche: unter Warnschwelle")
+        self.assertIsNone(ergebnis["sitzung_anzeige"])
+        self.assertIsNone(ergebnis["woche_prozent"])
 
-    def test_beide_allowed_ist_normal(self):
+    def test_woche_unter_90_ist_normal(self):
         ergebnis = sitzung._kontingent_zustand_berechnen(
-            {"status": "allowed"}, {"status": "allowed"})
+            None, {"status": "allowed", "utilization": 0.80})
         self.assertEqual(ergebnis["stufe"], "normal")
-        self.assertIn("normal", ergebnis["text"].lower())
+        self.assertEqual(ergebnis["woche_prozent"], 80)
+        self.assertIn("Woche 80 %", ergebnis["woche_anzeige"])
 
-    def test_woche_knapp_ergibt_knapp(self):
+    def test_woche_ab_90_ist_warnung(self):
         ergebnis = sitzung._kontingent_zustand_berechnen(
-            {"status": "allowed"}, {"status": "allowed_warning"})
-        self.assertEqual(ergebnis["stufe"], "knapp")
-        self.assertIn("knapp", ergebnis["text"].lower())
+            None, {"status": "allowed_warning", "utilization": 0.92})
+        self.assertEqual(ergebnis["stufe"], "warnung")
 
-    def test_funf_stunden_knapp_ergibt_ebenfalls_knapp(self):
+    def test_woche_ab_95_ist_kritisch(self):
         ergebnis = sitzung._kontingent_zustand_berechnen(
-            {"status": "allowed_warning"}, None)
-        self.assertEqual(ergebnis["stufe"], "knapp")
+            None, {"status": "allowed_warning", "utilization": 0.97})
+        self.assertEqual(ergebnis["stufe"], "kritisch")
 
-    def test_rejected_geht_vor_knapp_und_nennt_uhrzeit(self):
-        freigabe = datetime(2026, 10, 1, 18, 30).timestamp()
+    def test_woche_zeigt_wochentag_und_uhrzeit(self):
+        freigabe = datetime(2026, 10, 8, 11, 0)  # Donnerstag
         ergebnis = sitzung._kontingent_zustand_berechnen(
-            {"status": "allowed_warning"}, {"status": "rejected", "resets_at": freigabe})
+            None, {"status": "allowed_warning", "utilization": 0.80,
+                   "resets_at": freigabe.timestamp()})
+        self.assertIn("Do 11:00", ergebnis["woche_anzeige"])
+
+    def test_sitzung_bleibt_verborgen_ohne_meldung(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            None, {"status": "allowed_warning", "utilization": 0.80})
+        self.assertIsNone(ergebnis["sitzung_anzeige"])
+
+    def test_sitzung_erscheint_nach_erster_meldung(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed_warning", "utilization": 0.76,
+             "resets_at": datetime(2026, 10, 7, 18, 10).timestamp()},
+            {"status": "allowed_warning", "utilization": 0.80})
+        self.assertIn("Sitzung 76 %", ergebnis["sitzung_anzeige"])
+        self.assertIn("18:10", ergebnis["sitzung_anzeige"])
+
+    def test_hoehere_sitzungsauslastung_bestimmt_die_stufe(self):
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed_warning", "utilization": 0.96},
+            {"status": "allowed", "utilization": 0.50})
+        self.assertEqual(ergebnis["stufe"], "kritisch")
+
+    def test_rejected_geht_vor_prozentstufe_und_nennt_uhrzeit(self):
+        freigabe = datetime(2026, 10, 1, 18, 30)
+        ergebnis = sitzung._kontingent_zustand_berechnen(
+            {"status": "allowed_warning", "utilization": 0.80},
+            {"status": "rejected", "resets_at": freigabe.timestamp()})
         self.assertEqual(ergebnis["stufe"], "erschoepft")
-        self.assertIn("18:30", ergebnis["text"])
+        self.assertIn("18:30", ergebnis["woche_anzeige"])
 
     def test_rejected_ohne_freigabezeit_ohne_uhrzeit_im_text(self):
         ergebnis = sitzung._kontingent_zustand_berechnen(
             None, {"status": "rejected", "resets_at": None})
         self.assertEqual(ergebnis["stufe"], "erschoepft")
-        self.assertNotIn(":", ergebnis["text"])
+        self.assertNotIn(":", ergebnis["woche_anzeige"])
 
 
 class ModellIstOpusTest(unittest.TestCase):
@@ -321,6 +409,93 @@ class KontingentFortsetzenTest(unittest.TestCase):
         fake._naechstes_fremdes_projekt.assert_not_called()
         fake._auftrag_starten.assert_not_called()
         fake._auto_projekt_wechseln.assert_not_called()
+
+
+class KontingentAnzeigeAktualisierenTest(unittest.TestCase):
+    """Block 36: core/fenster.py Werkbank._kontingent_anzeige_aktualisieren()
+    - geprueft ueber den unbound Aufruf auf einem nachgebildeten Fenster, wie
+    schon bei _kontingent_fortsetzen() oben. Deckt die einmalige Ansage bei
+    90 %/95 % Wochenauslastung und die Sparmodus-Schwelle aus F12 ab."""
+
+    def _fake(self, woche_prozent, sparmodus_schwelle=95, sparmodus_an=True):
+        zustand = {
+            "stufe": "normal", "text": "Woche NN %.",
+            "woche_anzeige": "Woche NN %", "sitzung_anzeige": None,
+            "woche_prozent": woche_prozent,
+        }
+        sitzung = types.SimpleNamespace(
+            kontingent_zustand=MagicMock(return_value=zustand),
+            sparmodus_aktiv=MagicMock(return_value=False),
+        )
+        fake = types.SimpleNamespace(
+            faden=types.SimpleNamespace(sitzung=sitzung),
+            ausgabekopf=types.SimpleNamespace(kontingent_zeigen=MagicMock()),
+            sprecher=types.SimpleNamespace(sprich=MagicMock()),
+            _kontingent_warnung_90_gegeben=False,
+            _kontingent_warnung_95_gegeben=False,
+            _sparmodus_aktiv=False,
+            _sparmodus_wartend=[],
+            _warteschlange=[],
+            _auftrag_laeuft=False,
+            _kontingent_info=None,
+            _warteschlange_zeigen=MagicMock(),
+            _naechsten_starten=MagicMock(),
+        )
+        self._sparmodus_einstellungen = {
+            "sparmodus_wochenkontingent": sparmodus_an,
+            "sparmodus_schwelle_prozent": sparmodus_schwelle,
+        }
+        return fake, sitzung
+
+    def _aufrufen(self, fake):
+        with patch.object(fenster, "einstellungen_lesen",
+                           return_value=self._sparmodus_einstellungen):
+            fenster.Werkbank._kontingent_anzeige_aktualisieren(fake)
+
+    def test_unter_90_keine_ansage(self):
+        fake, _ = self._fake(woche_prozent=80)
+        self._aufrufen(fake)
+        fake.sprecher.sprich.assert_not_called()
+
+    def test_90_loest_genau_eine_ansage_aus(self):
+        fake, _ = self._fake(woche_prozent=92)
+        self._aufrufen(fake)
+        fake.sprecher.sprich.assert_called_once_with(
+            "Wochenkontingent 90 Prozent.", art="immer")
+
+    def test_90_wird_bei_wiederholtem_aufruf_nicht_erneut_angesagt(self):
+        fake, _ = self._fake(woche_prozent=92)
+        self._aufrufen(fake)
+        self._aufrufen(fake)
+        self.assertEqual(fake.sprecher.sprich.call_count, 1)
+
+    def test_95_loest_zusaetzlich_eine_zweite_ansage_aus(self):
+        fake, _ = self._fake(woche_prozent=92)
+        self._aufrufen(fake)
+        fake.faden.sitzung.kontingent_zustand.return_value["woche_prozent"] = 96
+        self._aufrufen(fake)
+        self.assertEqual(fake.sprecher.sprich.call_count, 2)
+        fake.sprecher.sprich.assert_called_with(
+            "Wochenkontingent 95 Prozent.", art="immer")
+
+    def test_direkter_sprung_ueber_95_sagt_beides_an(self):
+        fake, _ = self._fake(woche_prozent=97)
+        self._aufrufen(fake)
+        self.assertEqual(fake.sprecher.sprich.call_count, 2)
+
+    def test_abfall_unter_90_setzt_ansage_zurueck(self):
+        fake, _ = self._fake(woche_prozent=92)
+        self._aufrufen(fake)
+        fake.faden.sitzung.kontingent_zustand.return_value["woche_prozent"] = 80
+        self._aufrufen(fake)
+        fake.faden.sitzung.kontingent_zustand.return_value["woche_prozent"] = 92
+        self._aufrufen(fake)
+        self.assertEqual(fake.sprecher.sprich.call_count, 2)
+
+    def test_sparmodus_schwelle_aus_f12_wird_weitergegeben(self):
+        fake, sitzung = self._fake(woche_prozent=80, sparmodus_schwelle=70)
+        self._aufrufen(fake)
+        sitzung.sparmodus_aktiv.assert_called_once_with(70)
 
 
 if __name__ == "__main__":
