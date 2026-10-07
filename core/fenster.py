@@ -79,8 +79,9 @@ try:
         naechste_block_nummer
     from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from .datenordner import erstuebernahme
-    from .eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
-        naechste_fremde_projekt_datei, projekt_gleichwertig, verwerfen, wieder_aufnehmen
+    from .eingangsordner import AuftragSpaeter, Eingangswaechter, EingangsFehler, ablegen, \
+        abschliessen, auftrag_lesen, naechste_fremde_projekt_datei, projekt_gleichwertig, \
+        verwerfen, wartende_dateien, wieder_aufnehmen
     from .einstellungen import EinstellungenFenster
     from .ersteinrichtung import Ersteinrichtung
     from .faden import SitzungsFaden
@@ -88,6 +89,7 @@ try:
     from .grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
+        auftrags_kennung,
         einstellungen_lesen,
         einstellungen_schreiben,
         fenster_geometrie_merken,
@@ -146,8 +148,9 @@ except ImportError:
         naechste_block_nummer
     from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
     from datenordner import erstuebernahme
-    from eingangsordner import AuftragSpaeter, Eingangswaechter, ablegen, abschliessen, \
-        naechste_fremde_projekt_datei, projekt_gleichwertig, verwerfen, wieder_aufnehmen
+    from eingangsordner import AuftragSpaeter, Eingangswaechter, EingangsFehler, ablegen, \
+        abschliessen, auftrag_lesen, naechste_fremde_projekt_datei, projekt_gleichwertig, \
+        verwerfen, wartende_dateien, wieder_aufnehmen
     from einstellungen import EinstellungenFenster
     from ersteinrichtung import Ersteinrichtung
     from faden import SitzungsFaden
@@ -155,6 +158,7 @@ except ImportError:
     from grundlagen import (
         CWB_WURZEL,
         OFFENE_FENSTER,
+        auftrags_kennung,
         einstellungen_lesen,
         einstellungen_schreiben,
         fenster_geometrie_merken,
@@ -546,6 +550,16 @@ class Aktivitaetsbalken(QFrame):
 # Warteschlange einzeln verwalten
 # ---------------------------------------------------------------------------
 
+# Ein Eintrag in self._warteschlange/self._sparmodus_wartend: Auftragstext,
+# Bilder, Bruecken-/Blocknummer, Eingangsordner-Datei, Modellwunsch/-grund
+# und - seit Block 82 - Quelle und Zeitpunkt der Annahme (core/grundlagen.py,
+# auftrags_kennung) fuer die Leiste "Wartet: ..." ueber dem Ausgabefeld.
+WARTESCHLANGEN_EINTRAG = tuple[
+    str, list[Path], int | None, int | None, Path | None, str | None, str | None,
+    str, datetime,
+]
+
+
 class WarteschlangenFenster(QDialog):
     """Zeigt jeden wartenden Auftrag als eigene Zeile und entfernt einen
     einzelnen daraus - anders als F4/Umschalt+F4 zusammen: F4 leert die
@@ -558,9 +572,7 @@ class WarteschlangenFenster(QDialog):
     ein Kontextmenue mit "Löschen" (Block 60) - Entf/Rueckschritt bleiben
     daneben bestehen."""
 
-    def __init__(self, warteschlange: list[tuple[str, list[Path], int | None, int | None,
-                                                  Path | None, str | None, str | None]],
-                 eltern=None):
+    def __init__(self, warteschlange: list[WARTESCHLANGEN_EINTRAG], eltern=None):
         super().__init__(eltern)
         self._warteschlange = warteschlange
         self.setWindowTitle("Warteschlange verwalten")
@@ -600,7 +612,7 @@ class WarteschlangenFenster(QDialog):
     def _liste_fuellen(self) -> None:
         self.liste.clear()
         for nummer, (text, _bilder, _bruecke_nummer, _block_nummer, _eingang_datei,
-                     _modell_wunsch, _modell_grund) in enumerate(
+                     _modell_wunsch, _modell_grund, _quelle, _zeit) in enumerate(
                 self._warteschlange, start=1):
             kurz = " ".join(text.split())[:80]
             self.liste.addItem(f"Platz {nummer}: {kurz}")
@@ -709,6 +721,17 @@ class Werkbank(QMainWindow):
         # wartenden #CODE#-Auftrags, bis _fertig() sie in den Bericht
         # uebernimmt - None, wenn der Auftrag keine Nummer trug.
         self._aktueller_block_nummer: int | None = None
+        # Block 82: Kennung des GERADE LAUFENDEN Auftrags (CODE, RUN, ADMIN
+        # oder BILD - nie zwei davon gleichzeitig) fuer die neue Leiste
+        # "Läuft: ..." ueber dem Ausgabefeld und fuer F2 - gesetzt in
+        # _auftrag_starten/_terminal_starten/_bild_markierung, gelesen in
+        # _laeuft_kennung(). Bleibt nach Abschluss unveraendert stehen (wie
+        # _laufender_modell_wunsch) statt eigens zurueckgesetzt zu werden:
+        # _laeuft_kennung() prueft ohnehin zuerst, ob ueberhaupt noch etwas
+        # laeuft, ein veralteter Wert wird also nie angezeigt.
+        self._laufender_block_nummer: int | None = None
+        self._laufender_quelle: str = ""
+        self._laufender_zeit: datetime | None = None
         # Block 77, Punkte 1/2: der einmalige Modellwunsch (CLI-Kurzname wie
         # "opus") des gerade laufenden oder wartenden Auftrags sowie, nur bei
         # einer Hochstufung nach Fehlschlaegen (nicht bei einer ausdruecklichen
@@ -782,7 +805,7 @@ class Werkbank(QMainWindow):
         # self._sparmodus_wartend statt in self._warteschlange und werden
         # erst eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
         self._sparmodus_aktiv = False
-        self._sparmodus_wartend: list[tuple] = []
+        self._sparmodus_wartend: list[WARTESCHLANGEN_EINTRAG] = []
         # Block 36: je eine einmalige Ansage beim Ueberschreiten von 90 %
         # bzw. 95 % Wochenauslastung - zurueckgesetzt, sobald die Auslastung
         # wieder unter 90 % faellt (neue Woche), damit eine spaetere
@@ -805,11 +828,10 @@ class Werkbank(QMainWindow):
         # endgueltig erledigt, nicht schon das Einreihen hier. Das sechste und
         # siebte Glied sind Modellwunsch und -grund fuer genau diesen einen
         # Auftrag (Block 77, Punkt 1/2, core/bloecke.py "Modell: …" bzw.
-        # Hochstufung nach Fehlschlaegen) - beide None ohne Wunsch.
-        self._warteschlange: list[
-            tuple[str, list[Path], int | None, int | None, Path | None,
-                  str | None, str | None]
-        ] = []
+        # Hochstufung nach Fehlschlaegen) - beide None ohne Wunsch. Das achte
+        # und neunte Glied sind Quelle und Zeitpunkt der Annahme (Block 82,
+        # siehe WARTESCHLANGEN_EINTRAG oben).
+        self._warteschlange: list[WARTESCHLANGEN_EINTRAG] = []
         # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
         # erkennt _absenden, ob der neue Auftrag warten muss.
         self._auftrag_laeuft = False
@@ -1147,6 +1169,37 @@ class Werkbank(QMainWindow):
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
         # aus verlauf.css, nicht aus dem Python.
+        # Block 82: durchgehende Leiste ueber dem Ausgabefeld - "Läuft: ..."
+        # und "Wartet: ..." links, ganz rechts der (von hier verschobene,
+        # vorher auf self.verlauf schwebende) Kopieren-Knopf. Eine eigene
+        # Zeile statt eines Overlays, weil sie selbst zwei variabel lange
+        # Texte tragen muss, die sonst mit dem Knopf kollidieren wuerden.
+        statusleiste = QWidget()
+        statusleiste.setObjectName("statusleiste")
+        statusquer = QHBoxLayout(statusleiste)
+        statusquer.setContentsMargins(0, 0, 0, 0)
+
+        self.laeuft_anzeige = QLabel("Läuft: –")
+        self.laeuft_anzeige.setObjectName("laeuft_anzeige")
+        self.laeuft_anzeige.setAccessibleName("Läuft")
+        statusquer.addWidget(self.laeuft_anzeige)
+
+        self.wartet_anzeige = QLabel("Wartet: –")
+        self.wartet_anzeige.setObjectName("wartet_anzeige")
+        self.wartet_anzeige.setAccessibleName("Wartet")
+        self.wartet_anzeige.setWordWrap(True)
+        statusquer.addWidget(self.wartet_anzeige, 1)
+
+        self.kopieren = QPushButton("⧉ Kopieren")
+        self.kopieren.setObjectName("kopieren")
+        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
+        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
+        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.kopieren.clicked.connect(self._verlauf_kopieren)
+        statusquer.addWidget(self.kopieren)
+
+        aufbau.addWidget(statusleiste)
+
         self.verlauf = QTextEdit()
         self.verlauf.setObjectName("verlauf")
         self.verlauf.setReadOnly(True)
@@ -1154,20 +1207,6 @@ class Werkbank(QMainWindow):
         self.verlauf.document().setDefaultStyleSheet(verlauf_stil_lesen())
         self.verlauf.cursorPositionChanged.connect(self._absatz_ansagen)
         aufbau.addWidget(self.verlauf, 12)
-
-        # Der Kopieren-Knopf ist kein eigenes Layout-Element, sondern ein Kind
-        # von self.verlauf selbst: so schwebt er oben rechts UEBER dem Text,
-        # ohne eine eigene Zeile zu belegen, und bleibt beim Scrollen sichtbar.
-        # Die Position wird ueber den eventFilter (QEvent.Resize auf verlauf)
-        # bei jeder Groessenaenderung neu berechnet.
-        self.kopieren = QPushButton("⧉ Kopieren", self.verlauf)
-        self.kopieren.setObjectName("kopieren")
-        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
-        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
-        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.kopieren.clicked.connect(self._verlauf_kopieren)
-        self.kopieren.raise_()
-        self._kopieren_positionieren()
 
         eingabezeile = QWidget()
         eingabezeile.setObjectName("eingabezeile")
@@ -1409,10 +1448,14 @@ class Werkbank(QMainWindow):
         self._bruecke_zustand_anwenden()
 
     def _wo_stehen_wir(self) -> None:
+        # Block 82: "Läuft: ..."/"Wartet: ..." gehoert zu fenster.py (mehrere
+        # Warteschlangen, Eingangsordner), nicht zu Sitzung.stand() - darum
+        # hier angehaengt statt dort eingebaut.
         if self.faden.sitzung:
-            self.sprecher.sprich(self.faden.sitzung.stand(), art="immer")
+            satz = self.faden.sitzung.stand()
         else:
-            self.sprecher.sprich("Noch nicht verbunden.", art="immer")
+            satz = "Noch nicht verbunden."
+        self.sprecher.sprich(f"{satz} {self._statusleiste_satz()}", art="immer")
 
     def _antwort_vorlesen(self) -> None:
         self.sprecher.sprich(self.letzte_antwort or "Keine Antwort vorhanden.",
@@ -1505,7 +1548,9 @@ class Werkbank(QMainWindow):
             if ja:
                 self._terminal_starten(wartend["befehl"], wartend["admin"],
                                         bruecke_nummer=wartend.get("bruecke_nummer"),
-                                        eingang_datei=wartend.get("eingang_datei"))
+                                        eingang_datei=wartend.get("eingang_datei"),
+                                        block_nummer=wartend.get("block_nummer"),
+                                        quelle=wartend.get("quelle", ""))
             elif wartend.get("eingang_datei") is not None:
                 verwerfen(wartend["eingang_datei"], "Rückfrage mit Nein beantwortet")
             return
@@ -1515,7 +1560,9 @@ class Werkbank(QMainWindow):
 
     def _terminal_markierung(self, art: str, befehl: str, *,
                               bruecke_nummer: int | None = None,
-                              eingang_datei: Path | None = None) -> None:
+                              eingang_datei: Path | None = None,
+                              block_nummer: int | None = None,
+                              quelle: str = "Eingabe") -> None:
         """Verarbeitet einen #run#- oder #admin#-Auftrag. Laeuft nie ueber
         Claude Code: kein Modellaufruf, kein Tokenverbrauch. Ordnergrenze,
         verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
@@ -1523,7 +1570,10 @@ class Werkbank(QMainWindow):
         mit erhoehten Rechten laeuft - aber nur, wenn der Schalter
         rueckfrage_bei_befehl an ist. `bruecke_nummer` kommt nur aus der
         Bruecke (core/bruecke.py) und wird bis zum Abschluss mitgefuehrt,
-        auch ueber eine Rueckfrage hinweg (siehe _pending_terminal)."""
+        auch ueber eine Rueckfrage hinweg (siehe _pending_terminal).
+        `block_nummer`/`quelle` (Block 82) dienen nur der Anzeige ("Läuft: ...",
+        core/fenster.py _laeuft_kennung) und werden ebenso durch eine
+        Rueckfrage hindurch mitgefuehrt."""
         # Das fremde Fenster, aus dem der Auftrag kam (Zwischenablage,
         # Waechter oder das Fenster, aus dem gerade zu CWB gewechselt wurde),
         # steht jetzt fest - CWB selbst ist zu diesem Zeitpunkt im
@@ -1555,15 +1605,19 @@ class Werkbank(QMainWindow):
             kurz_satz = f"{grund}. Fortfahren?"
             self._pending_terminal = {"befehl": befehl, "admin": admin,
                                        "bruecke_nummer": bruecke_nummer,
-                                       "eingang_datei": eingang_datei}
+                                       "eingang_datei": eingang_datei,
+                                       "block_nummer": block_nummer, "quelle": quelle}
             self._frage(satz, kurz_satz)
             return
         self._terminal_starten(befehl, admin, bruecke_nummer=bruecke_nummer,
-                                eingang_datei=eingang_datei)
+                                eingang_datei=eingang_datei, block_nummer=block_nummer,
+                                quelle=quelle)
 
     def _terminal_starten(self, befehl: str, admin: bool, *,
                            bruecke_nummer: int | None = None,
-                           eingang_datei: Path | None = None) -> None:
+                           eingang_datei: Path | None = None,
+                           block_nummer: int | None = None,
+                           quelle: str = "Eingabe") -> None:
         if self._terminal_faden is not None and self._terminal_faden.isRunning():
             self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="fehler")
             if eingang_datei is not None:
@@ -1571,6 +1625,12 @@ class Werkbank(QMainWindow):
             return
         self._terminal_bruecke_nummer = bruecke_nummer
         self._terminal_eingang_datei = eingang_datei
+        # Block 82: Kennung fuer "Läuft: ..." - siehe Docstring von
+        # self._laufender_block_nummer in __init__.
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = datetime.now()
+        self._statusleiste_aktualisieren()
         art = "admin" if admin else "run"
         satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
         log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
@@ -1608,6 +1668,9 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _terminal_fertig(self, ergebnis) -> None:
+        # Block 82: "Läuft: ..." zeigt wieder "–", sobald self._terminal_faden
+        # nicht mehr laeuft (_laeuft_kennung prueft das zuerst).
+        self._statusleiste_aktualisieren()
         # Gehoerte der Befehl zur Bruecke (core/bruecke.py), wird die Ausgabe
         # weiter unten zusaetzlich dorthin hochgeladen - die Rueckspielung ins
         # zuletzt aktive fremde Fenster (Zwischenablage + Strg+V) laeuft
@@ -1692,7 +1755,9 @@ class Werkbank(QMainWindow):
         self._bild_markierung()
 
     def _bild_markierung(self, *, bruecke_nummer: int | None = None,
-                          eingang_datei: Path | None = None) -> None:
+                          eingang_datei: Path | None = None,
+                          block_nummer: int | None = None,
+                          quelle: str = "Eingabe") -> None:
         """Verarbeitet einen #BILD#-Auftrag: die Markierung allein genuegt,
         es gehoert kein Befehlstext dahinter. Laeuft nie ueber Claude Code
         und nie ueber das Terminal - kein Ausgabefeld wird belegt, keine
@@ -1701,7 +1766,10 @@ class Werkbank(QMainWindow):
         Screenshot in der Zwischenablage (core/android_screenshot.py).
         `bruecke_nummer` kommt nur aus der Bruecke (core/bruecke.py) - die
         Bilddatei selbst laesst sich darueber nicht hochladen (die Brücke
-        kennt nur Text), darum bekommt sie dort nur eine kurze Textmeldung."""
+        kennt nur Text), darum bekommt sie dort nur eine kurze Textmeldung.
+        `block_nummer`/`quelle` (Block 82) dienen nur der Anzeige
+        ("Läuft: ...", core/fenster.py _laeuft_kennung); ohne expliziten
+        Aufrufer (Pause-Taste) gilt "Eingabe"."""
         if self._bild_faden is not None and self._bild_faden.isRunning():
             self.sprecher.sprich("Es läuft schon ein Screenshot-Auftrag.", art="fehler")
             if eingang_datei is not None:
@@ -1709,6 +1777,10 @@ class Werkbank(QMainWindow):
             return
         self._bild_bruecke_nummer = bruecke_nummer
         self._bild_eingang_datei = eingang_datei
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = datetime.now()
+        self._statusleiste_aktualisieren()
         log.info("Bild-Auftrag gestartet (#BILD#)")
         self._status_zeigen("Screenshot wird geholt…")
         self.sprecher.sprich("Screenshot wird geholt…", art="meldung")  # stumm: Zwischenmeldung
@@ -1718,6 +1790,9 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _bild_fertig(self, ergebnis) -> None:
+        # Block 82: "Läuft: ..." zeigt wieder "–", sobald self._bild_faden
+        # nicht mehr laeuft (_laeuft_kennung prueft das zuerst).
+        self._statusleiste_aktualisieren()
         # Gehoerte der Auftrag zur Bruecke (core/bruecke.py): die Bilddatei
         # selbst kann dorthin nicht hochgeladen werden (nur Text), darum nur
         # eine kurze Textmeldung - der lokale Ablauf (Zwischenablage, Ansage)
@@ -2102,6 +2177,11 @@ class Werkbank(QMainWindow):
 
         # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
         self._naechsten_starten()
+        # Block 82: "Läuft: ..." auf den neuen Stand bringen - entweder den
+        # gerade gestarteten naechsten Auftrag (schon in _auftrag_starten
+        # gesetzt, hier nur zur Sicherheit erneut gezeichnet) oder "–", wenn
+        # die Warteschlange jetzt leer ist.
+        self._statusleiste_aktualisieren()
 
         # Leitstand (core/leitstand.py, Block 72): reagiert nur, wenn der
         # Schalter an ist und das Projekt wissen/nachtplan.md hat - sonst
@@ -2193,6 +2273,10 @@ class Werkbank(QMainWindow):
                 # den Fortsetzungsversuch nach der Pause.
                 "modell_wunsch": self._laufender_modell_wunsch,
                 "modell_grund": self._laufender_modell_grund,
+                # Block 82: Kennung fuer "Läuft: ..." waehrend der Pause
+                # (core/fenster.py, _laeuft_kennung).
+                "quelle": self._laufender_quelle,
+                "zeit": self._laufender_zeit,
             }
         else:
             log.info("Kontingent weiterhin erschöpft, neue Freigabezeit übernommen")
@@ -2225,6 +2309,7 @@ class Werkbank(QMainWindow):
             if eingang_datei is not None:
                 abschliessen(eingang_datei)
             self._kontingent_info = None
+            self._statusleiste_aktualisieren()
             return
 
         status, ansage = entscheidung["status"], entscheidung["ansage"]
@@ -2241,6 +2326,7 @@ class Werkbank(QMainWindow):
             kontingent.get("rate_limit_type"), status, int(entscheidung["wartesekunden"]),
         )
         self._kontingent_uhr.start(int(entscheidung["wartesekunden"] * 1000))
+        self._statusleiste_aktualisieren()
 
     @slot_geschuetzt
     def _kontingent_fortsetzen(self) -> None:
@@ -2272,6 +2358,7 @@ class Werkbank(QMainWindow):
                     "Eingangsreihenfolge - wechsle, statt eigenen Auftrag fortzusetzen",
                     projekt.name,
                 )
+                self._statusleiste_aktualisieren()
                 QTimer.singleShot(
                     0, lambda zielprojekt=projekt: self._auto_projekt_wechseln(zielprojekt))
                 return
@@ -2281,6 +2368,7 @@ class Werkbank(QMainWindow):
             bruecke_nummer=info["bruecke_nummer"], block_nummer=info["block_nummer"],
             eingang_datei=info.get("eingang_datei"),
             modell_wunsch=info.get("modell_wunsch"), modell_grund=info.get("modell_grund"),
+            quelle=info.get("quelle") or "Eingabe", zeit=info.get("zeit"),
         )
 
     def _bericht_bauen(self, bilanz: dict, block_nummer: int | None = None) -> str:
@@ -2535,7 +2623,7 @@ class Werkbank(QMainWindow):
             # derselbe Text und laeuft immer sofort.
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._bild_markierung()
+            self._bild_markierung(block_nummer=block_nummer, quelle="Zwischenablage")
             return
         if art in ("run", "admin"):
             # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
@@ -2543,7 +2631,8 @@ class Werkbank(QMainWindow):
             # diese Befehle laufen immer sofort, auch wiederholt.
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._terminal_markierung(art, inhalt)
+            self._terminal_markierung(art, inhalt, block_nummer=block_nummer,
+                                       quelle="Zwischenablage")
             return
         if self._dublette_abgewiesen(art, inhalt):
             return
@@ -2577,13 +2666,14 @@ class Werkbank(QMainWindow):
             # Keine Dublettenpruefung: siehe _aus_zwischenablage.
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._bild_markierung()
+            self._bild_markierung(block_nummer=block_nummer, quelle="Zwischenablage")
             return
         if art in ("run", "admin"):
             # Keine Dublettenpruefung: siehe _aus_zwischenablage.
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._terminal_markierung(art, inhalt)
+            self._terminal_markierung(art, inhalt, block_nummer=block_nummer,
+                                       quelle="Zwischenablage")
             return
         if self._dublette_abgewiesen(art, inhalt):
             return
@@ -2645,16 +2735,19 @@ class Werkbank(QMainWindow):
             if auftrag.datei is not None:
                 verwerfen(auftrag.datei, "Block kam unvollständig an, braucht Eingabe vor Ort")
             return
+        quelle_anzeige = "Brücke" if von_bruecke else "Eingang"
         if art == "bild":
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
-            self._bild_markierung(bruecke_nummer=bruecke_nummer, eingang_datei=auftrag.datei)
+            self._bild_markierung(bruecke_nummer=bruecke_nummer, eingang_datei=auftrag.datei,
+                                   block_nummer=block_nummer, quelle=quelle_anzeige)
             return
         if art in ("run", "admin"):
             if not block_angesagt:
                 self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
             self._terminal_markierung(art, inhalt, bruecke_nummer=bruecke_nummer,
-                                       eingang_datei=auftrag.datei)
+                                       eingang_datei=auftrag.datei, block_nummer=block_nummer,
+                                       quelle=quelle_anzeige)
             return
         if self._dublette_abgewiesen(art, inhalt):
             return
@@ -2678,6 +2771,11 @@ class Werkbank(QMainWindow):
             return
         try:
             self.ausgabekopf.eingang_fremde_zeigen(projekte)
+            # Block 82: derselbe periodische Blick des Eingangswaechters
+            # aktualisiert auch "Wartet: ..." - eigene (oder unspezifische)
+            # und fremde liegen gebliebene Auftragsdateien aendern sich sonst
+            # ohne eigenes Signal (siehe _wartet_kennungen).
+            self._statusleiste_aktualisieren()
             namen = frozenset(projekte.keys())
             if not namen:
                 self._eingang_fremde_angesagt = frozenset()
@@ -3205,6 +3303,19 @@ class Werkbank(QMainWindow):
         "Block N erhalten." gesagt hat - dann bleibt das spaetere generische
         "Auftrag erhalten." hier und in `_auftrag_starten` stumm. Ist `art`
         leer, ruft diese Methode `_block_verarbeiten` selbst auf."""
+        # Block 82: Kennung fuer "Läuft:"/"Wartet:" (core/fenster.py,
+        # _laeuft_kennung/_wartet_kennungen) - VOR der Umdeutung von `art`
+        # gleich unten berechnet, weil "art is None" nur in diesem Moment
+        # noch zuverlaessig "eigene Eingabe ins Feld" bedeutet.
+        if bruecke_nummer is not None:
+            quelle = "Brücke"
+        elif eingang_datei is not None:
+            quelle = "Eingang"
+        elif art is None:
+            quelle = "Eingabe"
+        else:
+            quelle = "Zwischenablage"
+        zeit = datetime.now()
         if art is None:
             roh = self.eingabe.toPlainText()
             art, text = markierung_erkennen(roh)
@@ -3226,13 +3337,13 @@ class Werkbank(QMainWindow):
             # #BILD# braucht keinen Befehlstext: die Markierung allein loest
             # schon aus, direkt der Screenshot-Ausloeser, ohne Claude Code.
             self.eingabe.clear()
-            self._bild_markierung()
+            self._bild_markierung(block_nummer=block_nummer)
             return
         if art in ("run", "admin"):
             # #run# und #admin# laufen nie ueber Claude Code: kein
             # Modellaufruf, kein Tokenverbrauch, direkt im Terminal.
             self.eingabe.clear()
-            self._terminal_markierung(art, text)
+            self._terminal_markierung(art, text, block_nummer=block_nummer)
             return
         if not text:
             self.sprecher.sprich(
@@ -3310,7 +3421,11 @@ class Werkbank(QMainWindow):
             # eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
             self._sparmodus_wartend.append(
                 (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
-                 modell_wunsch, modell_grund))
+                 modell_wunsch, modell_grund, quelle, zeit))
+            # Block 82: "Wartet: ..." zaehlt auch Sparmodus-Zurueckstellungen
+            # mit - anders als die bestehende Kopfzeilen-Warteanzeige, die
+            # bewusst nur self._warteschlange zeigt (siehe _warteschlange_zeigen).
+            self._statusleiste_aktualisieren()
             satz = "Wochenkontingent knapp, Auftrag wartet, bis das nicht mehr gilt."
             if vorspann:
                 satz = f"{vorspann} {satz}"
@@ -3332,7 +3447,7 @@ class Werkbank(QMainWindow):
             # vorherige fertig ist.
             self._warteschlange.append(
                 (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
-                 modell_wunsch, modell_grund))
+                 modell_wunsch, modell_grund, quelle, zeit))
             self._warteschlange_zeigen()
             satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
             if vorspann:
@@ -3354,7 +3469,7 @@ class Werkbank(QMainWindow):
         self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt,
                                bruecke_nummer=bruecke_nummer, block_nummer=block_nummer,
                                eingang_datei=eingang_datei, modell_wunsch=modell_wunsch,
-                               modell_grund=modell_grund)
+                               modell_grund=modell_grund, quelle=quelle, zeit=zeit)
 
     def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
                           ansagen: bool = True, block_angesagt: bool = False,
@@ -3362,7 +3477,9 @@ class Werkbank(QMainWindow):
                           block_nummer: int | None = None,
                           eingang_datei: Path | None = None,
                           modell_wunsch: str | None = None,
-                          modell_grund: str | None = None) -> None:
+                          modell_grund: str | None = None,
+                          quelle: str = "Eingabe",
+                          zeit: datetime | None = None) -> None:
         """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
         Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
         Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
@@ -3397,6 +3514,12 @@ class Werkbank(QMainWindow):
         self._eingang_code_datei = eingang_datei
         self._laufender_modell_wunsch = modell_wunsch
         self._laufender_modell_grund = modell_grund
+        # Block 82: Kennung fuer "Läuft: ..." - siehe Docstring von
+        # self._laufender_block_nummer in __init__.
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = zeit or datetime.now()
+        self._statusleiste_aktualisieren()
         # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
         # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
         # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
@@ -3474,6 +3597,96 @@ class Werkbank(QMainWindow):
             self.ausgabekopf.warteschlange_zeigen(len(self._warteschlange))
         except Exception as fehler:  # noqa: BLE001
             log.exception("Warteschlange nicht angezeigt: %s", fehler)
+        self._statusleiste_aktualisieren()
+
+    # -- Block 82: Leiste "Läuft"/"Wartet" ueber dem Ausgabefeld -------------
+
+    def _laeuft_kennung(self) -> str:
+        """Kennung des GERADE LAUFENDEN Auftrags (CODE, RUN, ADMIN oder BILD)
+        fuer "Läuft: ..." - "–", solange nichts laeuft. Eine Kontingent-Pause
+        (self._kontingent_info) zaehlt als "läuft": der Auftrag ist nicht
+        verloren, nur kurz angehalten (core/fenster.py, _kontingent_pause_behandeln)."""
+        if self._kontingent_info is not None:
+            info = self._kontingent_info
+            return auftrags_kennung(
+                info.get("block_nummer"), info.get("quelle") or "Eingabe",
+                info.get("zeit") or datetime.now(),
+            )
+        laeuft = (
+            self._auftrag_laeuft
+            or (self._terminal_faden is not None and self._terminal_faden.isRunning())
+            or (self._bild_faden is not None and self._bild_faden.isRunning())
+        )
+        if not laeuft:
+            return "–"
+        return auftrags_kennung(
+            self._laufender_block_nummer, self._laufender_quelle or "Eingabe",
+            self._laufender_zeit or datetime.now(),
+        )
+
+    def _wartet_kennungen(self) -> list[str]:
+        """Kennungen aller wartenden Auftraege in Reihenfolge fuer
+        "Wartet: ..." - aus drei Quellen, mit Beleg:
+
+        1. self._warteschlange - CODE-Auftraege aus Eingabefeld, Zwischenablage
+           (F7/Waechter), Eingangsordner oder Bruecke, aufgereiht in
+           `_absenden`, sobald schon ein Auftrag laeuft (siehe dort).
+        2. self._sparmodus_wartend - dieselben Quellen, aber vom Sparmodus
+           zurueckgestellt (F12 -> Verhalten, siehe _absenden).
+        3. core.eingangsordner.wartende_dateien() - #RUN#/#ADMIN#/#BILD#-
+           Auftraege aus dem Eingangsordner, die wegen belegtem Terminal/
+           Screenshot-Weg per AuftragSpaeter zurueckgestellt wurden (core/
+           eingangsordner.py, `verarbeiten`/`zuruecklegen`) UND frisch
+           angekommene, noch nicht beanspruchte Dateien - beide liegen
+           ununterscheidbar direkt im Eingangsordner. Dateien fuer ein
+           anderes als das hier offene Projekt bekommen den Projektnamen
+           davor (core/grundlagen.py, auftrags_kennung)."""
+        kennungen = []
+        for eintrag in (*self._warteschlange, *self._sparmodus_wartend):
+            _text, _bilder, _bruecke_nummer, block_nummer, _eingang_datei, \
+                _modell_wunsch, _modell_grund, quelle, zeit = eintrag
+            kennungen.append(auftrags_kennung(block_nummer, quelle, zeit))
+        try:
+            for pfad in wartende_dateien():
+                try:
+                    auftrag = auftrag_lesen(pfad, markierung_erkennen)
+                except EingangsFehler:
+                    continue
+                block_nummer, _rest, _vollstaendig = block_erkennen(auftrag.art, auftrag.inhalt)
+                zeit = datetime.fromtimestamp(pfad.stat().st_mtime)
+                quelle = "Brücke" if auftrag.quelle == QUELLE_BRUECKE else "Eingang"
+                projekt = auftrag.projekt if (
+                    auftrag.projekt and not projekt_gleichwertig(auftrag.projekt, self.projekt.name)
+                ) else None
+                kennungen.append(auftrags_kennung(block_nummer, quelle, zeit, projekt))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Eingangsordner-Dateien nicht in 'Wartet' uebernommen: %s", fehler)
+        return kennungen
+
+    def _statusleiste_satz(self) -> str:
+        """Der gesprochene Satz fuer F2 ('Wo stehen wir') - derselbe Inhalt
+        wie die Leiste, nur als Satz."""
+        wartet = self._wartet_kennungen()
+        wartet_satz = ", ".join(wartet) if wartet else "keiner"
+        return f"Läuft: {self._laeuft_kennung()}. Wartet: {wartet_satz}."
+
+    def _statusleiste_aktualisieren(self) -> None:
+        """Zeichnet die Leiste ueber dem Ausgabefeld neu - aufgerufen bei
+        jeder Aenderung: Auftragsstart/-ende (CODE/RUN/ADMIN/BILD),
+        Warteschlangen-Aenderung (_warteschlange_zeigen) und beim
+        periodischen Blick des Eingangswaechters (_eingang_fremde_melden)."""
+        try:
+            self.laeuft_anzeige.setText(f"Läuft: {self._laeuft_kennung()}")
+            wartet = self._wartet_kennungen()
+            wartet_text = ", ".join(wartet) if wartet else "–"
+            self.wartet_anzeige.setText(f"Wartet: {wartet_text}")
+            satz = self._statusleiste_satz()
+            self.laeuft_anzeige.setToolTip(satz)
+            self.wartet_anzeige.setToolTip(satz)
+            self.laeuft_anzeige.setAccessibleDescription(satz)
+            self.wartet_anzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Statusleiste nicht aktualisiert: %s", fehler)
 
     def _naechsten_starten(self) -> None:
         """Holt den naechsten Auftrag aus der Warteschlange, sobald der
@@ -3482,7 +3695,7 @@ class Werkbank(QMainWindow):
         if not self._warteschlange:
             return
         text, bilder, bruecke_nummer, block_nummer, eingang_datei, modell_wunsch, \
-            modell_grund = self._warteschlange.pop(0)
+            modell_grund, quelle, zeit = self._warteschlange.pop(0)
         self._warteschlange_zeigen()
         log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
         rest = len(self._warteschlange)
@@ -3494,7 +3707,8 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
         self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer,
                                block_nummer=block_nummer, eingang_datei=eingang_datei,
-                               modell_wunsch=modell_wunsch, modell_grund=modell_grund)
+                               modell_wunsch=modell_wunsch, modell_grund=modell_grund,
+                               quelle=quelle, zeit=zeit)
 
     @slot_geschuetzt
     def _warteschlange_leeren(self) -> None:
@@ -3502,7 +3716,7 @@ class Werkbank(QMainWindow):
         den beendet der Not-Aus (F8)."""
         anzahl = len(self._warteschlange)
         for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
-                _modell_grund in self._warteschlange:
+                _modell_grund, _quelle, _zeit in self._warteschlange:
             if eingang_datei is not None:
                 verwerfen(eingang_datei, "Warteschlange geleert")
         self._warteschlange.clear()
@@ -3582,9 +3796,9 @@ class Werkbank(QMainWindow):
         self.sprecher.sprich(satz, art="auftrag")
         art, inhalt = info["art"], info["inhalt"]
         if art == "bild":
-            self._bild_markierung()
+            self._bild_markierung(block_nummer=info["nummer"])
         elif art in ("run", "admin"):
-            self._terminal_markierung(art, inhalt)
+            self._terminal_markierung(art, inhalt, block_nummer=info["nummer"])
         else:
             self.bilder = list(info["bilder"])
             self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
@@ -3672,7 +3886,7 @@ class Werkbank(QMainWindow):
             log.info("Not-Aus: laufender Terminalbefehl abgebrochen")
         verworfen = len(self._warteschlange)
         for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
-                _modell_grund in self._warteschlange:
+                _modell_grund, _quelle, _zeit in self._warteschlange:
             if eingang_datei is not None:
                 verwerfen(eingang_datei, "Not-Aus")
         self._warteschlange.clear()
@@ -3803,25 +4017,11 @@ class Werkbank(QMainWindow):
 
     def eventFilter(self, gegenstand, ereignis) -> bool:
         """Haelt Strg+Mausrad von den Textfeldern fern: Qt wuerde damit zoomen
-        und die Schriftgroesse aus stil.qss ueberschreiben. Haelt ausserdem den
-        schwebenden Kopieren-Knopf oben rechts auf dem Ausgabefeld, wenn sich
-        dessen Groesse aendert (auch durch ein- und ausblendenden Rollbalken)."""
+        und die Schriftgroesse aus stil.qss ueberschreiben."""
         art = ereignis.type()
         if art == QEvent.Wheel and (ereignis.modifiers() & Qt.ControlModifier):
             return True
-        if gegenstand is self.verlauf and art == QEvent.Resize:
-            self._kopieren_positionieren()
         return super().eventFilter(gegenstand, ereignis)
-
-    def _kopieren_positionieren(self) -> None:
-        """Setzt den Kopieren-Knopf oben rechts in die Ecke von self.verlauf,
-        einige Pixel Rand, damit er ueber dem Text schwebt statt eine eigene
-        Zeile zu belegen (schwebt auch beim Scrollen sichtbar mit)."""
-        rand = 6
-        breite = self.verlauf.width()
-        self.kopieren.adjustSize()
-        x = max(0, breite - self.kopieren.width() - rand)
-        self.kopieren.move(x, rand)
 
     def keyPressEvent(self, ereignis) -> None:
         if ereignis.matches(QKeySequence.Paste) and self._bild_aus_ablage():

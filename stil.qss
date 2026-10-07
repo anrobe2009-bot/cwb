@@ -227,10 +227,24 @@ QToolTip {
     font-size: 13pt;
 }
 
-/* Kopieren-Knopf: schwebt als Kind-Widget direkt auf dem Ausgabefeld oben
-   rechts (Positionierung in fenster.py), klein und unauffaellig, in der
-   Groesse den kleinen Zaehlerfeldern der Kopfzeile angeglichen - keine
-   grosse Schaltflaeche wie #probe oder #schliessen in den Einstellungen. */
+/* Block 82: Leiste ueber dem Ausgabefeld mit "Läuft"/"Wartet" links und dem
+   Kopieren-Knopf rechts (vorher schwebte er als Kind-Widget direkt auf dem
+   Ausgabefeld oben rechts) - "Wartet" bekommt den uebrigen Platz
+   (Streckfaktor in fenster.py) und bricht bei vielen Eintraegen in eine
+   zweite Zeile um (setWordWrap), statt den Knopf zu verdraengen. */
+#statusleiste {
+    background-color: #171b22;
+    border: 2px solid #333a47;
+    border-radius: 6px;
+    padding: 0.2em 0.6em;
+}
+
+#laeuft_anzeige,
+#wartet_anzeige {
+    color: #c7d0e0;
+    font-size: 13pt;
+}
+
 QPushButton#kopieren {
     background-color: #262c36;
     color: #e6ecf5;

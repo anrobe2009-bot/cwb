@@ -366,6 +366,7 @@ class KontingentFortsetzenTest(unittest.TestCase):
         )
         fake._auftrag_starten = MagicMock()
         fake._auto_projekt_wechseln = MagicMock()
+        fake._statusleiste_aktualisieren = MagicMock()
         return fake
 
     def test_aelterer_fremder_auftrag_fuehrt_zum_wechsel_statt_fortsetzen(self):

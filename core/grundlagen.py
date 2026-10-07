@@ -404,6 +404,25 @@ def kontingent_entscheidung(resets_at: int | float | None, jetzt: datetime) -> d
 
 
 # ---------------------------------------------------------------------------
+# Block 82: Kurzkennung eines Auftrags fuer die neue Leiste "Läuft"/"Wartet"
+# ueber dem Ausgabefeld (core/fenster.py) und fuer F2.
+# ---------------------------------------------------------------------------
+
+def auftrags_kennung(block_nummer: int | None, quelle: str, zeit: datetime,
+                      projekt: str | None = None) -> str:
+    """Baut die Kurzkennung eines Auftrags: die Blocknummer aus der zweiten
+    Zeile ("Block N" bzw. "# Block N" bei #RUN#/#ADMIN#, core/bloecke.py),
+    weil der Chat sie Robert nennt - ohne Blocknummer (z.B. eine eigene
+    Eingabe ins Feld ohne "Block N"-Zeile) `quelle` ("Eingabe",
+    "Zwischenablage", "Eingang" oder "Brücke") und Uhrzeit, z.B.
+    "Eingabe 16:58". `projekt` steht nur davor, wenn der Auftrag zu einem
+    anderen als dem hier offenen Projekt gehoert, z.B. "CWB 37" - sonst
+    bleibt es weg."""
+    kern = str(block_nummer) if block_nummer is not None else f"{quelle} {zeit:%H:%M}"
+    return f"{projekt} {kern}" if projekt else kern
+
+
+# ---------------------------------------------------------------------------
 # Fenstergeometrie der Werkbank: Position und Größe merken sich beim
 # Schließen in einstellungen.json unter "fenster", damit das Fenster beim
 # nächsten Start wieder genau dort und genauso groß erscheint.
