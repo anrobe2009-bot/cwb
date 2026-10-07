@@ -1,6 +1,6 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 07.10.2026 10:46.
+Automatisch erzeugt am 07.10.2026 14:04.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
@@ -15,8 +15,8 @@ Automatisch erzeugt am 07.10.2026 10:46.
 | core\eingangsordner.py | 631 |  |
 | core\zielfenster.py | 602 |  |
 | core\grundlagen.py | 556 |  |
+| core\terminal.py | 539 |  |
 | memory_hub\memory_db.py | 506 | Memory Hub - Kernmodul. |
-| core\terminal.py | 499 |  |
 | core\pfade.py | 466 |  |
 | core\datenordner.py | 462 |  |
 | index\indexer.py | 460 |  |
