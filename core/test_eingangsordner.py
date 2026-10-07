@@ -614,5 +614,114 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
         self.assertEqual(empfangen, ["a.json", "b.json"])
 
 
+class WartezeitTest(unittest.TestCase):
+    """core/eingangsordner.py: `_wartezeit_setzen`/`_wartet_noch` - die reine
+    Kuehlzeit-Logik hinter der Reparatur des Haengers vom 07.10.2026, ohne
+    Qt und ohne echtes Warten."""
+
+    def setUp(self):
+        eingangsordner._naechster_versuch.clear()
+        self.addCleanup(eingangsordner._naechster_versuch.clear)
+
+    def test_frisch_gesetzte_wartezeit_blockt(self):
+        eingangsordner._wartezeit_setzen("a.json")
+        self.assertTrue(eingangsordner._wartet_noch("a.json"))
+
+    def test_ohne_eintrag_blockt_nichts(self):
+        self.assertFalse(eingangsordner._wartet_noch("nie_gesetzt.json"))
+
+    def test_abgelaufene_wartezeit_blockt_nicht_mehr(self):
+        eingangsordner._naechster_versuch["a.json"] = 0.0
+        self.assertFalse(eingangsordner._wartet_noch("a.json"))
+
+
+class NachsehenWiederholungTest(EingangsordnerTestBasis):
+    """Belegt die Reparatur des Haengers vom 07.10.2026 (py-spy-Beleg:
+    haenger/haenger_2026-10-07_10-05-48.txt): `_beanspruchen` und
+    `_zurueckstellen` aendern den vom Eingangswaechter beobachteten Ordner
+    selbst und loesen dadurch sofort das naechste directoryChanged aus - vor
+    der Reparatur fuetterte das eine Schleife im GUI-Faden (Blick ->
+    beanspruchen -> AuftragSpaeter -> zurueckstellen -> naechster Blick),
+    solange eine Datei dauerhaft zurueckgestellt blieb (Terminal belegt).
+    Hier werden mehrere solche Bliche direkt nacheinander simuliert - ohne
+    echten QFileSystemWatcher und ohne echtes Warten, deterministisch und
+    schnell."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(eingangsordner._naechster_versuch.clear)
+
+    def _waechter(self, ausfuehren):
+        return eingangsordner.Eingangswaechter(
+            markierung_erkennen, lambda: True, lambda: "CWB", ausfuehren)
+
+    def test_dauerhaft_zurueckgestellte_datei_wird_nicht_bei_jedem_blick_erneut_beansprucht(self):
+        eingangsordner.ablegen("lokal", "#RUN#\nipconfig")
+
+        def ausfuehren(_auftrag):
+            raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        waechter = self._waechter(ausfuehren)
+        beansprucht = {"anzahl": 0}
+        original = eingangsordner._beanspruchen
+
+        def gezaehlt(pfad):
+            beansprucht["anzahl"] += 1
+            return original(pfad)
+
+        # Zehn Bliche direkt nacheinander stehen fuer zehn rasch
+        # aufeinanderfolgende directoryChanged-Ereignisse.
+        with mock.patch.object(eingangsordner, "_beanspruchen", gezaehlt):
+            for _ in range(10):
+                waechter._nachsehen()
+
+        self.assertEqual(beansprucht["anzahl"], 1,
+                          "die Datei wurde trotz Wartezeit erneut beansprucht")
+        self.assertEqual(len(eingangsordner.wartende_dateien()), 1)
+
+    def test_nach_ablauf_der_wartezeit_wird_erneut_versucht(self):
+        pfad = eingangsordner.ablegen("lokal", "#RUN#\nipconfig")
+        versuche = {"anzahl": 0}
+        empfangen = []
+
+        def ausfuehren(auftrag):
+            versuche["anzahl"] += 1
+            if versuche["anzahl"] < 2:
+                raise eingangsordner.AuftragSpaeter("Terminal belegt")
+            empfangen.append(auftrag)
+
+        waechter = self._waechter(ausfuehren)
+        waechter._nachsehen()
+        self.assertEqual(versuche["anzahl"], 1)
+        self.assertEqual(empfangen, [])
+
+        # Statt echter Wartezeit: die Wartemarke direkt in die Vergangenheit
+        # setzen, so wie es nach Ablauf von RUECKSTELL_WARTEZEIT_S aussaehe.
+        eingangsordner._naechster_versuch[pfad.name] = 0.0
+        waechter._nachsehen()
+        self.assertEqual(versuche["anzahl"], 2)
+        self.assertEqual(len(empfangen), 1)
+        self.assertEqual(eingangsordner.wartende_dateien(), [])
+
+    def test_wiedereintritt_wird_abgewiesen(self):
+        # Simuliert ein directoryChanged, das (entgegen dem Normalfall einer
+        # einzelnen Qt-Ereignisschleife) waehrend eines laufenden Blicks
+        # eintrifft - der zweite, verschachtelte Aufruf darf nichts tun.
+        eingangsordner.ablegen("lokal", "#RUN#\nipconfig")
+        innerer_aufruf = {"erfolgt": False}
+
+        def ausfuehren(_auftrag):
+            waechter._nachsehen()
+            innerer_aufruf["erfolgt"] = True
+            raise eingangsordner.AuftragSpaeter("Terminal belegt")
+
+        waechter = self._waechter(ausfuehren)
+        waechter._nachsehen()
+        self.assertTrue(innerer_aufruf["erfolgt"])
+        # Trotz des verschachtelten Aufrufs wurde die Datei nur einmal
+        # zurueckgestellt, nicht zusaetzlich beansprucht oder verloren.
+        self.assertEqual(len(eingangsordner.wartende_dateien()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

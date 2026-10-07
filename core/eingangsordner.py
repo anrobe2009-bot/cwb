@@ -82,6 +82,24 @@ QUELLE_LOKAL = "lokal"
 MELDUNG_ABSTAND_S = 60.0
 _letzte_meldung: dict[str, float] = {}
 
+# Haenger vom 07.10.2026 (py-spy-Beleg: haenger/haenger_2026-10-07_10-05-48.txt):
+# _beanspruchen (verschiebt aus EINGANG_ORDNER heraus) und _zurueckstellen
+# (verschiebt wieder hinein) aendern den von Eingangswaechter beobachteten
+# Ordner selbst - jede der beiden Bewegungen loest sofort ein neues
+# directoryChanged aus. Bleibt eine Datei dauerhaft zurueckgestellt (Terminal
+# belegt durch einen laengeren Fremdbefehl), fuettert das eine Schleife im
+# GUI-Faden: Blick -> beanspruchen -> AuftragSpaeter -> zurueckstellen ->
+# neues directoryChanged -> naechster Blick, ohne dass die Qt-Ereignis-
+# schleife dazwischen zum Zeichnen kommt. Zwei Gegenmassnahmen:
+# RUECKSTELL_WARTEZEIT_S laesst eine gerade zurueckgestellte Datei fuer
+# diese Zeit unangetastet (kein erneutes Beanspruchen, also auch kein
+# weiteres directoryChanged durch diese Datei), NACHSEHEN_ENTPRELL_MS
+# fasst mehrere directoryChanged kurz hintereinander zu einem einzigen
+# Blick zusammen, statt auf jedes einzelne sofort zu reagieren.
+RUECKSTELL_WARTEZEIT_S = 3.0
+NACHSEHEN_ENTPRELL_MS = 500
+_naechster_versuch: dict[str, float] = {}
+
 
 def _zurueckstellung_melden(name: str, grund) -> None:
     jetzt = time.monotonic()
@@ -89,6 +107,14 @@ def _zurueckstellung_melden(name: str, grund) -> None:
         return
     _letzte_meldung[name] = jetzt
     log.info("Eingangsdatei zurückgestellt (%s): %s", name, grund)
+
+
+def _wartezeit_setzen(name: str) -> None:
+    _naechster_versuch[name] = time.monotonic() + RUECKSTELL_WARTEZEIT_S
+
+
+def _wartet_noch(name: str) -> bool:
+    return time.monotonic() < _naechster_versuch.get(name, 0.0)
 
 
 def erledigt_ordner() -> Path:
@@ -409,6 +435,7 @@ def verarbeiten(pfad: Path, markierung_erkennen, ausfuehren) -> None:
         ausfuehren(auftrag)
     except AuftragSpaeter as grund:
         _zurueckstellung_melden(pfad.name, grund)
+        _wartezeit_setzen(pfad.name)
         _zurueckstellen(laeuft)
     except Exception as fehler:  # noqa: BLE001
         log.exception("Auftrag aus dem Eingangsordner gescheitert (%s): %s", pfad.name, fehler)
@@ -525,8 +552,18 @@ class Eingangswaechter(QObject):
         self._projekt_name = projekt_name
         self._ausfuehren = ausfuehren
         self._fremde_melden = fremde_melden
+        self._laeuft_gerade = False
         self._beobachter = QFileSystemWatcher(self)
-        self._beobachter.directoryChanged.connect(self._nachsehen)
+        # Entprellung (Haenger vom 07.10.2026): directoryChanged startet nur
+        # einen einmaligen Timer neu, statt _nachsehen direkt aufzurufen -
+        # mehrere Ereignisse kurz hintereinander (z.B. durch _beanspruchen
+        # und _zurueckstellen innerhalb desselben Blicks) ergeben so einen
+        # einzigen Blick statt vielen.
+        self._entprell_uhr = QTimer(self)
+        self._entprell_uhr.setSingleShot(True)
+        self._entprell_uhr.setInterval(NACHSEHEN_ENTPRELL_MS)
+        self._entprell_uhr.timeout.connect(self._nachsehen)
+        self._beobachter.directoryChanged.connect(self._entprell_uhr.start)
         self._uhr = QTimer(self)
         self._uhr.setInterval(PRUEF_ABSTAND_MS)
         self._uhr.timeout.connect(self._nachsehen)
@@ -545,6 +582,7 @@ class Eingangswaechter(QObject):
 
     def anhalten(self) -> None:
         self._uhr.stop()
+        self._entprell_uhr.stop()
         if self._beobachter.directories():
             self._beobachter.removePaths(self._beobachter.directories())
         log.info("Eingangsordner-Wächter angehalten")
@@ -559,21 +597,35 @@ class Eingangswaechter(QObject):
     def _nachsehen(self, *_ignoriert) -> None:
         """Ein Blick in den Eingangsordner. `*_ignoriert` fängt den Pfad auf,
         den QFileSystemWatcher.directoryChanged mitgibt - er wird nicht
-        gebraucht, es wird ohnehin der ganze Ordner neu durchsucht."""
-        if not self._eingeschaltet():
-            return
-        try:
-            projekt_name = str(self._projekt_name())
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Projektname für den Eingangsordner nicht lesbar: %s", fehler)
-            return
-        for pfad in wartende_dateien():
-            if not passend_fuer_projekt(pfad, projekt_name):
-                continue
-            verarbeiten(pfad, self._markierung_erkennen, self._ausfuehren)
+        gebraucht, es wird ohnehin der ganze Ordner neu durchsucht.
 
-        if self._fremde_melden is not None:
+        Wiedereintrittssperre und die Wartezeit je Datei (`_wartet_noch`)
+        gehören zusammen: läuft dieser Blick schon (sollte bei Qt im
+        GUI-Faden nicht vorkommen, ist aber billig abzusichern), wird nichts
+        doppelt angefasst; eine Datei, die gerade erst zurückgestellt wurde,
+        wird nicht sofort wieder beansprucht - genau das fütterte den
+        Hänger vom 07.10.2026, da jedes Beanspruchen/Zurückstellen selbst
+        ein neues directoryChanged auslöst."""
+        if self._laeuft_gerade or not self._eingeschaltet():
+            return
+        self._laeuft_gerade = True
+        try:
             try:
-                self._fremde_melden(fremde_projekte(projekt_name))
+                projekt_name = str(self._projekt_name())
             except Exception as fehler:  # noqa: BLE001
-                log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)
+                log.exception("Projektname für den Eingangsordner nicht lesbar: %s", fehler)
+                return
+            for pfad in wartende_dateien():
+                if _wartet_noch(pfad.name):
+                    continue
+                if not passend_fuer_projekt(pfad, projekt_name):
+                    continue
+                verarbeiten(pfad, self._markierung_erkennen, self._ausfuehren)
+
+            if self._fremde_melden is not None:
+                try:
+                    self._fremde_melden(fremde_projekte(projekt_name))
+                except Exception as fehler:  # noqa: BLE001
+                    log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)
+        finally:
+            self._laeuft_gerade = False
