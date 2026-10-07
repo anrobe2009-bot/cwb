@@ -22,6 +22,7 @@ Aussehen kommt vollständig aus stil.qss. Im Python steht keine Gestaltung.
 import atexit
 import functools
 import html
+import json
 import logging
 import os
 import re
@@ -29,6 +30,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from collections import deque
 from datetime import datetime, timedelta
@@ -118,7 +120,8 @@ try:
         modell_merken,
     )
     from .pausetaste import PausenTaste
-    from .pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
+    from .pfade import EINSTELLUNGEN_DATEI, STATUS_DATEI, VERSION, freigaben_lesen, \
+        pfade_vollstaendig
     from .projektwahl import Start
     from .sicherheit import Projekt, Stufe, Wache, projekte_finden
     from .sprache import FESTE_SAETZE, Sprecher
@@ -184,7 +187,8 @@ except ImportError:
         modell_merken,
     )
     from pausetaste import PausenTaste
-    from pfade import EINSTELLUNGEN_DATEI, VERSION, freigaben_lesen, pfade_vollstaendig
+    from pfade import EINSTELLUNGEN_DATEI, STATUS_DATEI, VERSION, freigaben_lesen, \
+        pfade_vollstaendig
     from projektwahl import Start
     from sicherheit import Projekt, Stufe, Wache, projekte_finden
     from sprache import FESTE_SAETZE, Sprecher
@@ -1279,6 +1283,29 @@ class Werkbank(QMainWindow):
     def _taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
         """Setzt Taetigkeit und Dateiname im Aktivitaetsbalken."""
         self.balken.taetigkeit_zeigen(taetigkeit, pfad)
+
+    def _auftrag_aktiv(self) -> bool:
+        """Wahr, solange dieses Fenster irgendeinen Auftrag abarbeitet - einen
+        Claude-Auftrag (#CODE#, self._auftrag_laeuft) oder einen Terminal-/
+        Admin-Befehl bzw. Screenshot (#RUN#/#ADMIN#/#BILD#, eigene Faeden).
+        Einzige Stelle, die der Herzschlag fuer core/waechter_anzeige.py
+        (Modulende dieser Datei, _herzschlag_schreiben) befragt."""
+        return bool(
+            self._auftrag_laeuft
+            or (self._terminal_faden is not None and self._terminal_faden.isRunning())
+            or (self._bild_faden is not None and self._bild_faden.isRunning())
+        )
+
+    def _auftrag_kurz(self) -> str:
+        """Kurze Bezeichnung des laufenden Auftrags fuer den Herzschlag -
+        nur zur Anzeige/zum Nachsehen, nichts haengt an ihrem genauen Text."""
+        if self._auftrag_laeuft:
+            return self.balken.text.text() or "Claude-Auftrag"
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            return "Terminalbefehl"
+        if self._bild_faden is not None and self._bild_faden.isRunning():
+            return "Screenshot"
+        return ""
 
     def _zugriff_zeigen(self) -> None:
         """Bringt Kachel und Kopfzeile auf den geltenden Zustand. Die Kachel
@@ -3855,6 +3882,90 @@ class Werkbank(QMainWindow):
 # Programmstart
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Herzschlag fuer den Waechter-Prozess (core/waechter_anzeige.py)
+# ---------------------------------------------------------------------------
+# Der Waechter kennt CWB nur ueber STATUS_DATEI - ein eigener, unabhaengiger
+# Prozess, der genau deshalb auch anzeigt, wenn dieser Prozess haengt oder
+# abstuerzt. Der QTimer unten (main()) laeuft im GUI-Faden und schreibt die
+# Datei jede Sekunde neu; haengt der GUI-Faden, bleibt sie automatisch stehen
+# - das ist das Signal fuer den Waechter. "Arbeitet" gilt, sobald IRGENDEIN
+# offenes Fenster (OFFENE_FENSTER, mehrere Projekte moeglich) einen Auftrag
+# laufen hat (Werkbank._auftrag_aktiv, oben).
+
+def _herzschlag_schreiben() -> None:
+    zustand = "bereit"
+    auftrag = ""
+    for fenster in list(OFFENE_FENSTER):
+        try:
+            if fenster._auftrag_aktiv():
+                zustand = "arbeitet"
+                auftrag = fenster._auftrag_kurz()
+                break
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Herzschlag: Fensterabfrage gescheitert: %s", fehler)
+    try:
+        STATUS_DATEI.parent.mkdir(parents=True, exist_ok=True)
+        inhalt = json.dumps({
+            "zeit": time.time(), "pid": os.getpid(), "zustand": zustand, "auftrag": auftrag,
+        }, ensure_ascii=False)
+        temp = STATUS_DATEI.with_suffix(".tmp")
+        temp.write_text(inhalt, encoding="utf-8")
+        os.replace(temp, STATUS_DATEI)
+    except OSError as fehler:
+        log.error("Herzschlag nicht schreibbar: %s", fehler)
+
+
+def _herzschlag_beenden() -> None:
+    """An atexit gehaengt: haelt ein regulaeres Programmende fest, damit
+    core/waechter_anzeige.py es nicht faelschlich als Absturz meldet. atexit
+    laeuft bei einem echten Absturz/Kill nicht - genau der Unterschied, den
+    der Waechter braucht."""
+    try:
+        STATUS_DATEI.write_text(
+            json.dumps({"zeit": time.time(), "pid": os.getpid(), "zustand": "beendet"}),
+            encoding="utf-8",
+        )
+    except OSError as fehler:
+        log.error("Herzschlag (Ende) nicht schreibbar: %s", fehler)
+
+
+def _waechter_befehl() -> list[str]:
+    """Wie Werkbank._neustart_befehl: im gepackten Zustand (sys.frozen) ueber
+    starter.py, sonst fehlt der von starter.py gesetzte Suchpfad zum Ordner
+    'pakete' (PySide6 usw.) und der Waechter stuerzte sofort beim Import ab."""
+    if getattr(sys, "frozen", False):
+        einstieg = CWB_WURZEL / "starter.py"
+        return [sys.executable, str(einstieg), "--waechter-anzeige"]
+    return [sys.executable, str(Path(sys.argv[0]).resolve()), "--waechter-anzeige"]
+
+
+def _waechter_starten() -> None:
+    """Stoesst core/waechter_anzeige.py als eigenen, konsolenlosen Prozess an
+    - ueber denselben Startweg wie CWB selbst (_waechter_befehl). Scheitert
+    das, laeuft CWB trotzdem normal weiter, nur ohne Zustandsanzeige."""
+    try:
+        subprocess.Popen(
+            _waechter_befehl(),
+            cwd=str(CWB_WURZEL),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        log.info("Waechter-Anzeige gestartet")
+    except OSError as fehler:
+        log.error("Waechter-Anzeige nicht startbar: %s", fehler)
+
+
+def _waechter_anzeige_starten_und_beenden() -> None:
+    """Zweig fuer den Schalter --waechter-anzeige (siehe main()): dieser
+    Prozess wird zum Waechter selbst statt ein Hauptfenster aufzubauen - wie
+    _admin_worker_starten_und_beenden fuer --admin-worker."""
+    try:
+        from . import waechter_anzeige
+    except ImportError:
+        import waechter_anzeige
+    waechter_anzeige.main()
+
+
 def _admin_worker_starten_und_beenden() -> None:
     """Nimmt CWB als erhoehten Worker-Prozess: gestartet mit --admin-worker
     und --admin-schluessel, ohne jede Oberflaeche. Kehrt erst zurueck, wenn
@@ -3895,6 +4006,14 @@ def main() -> None:
         _admin_worker_starten_und_beenden()
         return
 
+    # Der Waechter (core/waechter_anzeige.py) ist derselbe Einstiegspunkt,
+    # nur mit anderem Kommandozeilenschalter neu gestartet (_waechter_befehl
+    # unten) - genau wie der Admin-Worker braucht er keine Werkbank-
+    # Oberflaeche und darf gar nicht erst eine aufbauen.
+    if "--waechter-anzeige" in sys.argv:
+        _waechter_anzeige_starten_und_beenden()
+        return
+
     ADMIN_WORKER.sperre_schreiben()
     atexit.register(ADMIN_WORKER.sperre_entfernen)
 
@@ -3925,6 +4044,19 @@ def main() -> None:
         args=(FESTE_SAETZE,),
         daemon=True,
     ).start()
+
+    # Herzschlag fuer den Waechter: ab sofort jede Sekunde, damit die Datei
+    # von Anfang an frisch ist, statt die ersten Sekunden als "kein
+    # Herzschlag" zu zeigen. atexit sorgt beim regulaeren Ende dafuer, dass
+    # der Waechter das von einem Absturz unterscheiden kann (siehe
+    # _herzschlag_beenden) - bei einem echten Absturz laeuft atexit nicht.
+    _herzschlag_schreiben()
+    herzschlag_uhr = QTimer(anwendung)
+    herzschlag_uhr.setInterval(1000)
+    herzschlag_uhr.timeout.connect(_herzschlag_schreiben)
+    herzschlag_uhr.start()
+    atexit.register(_herzschlag_beenden)
+    _waechter_starten()
 
     sys.exit(anwendung.exec())
 

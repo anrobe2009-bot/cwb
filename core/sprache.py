@@ -154,6 +154,9 @@ SIGNALE: dict[str, Signal] = {
     "fertig": Signal(880, 140),
     "abgebrochen": Signal(300, 200),
     "fehler": Signal(220, 300),
+    # Eigener, weicher Ton fuer den Waechter-Prozess (core/waechter_anzeige.py),
+    # wenn er auf "Arbeitet" wechselt - "bereit" gibt es dafuer schon.
+    "waechter_arbeitet": Signal(600, 90),
 }
 
 
@@ -166,7 +169,8 @@ SIGNALE: dict[str, Signal] = {
 TON_GRUPPEN: dict[str, tuple[str, ...]] = {
     "abschluss": ("fertig", "abgebrochen", "bereit"),
     "warnung": ("fehler", "wartet"),
-    "arbeit": ("liest", "schreibt", "fuehrt_aus", "sucht", "denkt", "schaerft", "netz"),
+    "arbeit": ("liest", "schreibt", "fuehrt_aus", "sucht", "denkt", "schaerft", "netz",
+               "waechter_arbeitet"),
 }
 
 TON_GRUPPEN_TITEL = {

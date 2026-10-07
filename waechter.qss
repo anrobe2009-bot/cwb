@@ -1,0 +1,20 @@
+/* CWB - Waechter-Anzeige (core/waechter_anzeige.py)
+   Drei Zustaende, Farbe ist der tragende Kanal: Robert erkennt grosse
+   Farbflaechen, keine Buchstaben. Grob getrennte, kraeftige Farben statt
+   feiner Abstufungen - siehe CLAUDE.md/Gedaechtnis zu seiner Restsehkraft. */
+
+#waechterFenster {
+    border: 2px solid #000000;
+}
+
+#waechterFenster[zustand="arbeitet"] { background-color: #1aa34a; }  /* Gruen */
+#waechterFenster[zustand="bereit"]   { background-color: #2563eb; }  /* Blau  */
+#waechterFenster[zustand="haengt"]      { background-color: #d62f2f; }  /* Rot */
+#waechterFenster[zustand="abgestuerzt"] { background-color: #d62f2f; }  /* Rot */
+
+/* Schriftgroesse setzt core/waechter_anzeige.py in Python je nach Fenster-
+   groesse (WaechterFenster.resizeEvent) - keine feste Pixelgroesse hier. */
+#waechterText {
+    color: #ffffff;
+    font-weight: bold;
+}
