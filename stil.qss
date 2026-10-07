@@ -152,14 +152,14 @@ QToolTip {
    Nachbarfeld abhebt - vorher stand reiner Text ohne Rahmen nebeneinander,
    eine Zahl liess sich dadurch bei wenig Platz leicht dem falschen
    Nachbarfeld zuordnen ("6 Brücke"). Sicherheitshinweis, Freigaben, Brücke,
-   Leitstand, Kontingent und Eingang bekommen dieselbe ruhige Flaeche wie die
-   Zaehlerreihe; Warteanzeige behaelt ihren eigenen Warnton (siehe unten). */
+   Leitstand und Eingang bekommen dieselbe ruhige Flaeche wie die
+   Zaehlerreihe; Warteanzeige behaelt ihren eigenen Warnton (siehe unten);
+   die Kontingent-Anzeige (seit Block 82 in der Statusleiste, nicht mehr
+   hier) bekommt dieselbe Flaeche weiter unten. */
 #sicherheitshinweis,
 #freigabenanzeige,
 #brueckenanzeige,
 #leitstandanzeige,
-#kontingentanzeige,
-#kontingentsitzunganzeige,
 #eingangsanzeige {
     background-color: #171b22;
     color: #c7d0e0;
@@ -167,26 +167,6 @@ QToolTip {
     padding: 0.25em 0.6em;
     border: 2px solid #333a47;
     border-radius: 6px;
-}
-
-/* Kontingent-Anzeige (Block 36): Farbe als zusaetzliches Signal zur echten
-   Auslastung - Python setzt die Eigenschaft "kontingentstufe"
-   (core/kopfzeile.py, _kontingent_stufe_setzen) aus der vom Agent-SDK
-   gemeldeten Auslastung (Feld "utilization"). Unter 90 % bleibt die
-   neutrale Farbe oben; 90-95 % gelb/orange, ab 95 % sowie bei einer echten
-   Kontingent-Pause (status=rejected) rot. */
-#kontingentanzeige[kontingentstufe="warnung"],
-#kontingentsitzunganzeige[kontingentstufe="warnung"] {
-    color: #e0b36b;
-    border-color: #8a6a2f;
-}
-
-#kontingentanzeige[kontingentstufe="kritisch"],
-#kontingentsitzunganzeige[kontingentstufe="kritisch"],
-#kontingentanzeige[kontingentstufe="erschoepft"],
-#kontingentsitzunganzeige[kontingentstufe="erschoepft"] {
-    color: #ff8f8f;
-    border-color: #8a3030;
 }
 
 /* Warteanzeige: wie viele Auftraege hinter dem laufenden stehen. Sie faellt
@@ -227,8 +207,10 @@ QToolTip {
     font-size: 13pt;
 }
 
-/* Block 82: Leiste ueber dem Ausgabefeld mit "Läuft"/"Wartet" links und dem
-   Kopieren-Knopf rechts (vorher schwebte er als Kind-Widget direkt auf dem
+/* Block 82: Leiste ueber dem Ausgabefeld. LINKS der Platzhalter fuer den
+   Waechter-Farbknopf (eigener Prozess, core/waechter_anzeige.py) und
+   "Läuft"/"Wartet", RECHTS die Kontingent-Anzeige und ganz aussen der
+   Kopieren-Knopf (vorher schwebte er als Kind-Widget direkt auf dem
    Ausgabefeld oben rechts) - "Wartet" bekommt den uebrigen Platz
    (Streckfaktor in fenster.py) und bricht bei vielen Eintraegen in eine
    zweite Zeile um (setWordWrap), statt den Knopf zu verdraengen. */
@@ -239,10 +221,54 @@ QToolTip {
     padding: 0.2em 0.6em;
 }
 
+/* Reine Platzflaeche fuer den angedockten Waechter (core/fenster.py,
+   Werkbank._waechter_platzhalter_geometrie): quadratisch anhand der
+   Zeilenhoehe, kein fester Pixelwert. Ruhiger Rahmen als Fallback, falls der
+   Waechter-Prozess (noch) nicht laeuft - sonst liegt seine Farbflaeche
+   deckungsgleich darauf. */
+#waechter_platzhalter {
+    background-color: #171b22;
+    border: 2px solid #333a47;
+    border-radius: 50%;
+    min-width: 1.6em;
+    max-width: 1.6em;
+}
+
 #laeuft_anzeige,
 #wartet_anzeige {
     color: #c7d0e0;
     font-size: 13pt;
+}
+
+/* Kontingent-Anzeige (Block 36/37, seit Block 82 hier statt in der
+   Kopfzeile): dieselbe ruhige Flaeche wie Sicherheitshinweis/Freigaben/etc.
+   oben. Farbe als zusaetzliches Signal zur echten Auslastung - Python setzt
+   die Eigenschaft "kontingentstufe" (core/fenster.py, _kontingent_stufe_setzen)
+   aus der vom Agent-SDK gemeldeten Auslastung (Feld "utilization"). Unter
+   90 % bleibt die neutrale Farbe hier; 90-95 % gelb/orange, ab 95 % sowie
+   bei einer echten Kontingent-Pause (status=rejected) rot. */
+#kontingentanzeige,
+#kontingentsitzunganzeige {
+    background-color: #171b22;
+    color: #c7d0e0;
+    font-size: 13pt;
+    padding: 0.25em 0.6em;
+    border: 2px solid #333a47;
+    border-radius: 6px;
+}
+
+#kontingentanzeige[kontingentstufe="warnung"],
+#kontingentsitzunganzeige[kontingentstufe="warnung"] {
+    color: #e0b36b;
+    border-color: #8a6a2f;
+}
+
+#kontingentanzeige[kontingentstufe="kritisch"],
+#kontingentsitzunganzeige[kontingentstufe="kritisch"],
+#kontingentanzeige[kontingentstufe="erschoepft"],
+#kontingentsitzunganzeige[kontingentstufe="erschoepft"] {
+    color: #ff8f8f;
+    border-color: #8a3030;
 }
 
 QPushButton#kopieren {

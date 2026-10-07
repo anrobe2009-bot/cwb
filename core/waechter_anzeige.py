@@ -5,11 +5,14 @@ Waechter-Anzeige: eigenstaendiger Prozess, unabhaengig vom Hauptfenster.
 Ein haengendes oder abgestuerztes CWB kann sich nicht mehr selbst anzeigen -
 deshalb dieser zweite, kleine Prozess. core/fenster.py schreibt jede Sekunde
 einen Herzschlag nach STATUS_DATEI (core/pfade.py): Zeitstempel, PID, Zustand
-("arbeitet"/"bereit"/"beendet"), kurze Auftragsbezeichnung. Dieser Prozess
-liest die Datei einmal pro Sekunde und zeigt ein kleines, immer oben
-liegendes, rahmenloses Fenster mit genau drei Zustaenden - Robert erkennt nur
-noch grosse Farbflaechen, keine Buchstaben, darum ist die Farbe der tragende
-Kanal, das grosse Wort die Stuetze dazu:
+("arbeitet"/"bereit"/"beendet"), kurze Auftragsbezeichnung sowie (Block 82)
+die globalen Bildschirmkoordinaten/Groesse des Waechter-Platzhalters in der
+Statusleiste ueber dem Ausgabefeld und ob CWB gerade minimiert ist. Dieser
+Prozess liest die Datei einmal pro Sekunde und legt einen kleinen, rahmenlosen,
+immer oben liegenden Farbknopf passgenau auf diesen Platzhalter - Robert
+erkennt nur noch grosse Farbflaechen, keine Buchstaben, darum traegt allein
+die Farbe die Information; Name/Zustand stehen als Tooltip und
+Barrierefreiheitsname dahinter, fuer Screenreader und sehende Mitnutzer:
 
   GRUEN  "Arbeitet"            - Herzschlag juenger als 5 s, Datei sagt "arbeitet"
   BLAU   "Bereit"              - Herzschlag juenger als 5 s, Datei sagt "bereit"
@@ -18,6 +21,12 @@ Kanal, das grosse Wort die Stuetze dazu:
 
 Dazwischen (5 bis 15 s) bleibt der zuletzt bekannte Zustand stehen - kein
 Alarm fuer eine einzelne verzoegerte Sekunde.
+
+Ist CWB minimiert, blendet sich der Knopf aus - ausser bei Haengt/
+Abgestuerzt: dann bleibt er an der zuletzt bekannten Stelle sichtbar, denn
+genau dann ist die Anzeige am wichtigsten. Angedockt laesst er sich nicht
+mehr mit der Maus verschieben (vorher, als freischwebendes Fenster, schon) -
+seine Stelle bestimmt allein CWB ueber den Platzhalter.
 
 Gestartet wird dieser Prozess von core/fenster.py (main(), Schalter
 --waechter-anzeige) ueber denselben Startweg wie CWB selbst - das ist im
@@ -35,15 +44,15 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 try:
-    from .pfade import CWB_WURZEL, STATUS_DATEI, WAECHTER_FENSTER_DATEI, WAECHTER_SPERR_DATEI
+    from .pfade import CWB_WURZEL, STATUS_DATEI, WAECHTER_SPERR_DATEI
     from .sprache import Sprecher
 except ImportError:
-    from pfade import CWB_WURZEL, STATUS_DATEI, WAECHTER_FENSTER_DATEI, WAECHTER_SPERR_DATEI
+    from pfade import CWB_WURZEL, STATUS_DATEI, WAECHTER_SPERR_DATEI
     from sprache import Sprecher
 
 log = logging.getLogger("cwb.waechter_anzeige")
@@ -112,34 +121,38 @@ def _sperre_entfernen() -> None:
         log.error("Sperrdatei fuer Waechter nicht loeschbar: %s", fehler)
 
 
+def _status_lesen() -> dict | None:
+    """Eigener, unabhaengiger Lesezugriff auf STATUS_DATEI fuer die
+    Platzhalter-Geometrie - getrennt von Waechter.zustand_ermitteln() (das
+    die Datei fuer die Zustandsentscheidung selbst liest), damit beide sich
+    nicht gegenseitig Parameter aufzwingen."""
+    try:
+        return json.loads(STATUS_DATEI.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Das Fenster selbst
 # ---------------------------------------------------------------------------
 
-class WaechterFenster(QWidget):
-    """Kleines, rahmenloses, immer oben liegendes Fenster mit grosser
-    Farbflaeche und grossem Wort. Aussehen kommt aus waechter.qss (Farben
-    haengen am Attribut 'zustand', wie core/fenster.py das beim
-    Aktivitaetsbalken schon macht) - hier in Python nur Geometrie, Text und
-    das Ziehen per Maus."""
+class WaechterKnopf(QWidget):
+    """Kleiner, rahmenloser, immer oben liegender Farbknopf - traegt keinen
+    eigenen Text mehr (Block 82): die Farbe ist der einzige Kanal, Wort und
+    Erklaerung stehen als Tooltip/Barrierefreiheitsname dahinter. Aussehen
+    kommt aus waechter.qss (Farben haengen am Attribut 'zustand', wie
+    core/fenster.py das beim Aktivitaetsbalken schon macht) - hier in Python
+    nur Geometrie und Zustand, kein Ziehen mehr: die Stelle bestimmt CWB
+    ueber den Platzhalter in der Statusleiste (andocken())."""
 
     def __init__(self, sprecher: Sprecher):
         super().__init__()
         self.sprecher = sprecher
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setObjectName("waechterFenster")
-        self.setAccessibleName("CWB-Zustandsanzeige")
+        self.setObjectName("waechterKnopf")
+        self.setAccessibleName("CWB-Zustand")
         self.setWindowTitle("CWB")
-
-        self.text = QLabel("", self)
-        self.text.setObjectName("waechterText")
-        self.text.setAlignment(Qt.AlignCenter)
-        self.text.setWordWrap(True)
-
-        aufbau = QVBoxLayout(self)
-        aufbau.setContentsMargins(0, 0, 0, 0)
-        aufbau.addWidget(self.text)
 
         try:
             qss = (CWB_WURZEL / "waechter.qss").read_text(encoding="utf-8")
@@ -149,70 +162,43 @@ class WaechterFenster(QWidget):
 
         self._zustand = ""
         self._haenger_ausgeloest = False
-        self._ziehpunkt: QPoint | None = None
+        self._letzte_geometrie: tuple[int, int, int, int] | None = None
 
-        self._groesse_setzen()
-        self._position_wiederherstellen()
-
-    def resizeEvent(self, ereignis) -> None:
-        super().resizeEvent(ereignis)
-        # Keine feste Pixelgroesse (CLAUDE.md): die Schrift richtet sich
-        # nach der tatsaechlichen Fensterhoehe, nicht nach einem festen Wert
-        # in waechter.qss.
-        schrift = self.text.font()
-        schrift.setPointSizeF(max(10.0, self.height() * 0.28))
-        self.text.setFont(schrift)
-
-    def _groesse_setzen(self) -> None:
-        """Keine feste Pixelgroesse: ein Anteil der verfuegbaren
-        Bildschirmflaeche, gross genug fuer Farbe und Wort, klein genug, um
-        nicht zu stoeren."""
+        # Vorlaeufige Stelle, bis der erste Herzschlag mit Platzhalter-
+        # Geometrie da ist - keine feste Pixelgroesse danach, dann kommt
+        # Groesse und Stelle allein von CWB (andocken()).
         bildschirm = QGuiApplication.primaryScreen().availableGeometry()
-        breite = max(110, int(bildschirm.width() * 0.08))
-        hoehe = max(45, int(bildschirm.height() * 0.045))
-        self.resize(breite, hoehe)
+        self.resize(28, 28)
+        self.move(bildschirm.right() - 48, bildschirm.top() + 20)
 
-    def _position_wiederherstellen(self) -> None:
-        try:
-            daten = json.loads(WAECHTER_FENSTER_DATEI.read_text(encoding="utf-8"))
-            self.move(int(daten["x"]), int(daten["y"]))
-            return
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        bildschirm = QGuiApplication.primaryScreen().availableGeometry()
-        self.move(bildschirm.right() - self.width() - 20, bildschirm.top() + 20)
+    # -- Geometrie ----------------------------------------------------------
 
-    def _position_merken(self) -> None:
-        try:
-            WAECHTER_FENSTER_DATEI.parent.mkdir(parents=True, exist_ok=True)
-            WAECHTER_FENSTER_DATEI.write_text(
-                json.dumps({"x": self.x(), "y": self.y()}), encoding="utf-8"
-            )
-        except OSError as fehler:
-            log.error("Fensterposition nicht merkbar: %s", fehler)
+    def andocken(self, x: int, y: int, breite: int, hoehe: int) -> None:
+        """Legt den Knopf passgenau auf den gemeldeten Platzhalter und merkt
+        sich die Stelle - fuer an_letzter_stelle_zeigen(), falls CWB als
+        naechstes haengt oder minimiert wird."""
+        self._letzte_geometrie = (x, y, breite, hoehe)
+        self.setGeometry(x, y, breite, hoehe)
+        if not self.isVisible():
+            self.show()
 
-    # -- Ziehen mit der Maus --------------------------------------------
+    def an_letzter_stelle_zeigen(self) -> None:
+        """Haengt/Abgestuerzt bleiben sichtbar, auch wenn CWB als minimiert
+        gemeldet ist oder gar nichts mehr meldet - genau dann ist die
+        Anzeige am wichtigsten. Ohne jede bisher bekannte Geometrie (direkt
+        nach dem eigenen Start) bleibt die vorlaeufige Stelle von __init__."""
+        if self._letzte_geometrie is not None:
+            self.setGeometry(*self._letzte_geometrie)
+        if not self.isVisible():
+            self.show()
 
-    def mousePressEvent(self, ereignis) -> None:
-        if ereignis.button() == Qt.LeftButton:
-            self._ziehpunkt = ereignis.globalPosition().toPoint() - self.pos()
-
-    def mouseMoveEvent(self, ereignis) -> None:
-        if self._ziehpunkt is not None:
-            self.move(ereignis.globalPosition().toPoint() - self._ziehpunkt)
-
-    def mouseReleaseEvent(self, ereignis) -> None:
-        if self._ziehpunkt is not None:
-            self._ziehpunkt = None
-            self._position_merken()
-
-    # -- Zustand ----------------------------------------------------------
+    # -- Zustand --------------------------------------------------------------
 
     def zustand_setzen(self, zustand: str, hinweis: str = "") -> None:
-        """Faerbt Fenster und Wort gemeinsam und meldet einen Wechsel per Ton
-        bzw. - nur bei Haengt/Abgestuerzt - per kurzer Ansage."""
+        """Faerbt den Knopf und meldet einen Wechsel per Ton bzw. - nur bei
+        Haengt/Abgestuerzt - per kurzer Ansage. Wort und Hinweis stehen als
+        Tooltip/Barrierefreiheitsname, nie als sichtbarer Text."""
         wort = WORT_JE_ZUSTAND.get(zustand, zustand)
-        self.text.setText(wort)
         self.setToolTip(hinweis or wort)
         self.setAccessibleDescription(f"{wort}. {hinweis}" if hinweis else wort)
         if zustand == self._zustand:
@@ -220,8 +206,6 @@ class WaechterFenster(QWidget):
         self._zustand = zustand
         self.setProperty("zustand", zustand)
         self.style().polish(self)
-        self.text.setProperty("zustand", zustand)
-        self.text.style().polish(self.text)
         self._melden(zustand)
 
     def _melden(self, zustand: str) -> None:
@@ -268,7 +252,7 @@ class Waechter:
     von der Darstellung getrennt, damit sich die Entscheidung fuer sich
     pruefen laesst (siehe core/test_waechter_anzeige.py)."""
 
-    def __init__(self, fenster: WaechterFenster):
+    def __init__(self, fenster: WaechterKnopf):
         self.fenster = fenster
         self._letzter_bekannter = "bereit"
         self._start = time.monotonic()
@@ -282,6 +266,7 @@ class Waechter:
                 app.quit()
             return
         self.fenster.zustand_setzen(zustand, hinweis)
+        self._andocken_oder_ausblenden(zustand)
 
     def zustand_ermitteln(self, jetzt_epoche: float, jetzt_monoton: float) -> tuple[str, str]:
         try:
@@ -316,6 +301,27 @@ class Waechter:
             return "haengt", f"Kein Herzschlag seit {int(alter)} Sekunden."
         return "abgestuerzt", f"Prozess {pid} existiert nicht mehr."
 
+    def _andocken_oder_ausblenden(self, zustand: str) -> None:
+        """Legt den Knopf auf den von CWB gemeldeten Platzhalter oder
+        blendet ihn aus - Block 82, Punkt 3. Haengt/Abgestuerzt bleiben an
+        der letzten bekannten Stelle sichtbar, egal was die Datei zuletzt
+        zur Geometrie sagt (CWB selbst haengt ja gerade, seine letzte
+        Meldung kann veraltet sein)."""
+        if zustand in ("haengt", "abgestuerzt"):
+            self.fenster.an_letzter_stelle_zeigen()
+            return
+        daten = _status_lesen()
+        if daten is None or daten.get("minimiert", True):
+            self.fenster.hide()
+            return
+        try:
+            x, y = int(daten["x"]), int(daten["y"])
+            breite, hoehe = int(daten["breite"]), int(daten["hoehe"])
+        except (KeyError, TypeError, ValueError):
+            self.fenster.hide()
+            return
+        self.fenster.andocken(x, y, breite, hoehe)
+
 
 # ---------------------------------------------------------------------------
 # Start
@@ -331,7 +337,7 @@ def main() -> None:
 
     anwendung = QApplication(sys.argv)
     sprecher = Sprecher()
-    fenster = WaechterFenster(sprecher)
+    fenster = WaechterKnopf(sprecher)
     fenster.show()
 
     waechter = Waechter(fenster)

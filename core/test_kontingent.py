@@ -430,7 +430,7 @@ class KontingentAnzeigeAktualisierenTest(unittest.TestCase):
         )
         fake = types.SimpleNamespace(
             faden=types.SimpleNamespace(sitzung=sitzung),
-            ausgabekopf=types.SimpleNamespace(kontingent_zeigen=MagicMock()),
+            _kontingent_zeigen=MagicMock(),
             sprecher=types.SimpleNamespace(sprich=MagicMock()),
             _kontingent_warnung_90_gegeben=False,
             _kontingent_warnung_95_gegeben=False,

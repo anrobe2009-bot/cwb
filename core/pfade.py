@@ -280,16 +280,17 @@ BRUECKE_ZUGANG_DATEI = DATENORDNER / "bruecke_zugang.txt"
 
 # -- Herzschlag / Waechter-Anzeige ---------------------------------------------
 # core/fenster.py schreibt hier jede Sekunde den Arbeitszustand (Zeitstempel,
-# PID, "arbeitet"/"bereit"/"beendet", kurze Auftragsbezeichnung); der
-# eigenstaendige Prozess core/waechter_anzeige.py liest das und zeigt ein
-# immer oben liegendes Fenster mit drei Zustaenden - bleibt die Datei stehen,
-# haengt oder ist CWB abgestuerzt, genau das ist das Signal. Liegt im
+# PID, "arbeitet"/"bereit"/"beendet", kurze Auftragsbezeichnung) sowie, seit
+# Block 82, die globalen Bildschirmkoordinaten/Groesse des Waechter-
+# Platzhalters in der Statusleiste und ob CWB minimiert ist; der
+# eigenstaendige Prozess core/waechter_anzeige.py liest das und legt einen
+# kleinen, immer oben liegenden Farbknopf genau darauf - bleibt die Datei
+# stehen, haengt oder ist CWB abgestuerzt, genau das ist das Signal. Liegt im
 # Datenordner, nicht im Programmordner, aus demselben Grund wie Gedaechtnis
 # und Code-Index: muss jeden Programmwechsel ueberleben.
 
 STATUS_DATEI = DATENORDNER / "status.json"
 WAECHTER_SPERR_DATEI = DATENORDNER / "waechter.pid"
-WAECHTER_FENSTER_DATEI = DATENORDNER / "waechter_fenster.json"
 
 
 # -- Leitstand -----------------------------------------------------------------

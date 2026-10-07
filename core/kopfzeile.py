@@ -8,12 +8,13 @@ Rueckfrage-Ausnahmen (Internet, Loeschen im Projekt, Installieren), die Zahl
 der aktiven Freigaben (Einstellungen, Reiter Freigaben), der Bruecken-Status
 (dauerhaft "Brücke: an"/"Brücke: aus", Einstellungen Reiter Verhalten), der
 Leitstand-Status (nur sichtbar, solange er fuer dieses Projekt an ist), die
-Modellanzeige, die Such-Effizienz, der Kontingent-Zustand (Block 36, zwei
-Felder Woche/Sitzung mit echten Prozentzahlen, dauerhaft sichtbar wie die
-Modellanzeige), die Warteanzeige mit der Zahl der vorgemerkten Auftraege
-(leer, solange keiner wartet), die Eingangsanzeige mit der Zahl der
-Auftragsdateien im Eingangsordner, die auf ein anderes Projekt warten
-(Block 63, ebenfalls leer im Regelfall), und zuletzt die drei Tokenzaehler.
+Modellanzeige, die Such-Effizienz, die Warteanzeige mit der Zahl der
+vorgemerkten Auftraege (leer, solange keiner wartet), die Eingangsanzeige mit
+der Zahl der Auftragsdateien im Eingangsordner, die auf ein anderes Projekt
+warten (Block 63, ebenfalls leer im Regelfall), und zuletzt die drei
+Tokenzaehler. Der Kontingent-Zustand (Block 36, zwei Felder Woche/Sitzung)
+steht seit Block 82 nicht mehr hier, sondern in der Statusleiste ueber dem
+Ausgabefeld (core/fenster.py, `_kontingent_zeigen`).
 Die Zaehler stehen unmittelbar nebeneinander in der Reihenfolge "Auftrag",
 "Sitzung", "Heute" - gleiche Breite, gleiche Gestalt, ohne Zwischenraum. Die
 Schaltflaeche zum Kopieren steht nicht in dieser Reihe (siehe unten). Ein
@@ -21,9 +22,8 @@ eigenes Feld fuer die Statusmeldung gibt es nicht; die Meldung wird
 gesprochen und steht als Beschreibung an der Kopfzeile selbst.
 
 Jedes Feld zeigt immer sein eigenes Substantiv zusammen mit seinem Wert als
-ein zusammenhaengendes Textstueck ("Freigaben 6", "Brücke: an", "Woche
-80 % · zurück Do 11:00") - nie eine nackte Zahl und nie ein Wort ohne seinen
-Zustand. Eine
+ein zusammenhaengendes Textstueck ("Freigaben 6", "Brücke: an") - nie eine
+nackte Zahl und nie ein Wort ohne seinen Zustand. Eine
 Zahl kann dadurch nie faelschlich einem benachbarten Feld zugeschlagen
 werden, auch wenn die Reihe eng steht.
 
@@ -139,18 +139,6 @@ BRUECKE_BEISPIELE = ("Brücke: an", "Brücke: aus")
 # Fall. Anders als Bruecke nicht dauerhaft sichtbar: ein Projekt ohne
 # Leitstand soll hier dauerhaft nichts anzeigen muessen.
 LEITSTAND_BEISPIELE = ("Leitstand an",)
-
-# Kontingent-Zustand (Block 36): anders als die meisten Felder hier
-# dauerhaft sichtbar wie die Modellanzeige - "Woche: unter Warnschwelle"
-# ohne RateLimitEvent-Meldung des Agent-SDK, sonst "Woche NN % · zurück
-# Do HH:MM" mit der echten Auslastung (Feld "utilization"). Die Breite wird
-# am laengsten moeglichen Text gemessen.
-KONTINGENT_WOCHE_BEISPIELE = ("Woche 100 % · zurück Mi 11:00", "Woche: unter Warnschwelle")
-
-# Zweites Kontingent-Feld fuer das Fuenf-Stunden-Fenster - verborgen, bis das
-# SDK zum ersten Mal eine Meldung dazu schickt (siehe core/sitzung.py,
-# _kontingent_zustand_berechnen, "sitzung_anzeige").
-KONTINGENT_SITZUNG_BEISPIELE = ("Sitzung 100 % · zurück 11:00",)
 
 # "Such-Effizienz" (Block C10, umbenannt von "Suche gespart"): Grundwert vom
 # 21.09.2026 geteilt durch die aktuellen Lesezugriffe (Read, Grep, Glob,
@@ -389,10 +377,6 @@ class Ausgabekopf(QWidget):
         self._freigaben_namen: list = []
         self._bruecke_an = False
         self._leitstand_an = False
-        self._kontingent_stufe = "normal"
-        self._kontingent_text = "Woche: unter Warnschwelle."
-        self._kontingent_woche_anzeige = "Woche: unter Warnschwelle"
-        self._kontingent_sitzung_anzeige: str | None = None
         self._such_prozent: int | None = None
         self._modell_lang = ""
         self._warte_anzahl = 0
@@ -483,28 +467,6 @@ class Ausgabekopf(QWidget):
         self.such_effizienz.setAlignment(Qt.AlignCenter)
         self.such_effizienz.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         quer.addWidget(self.such_effizienz)
-
-        # Kontingent-Zustand, Wochenfenster (Block 36): anders als die
-        # meisten Felder hier dauerhaft sichtbar - zeigt entweder die echte
-        # Auslastung (core/sitzung.py, "utilization") oder "unter
-        # Warnschwelle", solange das SDK noch keine Meldung geschickt hat.
-        self.kontingent_anzeige = Schrumpffeld("")
-        self.kontingent_anzeige.setObjectName("kontingentanzeige")
-        self.kontingent_anzeige.setAccessibleName("Wochenkontingent")
-        self.kontingent_anzeige.setAlignment(Qt.AlignCenter)
-        self.kontingent_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        quer.addWidget(self.kontingent_anzeige)
-
-        # Kontingent-Zustand, Fuenf-Stunden-Fenster (Block 36): verborgen,
-        # bis das SDK zum ersten Mal eine Meldung dazu schickt - vorher weiss
-        # CWB darueber schlicht nichts.
-        self.kontingent_sitzung_anzeige = Schrumpffeld("")
-        self.kontingent_sitzung_anzeige.setObjectName("kontingentsitzunganzeige")
-        self.kontingent_sitzung_anzeige.setAccessibleName("Sitzungskontingent")
-        self.kontingent_sitzung_anzeige.setAlignment(Qt.AlignCenter)
-        self.kontingent_sitzung_anzeige.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.kontingent_sitzung_anzeige.setVisible(False)
-        quer.addWidget(self.kontingent_sitzung_anzeige)
 
         # Warteanzeige: die Zahl der Auftraege, die hinter dem laufenden
         # stehen. Sie ist leer und verborgen, solange keiner wartet, damit
@@ -605,9 +567,6 @@ class Ausgabekopf(QWidget):
                 ("leitstand_anzeige", self.leitstand_anzeige, LEITSTAND_BEISPIELE),
                 ("modellanzeige", self.modellanzeige, MODELL_BEISPIELE),
                 ("such_effizienz", self.such_effizienz, SUCH_EFFIZIENZ_BEISPIELE),
-                ("kontingent_anzeige", self.kontingent_anzeige, KONTINGENT_WOCHE_BEISPIELE),
-                ("kontingent_sitzung_anzeige", self.kontingent_sitzung_anzeige,
-                 KONTINGENT_SITZUNG_BEISPIELE),
                 ("warteanzeige", self.warteanzeige, WARTE_BEISPIELE),
                 ("eingangsanzeige", self.eingangsanzeige, EINGANG_BEISPIELE),
                 ("tokenzaehler", self.tokenzaehler, ZAEHLER_BEISPIELE),
@@ -647,7 +606,6 @@ class Ausgabekopf(QWidget):
         self._freigaben_zeichnen()
         self._bruecke_zeichnen()
         self._leitstand_zeichnen()
-        self._kontingent_zeichnen()
         self._such_effizienz_zeichnen()
         self._modell_zeichnen()
         self._warteschlange_zeichnen()
@@ -811,52 +769,6 @@ class Ausgabekopf(QWidget):
             self.leitstand_anzeige.setAccessibleDescription(satz)
         except Exception as fehler:  # noqa: BLE001
             log.exception("Leitstand-Statushinweis nicht gesetzt: %s", fehler)
-
-    def kontingent_zeigen(self, stufe: str, text: str, woche_anzeige: str,
-                           sitzung_anzeige: str | None) -> None:
-        """Zeigt den Kontingent-Zustand (Block 36, core/sitzung.py,
-        `kontingent_zustand`). Anders als die meisten Felder hier dauerhaft
-        sichtbar wie die Modellanzeige: `woche_anzeige` ist nie leer (z.B.
-        "Woche 80 % · zurück Do 11:00" oder "Woche: unter Warnschwelle").
-        `sitzung_anzeige` ist None, bis das Fuenf-Stunden-Fenster zum ersten
-        Mal gemeldet hat - vorher bleibt das zweite Feld verborgen. `stufe`
-        faerbt beide Felder (stil.qss, Eigenschaft "kontingentstufe"):
-        "normal" ruhig, "warnung" gelb/orange (90-95 %), "kritisch"/
-        "erschoepft" rot. `text` ist der fertige Satz aus der Sitzung, hier
-        als Kurzhinweis/Vorlesetext fuer beide Felder verwendet."""
-        self._kontingent_stufe = stufe or "normal"
-        self._kontingent_text = text or ""
-        self._kontingent_woche_anzeige = woche_anzeige or "Woche: unter Warnschwelle"
-        self._kontingent_sitzung_anzeige = sitzung_anzeige
-        self._kontingent_zeichnen()
-
-    def _kontingent_stufe_setzen(self, feld: QLabel, stufe: str) -> None:
-        if str(feld.property("kontingentstufe") or "") != stufe:
-            feld.setProperty("kontingentstufe", stufe)
-            feld.style().unpolish(feld)
-            feld.style().polish(feld)
-
-    def _kontingent_zeichnen(self) -> None:
-        try:
-            stufe = self._kontingent_stufe
-            satz = self._kontingent_text or "Woche: unter Warnschwelle."
-
-            self.kontingent_anzeige.setText(self._kontingent_woche_anzeige)
-            self.kontingent_anzeige.setToolTip(satz)
-            self.kontingent_anzeige.setAccessibleDescription(satz)
-            self._kontingent_stufe_setzen(self.kontingent_anzeige, stufe)
-
-            sitzung_text = self._kontingent_sitzung_anzeige
-            self.kontingent_sitzung_anzeige.setText(sitzung_text or "")
-            # Verborgen, bis das Fuenf-Stunden-Fenster zum ersten Mal
-            # gemeldet hat - vorher weiss CWB darueber schlicht nichts.
-            self.kontingent_sitzung_anzeige.setVisible(bool(sitzung_text))
-            if sitzung_text:
-                self.kontingent_sitzung_anzeige.setToolTip(satz)
-                self.kontingent_sitzung_anzeige.setAccessibleDescription(satz)
-                self._kontingent_stufe_setzen(self.kontingent_sitzung_anzeige, stufe)
-        except Exception as fehler:  # noqa: BLE001
-            log.exception("Kontingent-Anzeige nicht gesetzt: %s", fehler)
 
     def freigaben_zeigen(self, namen: list) -> None:
         """Zeigt, wie viele Ordner ausserhalb des Projekts ohne Rueckfrage

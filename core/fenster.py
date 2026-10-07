@@ -1169,15 +1169,30 @@ class Werkbank(QMainWindow):
         # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
         # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
         # aus verlauf.css, nicht aus dem Python.
-        # Block 82: durchgehende Leiste ueber dem Ausgabefeld - "Läuft: ..."
-        # und "Wartet: ..." links, ganz rechts der (von hier verschobene,
-        # vorher auf self.verlauf schwebende) Kopieren-Knopf. Eine eigene
-        # Zeile statt eines Overlays, weil sie selbst zwei variabel lange
-        # Texte tragen muss, die sonst mit dem Knopf kollidieren wuerden.
+        # Block 82: durchgehende Leiste ueber dem Ausgabefeld. LINKS der
+        # Platzhalter fuer den Waechter-Farbknopf (core/waechter_anzeige.py,
+        # eigener Prozess, siehe _waechter_platzhalter_geometrie/
+        # _herzschlag_schreiben), dann "Läuft: ..."/"Wartet: ...". RECHTS die
+        # Kontingent-Anzeige (hierher verlegt aus der Kopfzeile, vorher dort
+        # core/kopfzeile.py Ausgabekopf.kontingent_zeigen) und ganz aussen der
+        # (von hier verschobene, vorher auf self.verlauf schwebende)
+        # Kopieren-Knopf. Eine eigene Zeile statt eines Overlays, weil sie
+        # mehrere variabel lange Texte tragen muss, die sonst mit dem Knopf
+        # kollidieren wuerden.
         statusleiste = QWidget()
         statusleiste.setObjectName("statusleiste")
         statusquer = QHBoxLayout(statusleiste)
         statusquer.setContentsMargins(0, 0, 0, 0)
+
+        # Reine Platzflaeche: der eigenstaendige Waechter-Prozess legt sich
+        # per Fenstergeometrie passgenau darauf (kein Qt-Kind, ein zweiter
+        # Prozess ueberlebt auch einen haengenden/abgestuerzten CWB). Ohne
+        # eigenen Text/Tooltip - die Farbe und ihr Name stehen am Waechter-
+        # Fenster selbst (Barrierefreiheitsname dort).
+        self.waechter_platzhalter = QWidget()
+        self.waechter_platzhalter.setObjectName("waechter_platzhalter")
+        self.waechter_platzhalter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        statusquer.addWidget(self.waechter_platzhalter)
 
         self.laeuft_anzeige = QLabel("Läuft: –")
         self.laeuft_anzeige.setObjectName("laeuft_anzeige")
@@ -1189,6 +1204,21 @@ class Werkbank(QMainWindow):
         self.wartet_anzeige.setAccessibleName("Wartet")
         self.wartet_anzeige.setWordWrap(True)
         statusquer.addWidget(self.wartet_anzeige, 1)
+
+        # Kontingent-Zustand (Block 36/37, Felder und Faerbung von hierher
+        # aus core/kopfzeile.py verlegt - dort stand nur noch die doppelte
+        # Anzeige): Sitzung (Fuenf-Stunden-Fenster) zuerst, dann Woche. Ohne
+        # bekannte Prozentzahl steht ein ruhiger Platzhalter statt einer
+        # erfundenen Zahl - siehe _kontingent_zeigen.
+        self.kontingent_sitzung_anzeige = QLabel("Sitzung: –")
+        self.kontingent_sitzung_anzeige.setObjectName("kontingentsitzunganzeige")
+        self.kontingent_sitzung_anzeige.setAccessibleName("Sitzungskontingent")
+        statusquer.addWidget(self.kontingent_sitzung_anzeige)
+
+        self.kontingent_anzeige = QLabel("Woche: unter Warnschwelle")
+        self.kontingent_anzeige.setObjectName("kontingentanzeige")
+        self.kontingent_anzeige.setAccessibleName("Wochenkontingent")
+        statusquer.addWidget(self.kontingent_anzeige)
 
         self.kopieren = QPushButton("⧉ Kopieren")
         self.kopieren.setObjectName("kopieren")
@@ -2193,8 +2223,9 @@ class Werkbank(QMainWindow):
         Auftrag die zuletzt gemeldeten RateLimitEvent-Meldungen der Sitzung
         (core/sitzung.py, `kontingent_zustand`/`sparmodus_aktiv`) und zieht
         daraus drei Dinge: die Kontingent-Anzeige mit echten Prozentzahlen
-        fuer die Kopfzeile (F2 nennt denselben Zustand ueber
-        `Sitzung.stand()`), die einmalige Ansage beim Ueberschreiten von
+        fuer die Statusleiste ueber dem Ausgabefeld (Block 82, `_kontingent_zeigen`;
+        F2 nennt denselben Zustand ueber `Sitzung.stand()`), die einmalige Ansage
+        beim Ueberschreiten von
         90 % bzw. 95 % Wochenauslastung sowie, sofern F12 -> Verhalten ->
         "Sparmodus bei knappem Wochenkontingent" an ist (Ab Werk an), die
         Sparmodus-Umschaltung anhand der dort einstellbaren Prozent-Schwelle
@@ -2208,7 +2239,7 @@ class Werkbank(QMainWindow):
             return
         try:
             zustand = sitzung.kontingent_zustand()
-            self.ausgabekopf.kontingent_zeigen(
+            self._kontingent_zeigen(
                 zustand.get("stufe", "normal"), zustand.get("text", ""),
                 zustand.get("woche_anzeige", ""), zustand.get("sitzung_anzeige"),
             )
@@ -3688,6 +3719,60 @@ class Werkbank(QMainWindow):
         except Exception as fehler:  # noqa: BLE001
             log.exception("Statusleiste nicht aktualisiert: %s", fehler)
 
+    def _kontingent_stufe_setzen(self, feld: QLabel, stufe: str) -> None:
+        if str(feld.property("kontingentstufe") or "") != stufe:
+            feld.setProperty("kontingentstufe", stufe)
+            feld.style().unpolish(feld)
+            feld.style().polish(feld)
+
+    def _kontingent_zeigen(self, stufe: str, text: str, woche_anzeige: str,
+                            sitzung_anzeige: str | None) -> None:
+        """Zeichnet die beiden Kontingent-Felder in der Statusleiste neu -
+        hierher aus core/kopfzeile.py verlegt (Block 36/37 -> 82). Gerufen von
+        _kontingent_anzeige_aktualisieren() mit dem Ergebnis von
+        Sitzung.kontingent_zustand(). Ohne bekannte Prozentzahl steht ein
+        ruhiger Platzhalter ("Sitzung: –") statt einer erfundenen Zahl oder
+        eines verborgenen Feldes - so springt die Leiste nicht, wenn die erste
+        RateLimitEvent-Meldung eintrifft."""
+        try:
+            stufe = stufe or "normal"
+            satz = text or "Woche: unter Warnschwelle."
+
+            self.kontingent_anzeige.setText(woche_anzeige or "Woche: unter Warnschwelle")
+            self.kontingent_anzeige.setToolTip(satz)
+            self.kontingent_anzeige.setAccessibleDescription(satz)
+            self._kontingent_stufe_setzen(self.kontingent_anzeige, stufe)
+
+            self.kontingent_sitzung_anzeige.setText(sitzung_anzeige or "Sitzung: –")
+            self.kontingent_sitzung_anzeige.setToolTip(satz)
+            self.kontingent_sitzung_anzeige.setAccessibleDescription(satz)
+            self._kontingent_stufe_setzen(
+                self.kontingent_sitzung_anzeige, stufe if sitzung_anzeige else "normal"
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kontingent-Anzeige nicht gesetzt: %s", fehler)
+
+    # -- Block 82 (Punkt 3): Platzhalter fuer den Waechter-Farbknopf ---------
+
+    def _waechter_platzhalter_geometrie(self) -> dict | None:
+        """Globale Bildschirmkoordinaten und Groesse des Platzhalters ganz
+        links in der Statusleiste - die Grundlage, auf die sich der
+        eigenstaendige Waechter-Prozess (core/waechter_anzeige.py) per
+        Fenstergeometrie legt. None, solange dieses Fenster minimiert, nicht
+        sichtbar oder der Platzhalter noch nicht ausgemessen ist (vor dem
+        ersten Layout) - der Waechter blendet sich dann aus (ausser bei
+        Haengt/Abgestuerzt, siehe dort)."""
+        platzhalter = getattr(self, "waechter_platzhalter", None)
+        if platzhalter is None or self.isMinimized() or not self.isVisible():
+            return None
+        if platzhalter.width() <= 0 or platzhalter.height() <= 0:
+            return None
+        ecke = platzhalter.mapToGlobal(QPoint(0, 0))
+        return {
+            "x": ecke.x(), "y": ecke.y(),
+            "breite": platzhalter.width(), "hoehe": platzhalter.height(),
+        }
+
     def _naechsten_starten(self) -> None:
         """Holt den naechsten Auftrag aus der Warteschlange, sobald der
         vorherige beendet ist. Ist sie leer, geschieht nichts."""
@@ -4117,24 +4202,54 @@ class Werkbank(QMainWindow):
 # Datei jede Sekunde neu; haengt der GUI-Faden, bleibt sie automatisch stehen
 # - das ist das Signal fuer den Waechter. "Arbeitet" gilt, sobald IRGENDEIN
 # offenes Fenster (OFFENE_FENSTER, mehrere Projekte moeglich) einen Auftrag
-# laufen hat (Werkbank._auftrag_aktiv, oben).
+# laufen hat (Werkbank._auftrag_aktiv, oben). Block 82 (Punkt 3): zusaetzlich
+# die globalen Bildschirmkoordinaten/Groesse des Waechter-Platzhalters in der
+# Statusleiste (Werkbank._waechter_platzhalter_geometrie) sowie "minimiert" -
+# der Waechter legt sich darauf und blendet sich bei minimiertem CWB aus
+# (ausser bei Haengt/Abgestuerzt). Bevorzugt die Geometrie desselben Fensters,
+# das gerade arbeitet; sonst das erste sichtbare, nicht minimierte Fenster.
 
 def _herzschlag_schreiben() -> None:
     zustand = "bereit"
     auftrag = ""
+    aktives_fenster = None
     for fenster in list(OFFENE_FENSTER):
         try:
             if fenster._auftrag_aktiv():
                 zustand = "arbeitet"
                 auftrag = fenster._auftrag_kurz()
+                aktives_fenster = fenster
                 break
         except Exception as fehler:  # noqa: BLE001
             log.exception("Herzschlag: Fensterabfrage gescheitert: %s", fehler)
+
+    geometrie = None
+    minimiert = True
+    kandidaten = [aktives_fenster] if aktives_fenster is not None else list(OFFENE_FENSTER)
+    for fenster in kandidaten:
+        if fenster is None:
+            continue
+        try:
+            platz = fenster._waechter_platzhalter_geometrie()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Herzschlag: Platzhaltergeometrie gescheitert: %s", fehler)
+            continue
+        if platz is not None:
+            geometrie = platz
+            minimiert = False
+            break
+        if not fenster.isMinimized():
+            minimiert = False
+
     try:
         STATUS_DATEI.parent.mkdir(parents=True, exist_ok=True)
-        inhalt = json.dumps({
+        daten = {
             "zeit": time.time(), "pid": os.getpid(), "zustand": zustand, "auftrag": auftrag,
-        }, ensure_ascii=False)
+            "minimiert": minimiert,
+        }
+        if geometrie is not None:
+            daten.update(geometrie)
+        inhalt = json.dumps(daten, ensure_ascii=False)
         temp = STATUS_DATEI.with_suffix(".tmp")
         temp.write_text(inhalt, encoding="utf-8")
         os.replace(temp, STATUS_DATEI)
