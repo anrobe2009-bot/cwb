@@ -168,8 +168,8 @@ class WaechterFenster(QWidget):
         Bildschirmflaeche, gross genug fuer Farbe und Wort, klein genug, um
         nicht zu stoeren."""
         bildschirm = QGuiApplication.primaryScreen().availableGeometry()
-        breite = max(110, int(bildschirm.width() * 0.08))
-        hoehe = max(45, int(bildschirm.height() * 0.045))
+        breite = max(220, int(bildschirm.width() * 0.16))
+        hoehe = max(90, int(bildschirm.height() * 0.09))
         self.resize(breite, hoehe)
 
     def _position_wiederherstellen(self) -> None:

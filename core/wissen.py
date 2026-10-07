@@ -14,11 +14,12 @@ Projekts gelesen, nie projektübergreifend - ausser 'global'.
 Eingespeist wird in Schichten und gedeckelt, damit der Kontext nicht zuwächst.
 """
 
+import json
 import logging
 import re
 import sqlite3
+import subprocess
 import sys
-import threading
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -78,9 +79,12 @@ _MARKER_ZEILEN = re.compile(
     r"^\s*(projekt\s*:.*|block\s+\S+.*)$", re.IGNORECASE | re.MULTILINE
 )
 
-# Code-Index: gedeckelte Suchzeit, damit ein langsamer oder haengender
-# Modell-Start den Auftrag nie blockiert (Block C6, Teil A Punkt 3).
-CODE_SUCHE_ZEITLIMIT = 3.0
+# Code-Index: gedeckelte Suchzeit fuer den Unterprozess (index/cli.py --suche),
+# damit ein langsamer oder haengender Modell-Start den Auftrag nie blockiert
+# (Block C6, Teil A Punkt 3). 15s statt der frueheren 3s, weil der Unterprozess
+# bei jeder Suche neu startet und das Embedding-Modell jedesmal frisch laedt
+# (Block 83, siehe Moduldoku bei _code_index_suchen).
+CODE_SUCHE_ZEITLIMIT = 15.0
 
 # Deutsche Fuellwoerter, die als Stichwort nichts taugen. Keine Vollstaendigkeit
 # noetig - sie sollen nur die haeufigsten Woerter aus Auftragstexten aussieben.
@@ -175,90 +179,83 @@ def _ohne_dopplungen(basis: str, neu: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Code-Index: eigene, direkte Suche vor jedem Auftrag (Block C6, Teil A).
-# Das Embedding-Modell wird einmal pro CWB-Prozess im Hintergrund geladen
-# (code_index_vorladen(), von sitzung.py beim Laden angestossen), damit die
-# erste echte Suche nicht auf den Modell-Start warten muss. Jede Suche selbst
-# laeuft in einem eigenen, daemonischen Faden mit Zeitlimit - haengt sie,
-# blockiert das nie den Auftrag, es gibt nur keine Code-Treffer.
+#
+# Block 83 (07.10.2026): Bis hierhin wurde index/indexer.py (chromadb,
+# pyarrow, sentence-transformers/torch) per `import indexer` direkt in den
+# CWB-Prozess geladen - erst durch einen Vorlade-Faden ("cwb-codeindex-laden",
+# von sitzung.py beim Laden angestossen), dann bei jeder Suche erneut benutzt.
+# Eine py-spy-Aufzeichnung (haenger/haenger_2026-10-07_15-30-28.txt) zeigte
+# den Arbeitsfaden genau dort stehen; 45s spaeter verzeichnete die Windows-
+# Ereignisanzeige einen nativen Absturz von pythonw.exe in pyarrow\arrow.dll
+# (0xc0000005) - dieselbe Signatur mehrfach zeitgleich mit Roberts Abstuerzen
+# vom 06./07.10. Ein nativer Absturz in einer fremden DLL geht an jedem
+# Python-Fehlernetz (try/except, Qt-Handler) vorbei und beendet den ganzen
+# CWB-Prozess, nicht nur die Suche.
+#
+# Deshalb laeuft die Suche jetzt in einem eigenen, kurzlebigen Unterprozess
+# (index/cli.py --suche, wie core/sitzung.py es fuer das Indizieren schon
+# tut) statt im CWB-Prozess selbst - stuerzt er ab oder braucht er laenger
+# als CODE_SUCHE_ZEITLIMIT, bekommt CWB das nur als leeres Ergebnis mit, der
+# CWB-Prozess selbst bleibt unberuehrt. Der bisherige Vorlade-Faden entfaellt
+# ersatzlos: er haette nur das jetzt beendete Modul im CWB-Prozess warmlaufen
+# lassen, einem neuen Unterprozess (eigener Interpreter) hilft das nicht.
 # ---------------------------------------------------------------------------
 
-_code_index_modul = None  # None = noch nicht versucht, False = gescheitert
-_code_index_lock = threading.Lock()
-_code_index_lade_faden: threading.Thread | None = None
-
-
-def _code_index_laden():
-    global _code_index_modul
-    with _code_index_lock:
-        if _code_index_modul is not None:
-            return _code_index_modul
-        try:
-            pfad = str(INDEX_ORDNER)
-            if pfad not in sys.path:
-                sys.path.insert(0, pfad)
-            import indexer  # noqa: PLC0415
-            indexer._embedding_fn()  # laedt das Modell einmal vor
-            _code_index_modul = indexer
-            log.info("Code-Index-Modell geladen")
-        except Exception as fehler:  # noqa: BLE001
-            log.warning("Code-Index nicht ladbar, Suche vor Auftraegen bleibt aus: %s", fehler)
-            _code_index_modul = False
-        return _code_index_modul
-
-
-def code_index_vorladen() -> None:
-    """Stoesst das Laden des Embedding-Modells einmal pro CWB-Prozess im
-    Hintergrund an. Weitere Aufrufe tun nichts, solange der erste noch laeuft
-    oder schon fertig ist."""
-    global _code_index_lade_faden
-    with _code_index_lock:
-        if _code_index_modul is not None or _code_index_lade_faden is not None:
-            return
-        _code_index_lade_faden = threading.Thread(
-            target=_code_index_laden, daemon=True, name="cwb-codeindex-laden"
-        )
-        _code_index_lade_faden.start()
-
-
 def _code_index_suchen(projekt_pfad: Path, frage: str, anzahl: int) -> tuple[list[str], bool]:
-    """Fragt den Code-Index synchron ab, gedeckelt auf CODE_SUCHE_ZEITLIMIT
-    Sekunden (in einem eigenen daemonischen Faden, der bei Zeitueberschreitung
-    einfach weiterlaeuft und verworfen wird). Rueckgabe: (Zeilen, ob der
-    Code-Index in diesem Prozess ueberhaupt verfuegbar ist)."""
-    ergebnis: dict = {}
+    """Fragt den Code-Index in einem eigenen Unterprozess ab (index/cli.py
+    --suche), gedeckelt auf CODE_SUCHE_ZEITLIMIT Sekunden. Rueckgabe: (Zeilen,
+    ob diese Suche verwertbar war - fuer Protokoll/Selbsttest, nicht
+    sicherheitsrelevant)."""
+    cli = INDEX_ORDNER / "cli.py"
+    if not cli.is_file():
+        return [], False
+    try:
+        prozess = subprocess.Popen(
+            [sys.executable, str(cli), str(projekt_pfad), "--suche", frage,
+             "--anzahl", str(anzahl)],
+            cwd=str(INDEX_ORDNER), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as fehler:
+        log.warning("Code-Index-Suche vor Auftrag nicht startbar: %s", fehler)
+        return [], False
 
-    def _lauf() -> None:
+    try:
+        ausgabe, fehlerausgabe = prozess.communicate(timeout=CODE_SUCHE_ZEITLIMIT)
+    except subprocess.TimeoutExpired:
+        prozess.kill()
         try:
-            modul = _code_index_laden()
-            ergebnis["treffer"] = modul.search(str(projekt_pfad), frage, n_results=anzahl) if modul else []
-        except Exception as fehler:  # noqa: BLE001
-            ergebnis["fehler"] = fehler
-
-    faden = threading.Thread(target=_lauf, daemon=True, name="cwb-codesuche")
-    faden.start()
-    faden.join(CODE_SUCHE_ZEITLIMIT)
-
-    verfuegbar = _code_index_modul is not False
-    if faden.is_alive():
+            prozess.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
         log.warning("Code-Index-Suche vor Auftrag laenger als %ss, ohne Treffer weiter",
                     CODE_SUCHE_ZEITLIMIT)
-        return [], verfuegbar
-    if "fehler" in ergebnis:
-        log.warning("Code-Index-Suche vor Auftrag gescheitert: %s", ergebnis["fehler"])
-        return [], verfuegbar
+        return [], False
+
+    if prozess.returncode != 0:
+        log.warning("Code-Index-Suche vor Auftrag gescheitert (Code %s): %s",
+                    prozess.returncode, (fehlerausgabe or "").strip()[:500])
+        return [], False
+
+    try:
+        treffer = json.loads(ausgabe)
+    except ValueError as fehler:
+        log.warning("Code-Index-Suche vor Auftrag: unlesbare Ausgabe (%s): %s",
+                    fehler, ausgabe[:200])
+        return [], False
 
     zeilen: list[str] = []
-    for treffer in ergebnis.get("treffer") or []:
-        quelle = treffer.get("source") or "?"
+    for eintrag in treffer or []:
+        quelle = eintrag.get("source") or "?"
         try:
             ort = str(Path(quelle).relative_to(projekt_pfad))
         except ValueError:
             ort = Path(quelle).name
-        if treffer.get("zeile_von"):
-            ort += f":{treffer['zeile_von']}-{treffer['zeile_bis']}"
-        text = " ".join((treffer.get("text") or "").split())[:160]
+        if eintrag.get("zeile_von"):
+            ort += f":{eintrag['zeile_von']}-{eintrag['zeile_bis']}"
+        text = " ".join((eintrag.get("text") or "").split())[:160]
         zeilen.append(f"{ort} — {text}")
-    return zeilen, verfuegbar
+    return zeilen, True
 
 
 GRUNDLAGEN_VORLAGE = """# {name}

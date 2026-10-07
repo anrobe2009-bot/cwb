@@ -1,7 +1,17 @@
 # cli.py — Kommandozeile fuer den Code-Index, ein Projektordner pro Aufruf.
 # Keine feste Projektliste: CWB ruft das mit dem gerade offenen Projektpfad
 # auf, egal ob der schon einmal gesehen wurde oder brandneu ist.
+#
+# --suche ist der zweite Aufrufweg neben dem Indizieren: core/wissen.py
+# (_code_index_suchen) startet DAFUER einen eigenen Unterprozess statt
+# indexer.py (chromadb/pyarrow/sentence-transformers/torch) in den CWB-
+# Prozess selbst zu importieren - ein nativer Absturz dort (0xc0000005 in
+# pyarrow\arrow.dll, belegt am 07.10.2026) beendete bisher CWB komplett,
+# an jedem Python-Fehlernetz vorbei. Hier abstuerzen darf dieser kurzlebige
+# Unterprozess dagegen gefahrlos: core/wissen.py wertet nur Rueckgabewert
+# und Zeitlimit aus.
 import argparse
+import json
 import os
 import sys
 import time
@@ -28,9 +38,19 @@ def main() -> None:
     parser.add_argument("--status", action="store_true", help="Nur Chunk-Zahl anzeigen, nicht indizieren")
     parser.add_argument("--voll", action="store_true",
                          help="Vorhandenes Manifest ignorieren und alles neu einlesen")
+    parser.add_argument("--suche", metavar="FRAGE",
+                         help="Nur suchen (kein Indizieren): Treffer als JSON auf stdout")
+    parser.add_argument("--anzahl", type=int, default=5, help="Hoechstzahl Treffer bei --suche")
     args = parser.parse_args()
 
     pfad = str(Path(args.projektpfad))
+
+    if args.suche is not None:
+        # Keine Druckausgabe ausser der einen JSON-Zeile: core/wissen.py
+        # liest ausschliesslich stdout und parst es als JSON.
+        treffer = indexer.search(pfad, args.suche, n_results=args.anzahl)
+        print(json.dumps(treffer, ensure_ascii=False))
+        return
 
     if args.status:
         stats = indexer.get_collection_stats(pfad)

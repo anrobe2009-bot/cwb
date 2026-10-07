@@ -62,7 +62,6 @@ try:
         NACHTRAG_ANWEISUNG,
         Wissen,
         _ohne_dopplungen,
-        code_index_vorladen,
     )
 except ImportError:
     from grundlagen import suche_auftrag_anhaengen, such_effizienz_prozent
@@ -76,15 +75,15 @@ except ImportError:
         NACHTRAG_ANWEISUNG,
         Wissen,
         _ohne_dopplungen,
-        code_index_vorladen,
     )
 
 log = logging.getLogger("cwb.sitzung")
 
-# Laedt das Embedding-Modell des Code-Index einmal pro CWB-Prozess im
-# Hintergrund vor (Block C6, Teil A Punkt 3), damit die erste Suche vor
-# einem Auftrag nicht auf den Modell-Start warten muss.
-code_index_vorladen()
+# Block 83 (07.10.2026): Kein Vorladen des Embedding-Modells im CWB-Prozess
+# mehr - core/wissen.py._code_index_suchen lagert die Suche jetzt in einen
+# eigenen Unterprozess aus (index/cli.py --suche), ein Vorladen hier haette
+# dem keinen Vorteil mehr gebracht, aber chromadb/pyarrow/torch unnoetig in
+# diesen Prozess geholt (siehe core/wissen.py, Absturzursache belegt).
 
 
 def _unterdruecke_konsolenfenster() -> None:
