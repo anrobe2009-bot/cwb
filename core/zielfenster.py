@@ -157,8 +157,15 @@ def _eigene_pid_holen() -> int:
 
 
 def _pid_von(hwnd) -> int:
+    """Liefert 0 statt zu werfen, wenn das Fenster zwischen Abfrage und
+    diesem Aufruf schon wieder verschwunden ist (haeufig bei einem Fenster,
+    dessen Prozess gerade erst erscheint oder gerade per Stop-Process beendet
+    wird)."""
     pid = wintypes.DWORD(0)
-    _u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    try:
+        _u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    except OSError:
+        return 0
     return pid.value
 
 
@@ -188,8 +195,16 @@ def _klasse_von(hwnd) -> str:
 
 def _taugt_als_ziel(hwnd) -> bool:
     """Nur sichtbare, fremde Fenster mit Titel kommen als Ziel in Frage -
-    nicht Desktop, Taskleiste oder der Rechteanforderungs-Dialog."""
-    if not hwnd or not _u32.IsWindowVisible(hwnd):
+    nicht Desktop, Taskleiste oder der Rechteanforderungs-Dialog. Ist das
+    Fenster gerade erst erschienen oder schon wieder zerstoert (z.B. weil ein
+    eigener #RUN#-Befehl von CWB den dazugehoerigen Prozess per
+    Stop-Process beendet), darf das nicht crashen - nur False zaehlen."""
+    if not hwnd:
+        return False
+    try:
+        if not _u32.IsWindowVisible(hwnd):
+            return False
+    except OSError:
         return False
     if _eigener_prozess(hwnd):
         return False
@@ -208,7 +223,13 @@ def _blick() -> tuple | None:
         hwnd = _u32.GetForegroundWindow()
         if _taugt_als_ziel(hwnd):
             _letztes_fremd = (hwnd, _titel_von(hwnd), _pid_von(hwnd))
-    except OSError as fehler:
+    except Exception as fehler:  # noqa: BLE001
+        # Breiter als OSError gefangen: dieser Blick laeuft alle 0,5s in
+        # einem eigenen Dauerfaden (_beobachten) - eine entwischende
+        # Ausnahme wuerde dort nicht CWB abschiessen, aber den Faden lautlos
+        # beenden und den Beobachter fuer den Rest der Sitzung blind machen.
+        # Ein verschwindendes Fenster (z.B. per Stop-Process waehrend ein
+        # #RUN#-Befehl laeuft) darf das nicht auslösen.
         log.exception("Vordergrundfenster nicht lesbar: %s", fehler)
     return _letztes_fremd
 
@@ -270,10 +291,17 @@ def _fenster_wiederfinden(pid: int, titel: str):
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def _sammeln(hwnd, _lparam):
-        if _taugt_als_ziel(hwnd):
-            eigen_pid = _pid_von(hwnd)
-            if eigen_pid == pid or _gleicher_titel(_titel_von(hwnd), titel):
-                treffer.append((hwnd, _titel_von(hwnd), eigen_pid))
+        # Laeuft als ctypes-Rueckruf direkt aus EnumWindows (C-Code) heraus -
+        # eine hier entwischende Ausnahme wuerde ctypes nur still verschlucken
+        # und die Aufzaehlung mitten im System-Fensterbestand abbrechen.
+        # Lieber dieses eine Fenster uebergehen und weiterzaehlen.
+        try:
+            if _taugt_als_ziel(hwnd):
+                eigen_pid = _pid_von(hwnd)
+                if eigen_pid == pid or _gleicher_titel(_titel_von(hwnd), titel):
+                    treffer.append((hwnd, _titel_von(hwnd), eigen_pid))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Fenster bei der Suche uebersprungen: %s", fehler)
         return True
 
     try:
