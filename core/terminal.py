@@ -201,13 +201,35 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
     ablauf = time.monotonic() + zeitlimit
     zeitueberschritten = False
     abgebrochen = False
+    # Wird True, wenn PowerShell selbst sich beendet hat, OHNE dass Zeitlimit
+    # oder Not-Aus zugeschlagen haben - der Normalfall, wenn das Skript einen
+    # Kindprozess per Start-Process abgesetzt hat und dann selbst durchlaeuft.
+    selbst_beendet = False
     strom_zu_ende = False
+
+    def _zeile_uebernehmen(zeile: str) -> None:
+        zeilen.append(zeile)
+        if teil_callback is not None:
+            try:
+                teil_callback(zeile)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Live-Ausgabe nicht weitergereicht: %s", fehler)
+
     while not strom_zu_ende:
         if abbruch is not None and abbruch.is_set():
             abgebrochen = True
             break
         if time.monotonic() > ablauf:
             zeitueberschritten = True
+            break
+        if prozess.poll() is not None:
+            # PowerShell ist fertig. NICHT laenger auf das Streamende warten:
+            # haelt ein per Start-Process abgesetzter Enkelprozess (z.B. eine
+            # noch laufende App) das Schreibende unserer Pipe offen, kommt
+            # EOF nie - das war der eigentliche Haenger (Terminal blieb bis
+            # zum manuellen Schliessen der App "belegt", obwohl der Befehl
+            # selbst laengst durch war).
+            selbst_beendet = True
             break
         try:
             zeile = zeilen_queue.get(timeout=ABFRAGE_SEKUNDEN)
@@ -216,12 +238,22 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
         if zeile is None:
             strom_zu_ende = True
             break
-        zeilen.append(zeile)
-        if teil_callback is not None:
+        _zeile_uebernehmen(zeile)
+
+    if selbst_beendet:
+        # Kurze Gnadenfrist: schon in der Pipe wartende Zeilen noch abholen,
+        # aber nicht unbegrenzt - genau das wuerde wieder haengen, wenn der
+        # Enkelprozess die Pipe offenhaelt.
+        gnadenfrist = time.monotonic() + 1.5
+        while time.monotonic() < gnadenfrist:
             try:
-                teil_callback(zeile)
-            except Exception as fehler:  # noqa: BLE001
-                log.exception("Live-Ausgabe nicht weitergereicht: %s", fehler)
+                zeile = zeilen_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if zeile is None:
+                strom_zu_ende = True
+                break
+            _zeile_uebernehmen(zeile)
 
     if zeitueberschritten or abgebrochen:
         _baum_beenden(prozess.pid)
@@ -235,10 +267,18 @@ def befehl_ausfuehren(befehl: str, ordner: Path, zeitlimit: int = ZEITLIMIT_RUN,
         except subprocess.TimeoutExpired:
             code = -1
 
-    try:
-        prozess.stdout.close()
-    except OSError:
-        pass
+    if lesefaden.is_alive():
+        # Der Lesefaden steckt noch in readline() - ein Enkelprozess haelt
+        # die Pipe offen. prozess.stdout.close() wuerde hier auf denselben
+        # Lock warten, den die blockierte readline() haelt, und selbst
+        # haengen bleiben. Lieber ein Pipe-Handle offen lassen (folgenlos,
+        # wird beim Prozessende der GC los) als befehl_ausfuehren() haengen.
+        log.info("Pipe bleibt offen, Enkelprozess haelt sie noch: %s", befehl)
+    else:
+        try:
+            prozess.stdout.close()
+        except OSError:
+            pass
 
     try:
         skript_datei.unlink(missing_ok=True)
