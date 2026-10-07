@@ -43,6 +43,7 @@ from PySide6.QtCore import (
     QThread,
     QTimer,
     Signal,
+    qInstallMessageHandler,
 )
 from PySide6.QtGui import (
     QFont,
@@ -97,6 +98,7 @@ try:
         such_effizienz_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
+        qt_meldung_behandeln,
         unbehandelte_ausnahme,
         unbehandelte_ausnahme_im_faden,
         verlauf_stil_lesen,
@@ -162,6 +164,7 @@ except ImportError:
         such_effizienz_prozent,
         tagesverbrauch_erhoehen,
         tagesverbrauch_heute,
+        qt_meldung_behandeln,
         unbehandelte_ausnahme,
         unbehandelte_ausnahme_im_faden,
         verlauf_stil_lesen,
@@ -3873,6 +3876,12 @@ def main() -> None:
     # weiterhin auf das unsichtbare stderr.
     sys.excepthook = unbehandelte_ausnahme
     threading.excepthook = unbehandelte_ausnahme_im_faden
+    # Meldungen, die Qt selbst erzeugt (qWarning/qCritical/qFatal aus der
+    # C++-Seite, z.B. bei einem Zugriff auf ein Widget aus dem falschen
+    # Faden) gingen bisher nach stderr - unter pythonw.exe ins Nichts. Ein
+    # qFatal() ruft diesen Handler noch vor dem harten Abbruch auf, darum
+    # bekommt auch ein sonst spurloser Absturz jetzt eine Zeile im Log.
+    qInstallMessageHandler(qt_meldung_behandeln)
 
     # Steht bei jedem Start im Log, damit bei einem Fehlerbericht klar ist,
     # welche Fassung lief.

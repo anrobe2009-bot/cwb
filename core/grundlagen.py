@@ -18,7 +18,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QTimer
+from PySide6.QtCore import QRect, QtMsgType, QTimer, qInstallMessageHandler
 from PySide6.QtWidgets import QApplication
 
 # Die Einstellungsdatei und alle einstellbaren Pfade liegen in pfade.py, weil
@@ -511,6 +511,27 @@ def unbehandelte_ausnahme_im_faden(args) -> None:
         "Unbehandelte Ausnahme im Faden %s", args.thread.name if args.thread else "?",
         exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
     )
+
+
+_QT_SCHWEREGRAD = {
+    QtMsgType.QtDebugMsg: logging.DEBUG,
+    QtMsgType.QtInfoMsg: logging.INFO,
+    QtMsgType.QtWarningMsg: logging.WARNING,
+    QtMsgType.QtCriticalMsg: logging.ERROR,
+    QtMsgType.QtFatalMsg: logging.CRITICAL,
+}
+
+
+def qt_meldung_behandeln(typ, kontext, nachricht: str) -> None:
+    """Letztes Netz fuer Meldungen, die Qt selbst erzeugt (qWarning/qCritical/
+    qFatal aus der C++-Seite, z.B. "QObject::startTimer: Timers can only be
+    used with threads started with QThread") - ohne eigenen Handler gehen sie
+    nach stderr, das unter pythonw.exe ins Nichts fuehrt. Gerade ein
+    qFatal() ruft diesen Handler noch VOR dem harten Abbruch auf - genau der
+    stille Absturz ohne jeden Traceback, den Robert nicht lesen kann, bekommt
+    dadurch wenigstens eine Zeile im Log. Wird in main() als
+    qInstallMessageHandler gesetzt."""
+    log.log(_QT_SCHWEREGRAD.get(typ, logging.WARNING), "Qt-Meldung: %s", nachricht)
 
 
 def slot_geschuetzt(funktion):
