@@ -350,6 +350,44 @@ def _in_vordergrund(hwnd) -> bool:
     return False
 
 
+# BringWindowToTop/SetForegroundWindow (in _fokus_setzen) senden intern
+# Nachrichten, auf deren Bearbeitung durch das Zielfenster sie warten - ganz
+# ohne eigenes Zeitlimit, anders als SendMessageTimeoutW bei _titel_von.
+# Pumpt das Zielfenster keine Nachrichten mehr (etwa eine Anwendung mitten in
+# einem rechenintensiven Build, Belegfall: HAUSGEMACHT), blockieren sie
+# unbegrenzt. Belegt per Nachbau: ein Testfenster ohne GetMessage-Schleife
+# liess _in_vordergrund() beliebig lange haengen. Da einfuegen() synchron aus
+# einem Qt-Slot heraus laeuft (core/fenster.py, _terminal_fertig), haengte
+# sich dabei der gesamte CWB-Hauptfaden mit auf - das Ausgabefeld wirkte dann
+# leer, weil Qt waehrend des Haengens nicht mehr neu zeichnete.
+FOKUS_ZEITLIMIT_S = 2.0
+
+
+def _in_vordergrund_mit_zeitlimit(hwnd) -> bool:
+    """Wie _in_vordergrund(), aber in einem Wegwerf-Faden mit Zeitlimit -
+    schuetzt den aufrufenden (meist den Qt-Haupt-)Faden davor, an einem nicht
+    mehr antwortenden Zielfenster haengen zu bleiben. Kehrt der Wegwerf-Faden
+    nicht fristgerecht zurueck, gilt das Einfuegen als gescheitert; der Faden
+    bleibt als Daemon im Hintergrund zurueck, was ungefaehrlich ist."""
+    ergebnis: dict = {}
+
+    def _lauf() -> None:
+        ergebnis["erfolg"] = _in_vordergrund(hwnd)
+
+    faden = threading.Thread(target=_lauf, daemon=True)
+    faden.start()
+    faden.join(FOKUS_ZEITLIMIT_S)
+    if faden.is_alive():
+        log.error(
+            "Zielfenster nach vorn holen haengt seit %.1fs (Fenster pumpt "
+            "keine Nachrichten mehr) - abgebrochen, Ergebnis bleibt in der "
+            "Zwischenablage",
+            FOKUS_ZEITLIMIT_S,
+        )
+        return False
+    return bool(ergebnis.get("erfolg", False))
+
+
 class _TASTATUR(ctypes.Structure):
     _fields_ = [
         ("wVk", wintypes.WORD),
@@ -520,7 +558,7 @@ def einfuegen(ziel: tuple | None, text: str) -> bool:
         log.info("Kein ansprechbares Zielfenster - Ergebnis bleibt in der Zwischenablage")
         return False
     hwnd, titel, _pid = ziel
-    if not _in_vordergrund(hwnd):
+    if not _in_vordergrund_mit_zeitlimit(hwnd):
         log.warning("Zielfenster liess sich nicht nach vorn holen: %s", titel[:60])
         return False
     time.sleep(EINFUEGE_RUHE_S)
