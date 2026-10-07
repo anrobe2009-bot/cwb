@@ -1,0 +1,82 @@
+﻿=== CWB PID 27668 um 2026-10-07_15-30-28 ===
+Process 27668: "C:\Program Files\Python313\pythonw.exe" C:\Users\Entwickler\Desktop\start\CWB\core\fenster.py
+Python v3.13.14 (C:\Program Files\Python313\pythonw.exe)
+
+Thread 41860 (idle): "MainThread"
+    main (fenster.py:3929)
+    <module> (fenster.py:3934)
+Thread 31692 (idle): "Thread-1 (_sprech_schleife)"
+    _bis_fertig_warten (sprache.py:365)
+    spiele (sprache.py:350)
+    _sprich_jetzt (sprache.py:652)
+    _sprech_schleife (sprache.py:629)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 23048 (idle): "Thread-2 (_ton_schleife)"
+    _ton_schleife (sprache.py:765)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 36688 (idle): "Thread-10 (_beobachten)"
+    _beobachten (zielfenster.py:240)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 33920 (idle): "tqdm_monitor"
+    wait (threading.py:363)
+    wait (threading.py:660)
+    run (tqdm\_monitor.py:69)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 31776 (idle): "Dummy-188"
+    join (threading.py:1095)
+    _code_index_suchen (wissen.py:239)
+    gedaechtnis_vor_auftrag (wissen.py:787)
+    auftrag (sitzung.py:1485)
+    _arbeiten (faden.py:154)
+    _run (asyncio\events.py:89)
+    _run_once (asyncio\base_events.py:2060)
+    run_forever (asyncio\base_events.py:683)
+    run_until_complete (asyncio\base_events.py:712)
+    run (faden.py:106)
+Thread 35208 (idle): "AnyIO worker thread"
+    wait (threading.py:359)
+    get (queue.py:199)
+    run (anyio\_backends\_asyncio.py:1018)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 19012 (idle): "Dummy-193"
+    _warten (bruecke.py:232)
+    run (bruecke.py:245)
+Thread 22108 (idle): "Thread-195 (_code_index_warten)"
+    join (threading.py:1095)
+    _communicate (subprocess.py:1663)
+    communicate (subprocess.py:1222)
+    _code_index_warten (sitzung.py:1214)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 33548 (idle): "Thread-196 (_readerthread)"
+    _readerthread (subprocess.py:1615)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 25608 (idle): "Thread-198 (_readerthread)"
+    _readerthread (subprocess.py:1615)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 21492 (idle): "asyncio_0"
+    _worker (concurrent\futures\thread.py:90)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 37568 (idle): "cwb-codesuche"
+    _count (chromadb\api\rust.py:397)
+    count (Collection.py:55)
+    search (indexer.py:437)
+    _lauf (wissen.py:233)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
