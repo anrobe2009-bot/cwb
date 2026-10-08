@@ -337,16 +337,21 @@ def markierung_erkennen(text: str) -> tuple[str, str]:
 
 
 class BildFaden(QThread):
-    """#BILD#: holt den Android-Screenshot in einem eigenen Thread (core/
-    android_screenshot.py, screenshot_ablegen) - der adb-Aufruf darf das
-    Fenster nicht haengen lassen. Legt nur die Datei in Downloads ab, ruehrt
-    die Zwischenablage nicht an: QClipboard darf nur auf dem GUI-Thread
-    laufen, das erledigt _bild_fertig() unten nach fertig_da."""
+    """#BILD#/Pause-Taste/Strg+Umschalt+B: holt den Android-Screenshot in
+    einem eigenen Thread (core/android_screenshot.py, screenshot_ablegen) -
+    der adb-Aufruf darf das Fenster nicht haengen lassen. Legt die Datei nur
+    unter wissen\\bilder\\ im uebergebenen Projektordner ab, ruehrt die
+    Zwischenablage nicht an: QClipboard darf nur auf dem GUI-Thread laufen,
+    das erledigt _bild_fertig() unten nach fertig_da."""
 
     fertig_da = Signal(object)
 
+    def __init__(self, projekt_ordner: Path, eltern=None):
+        super().__init__(eltern)
+        self._projekt_ordner = projekt_ordner
+
     def run(self) -> None:
-        self.fertig_da.emit(screenshot_ablegen())
+        self.fertig_da.emit(screenshot_ablegen(self._projekt_ordner))
 
 
 # Hoechstzahl Saetze, die von einer Rueckfrage oder Fehlermeldung gesprochen
@@ -996,17 +1001,31 @@ class Werkbank(QMainWindow):
         # naechsten abgeschlossenen Auftrag.
         self._leitstand_zustand_anwenden()
 
-        # Systemweiter Hotkey auf die Pause-Taste (core/pausetaste.py): loest
-        # denselben Screenshot-Ablauf wie #BILD# aus, egal welches Fenster
-        # gerade vorn ist. Schlaegt die Registrierung fehl (Taste von einem
-        # anderen Programm belegt), bleibt CWB bedienbar, nur ohne die Taste.
+        # Systemweite Hotkeys fuer den Screenshot (core/pausetaste.py):
+        # Pause-Taste und, als zweite Belegung, Strg+Umschalt+B - beide
+        # loesen denselben Ablauf wie #BILD# aus, egal welches Fenster
+        # gerade vorn ist. Jede der beiden Tasten ist systemweit exklusiv:
+        # haelt sie schon ein anderes Programm oder ein vergessenes altes
+        # CWB-Fenster, schlaegt nur ihre Registrierung fehl, CWB bleibt
+        # bedienbar, nur ohne diese eine Taste (status() in F12 -> Verhalten
+        # zeigt, welche der beiden hier tatsaechlich wirkt).
         self._pausetaste = PausenTaste(QApplication.instance(), self._pause_ausgeloest)
         if not self._pausetaste.registrieren():
             self.sprecher.sprich(
-                "Pause-Taste für den Screenshot konnte nicht eingerichtet werden, "
-                "vermutlich von einem anderen Programm belegt.",
+                "Weder Pause-Taste noch Strg+Umschalt+B für den Screenshot konnten "
+                "eingerichtet werden, vermutlich von einem anderen Programm oder "
+                "einem anderen CWB-Fenster belegt.",
                 art="fehler",
             )
+        else:
+            fehlende = [name for name, an in self._pausetaste.status().items() if not an]
+            if fehlende:
+                self.sprecher.sprich(
+                    f"{' und '.join(fehlende)} für den Screenshot konnte nicht "
+                    "eingerichtet werden, vermutlich von einem anderen Programm oder "
+                    "einem anderen CWB-Fenster belegt.",
+                    art="fehler",
+                )
 
         # Der Fensterbeobachter laeuft ab jetzt mit, nicht erst ab dem ersten
         # #run#/#admin#-Auftrag: sonst haette genau der erste Auftrag einer
@@ -1462,7 +1481,8 @@ class Werkbank(QMainWindow):
                "Unter dem Balken liegen die Kacheln mit den häufigsten Befehlen. " \
                "Alle Befehle mit Tastenkürzel: " + " ".join(
             f"{taste}: {beschriftung}." for taste, beschriftung, _ in self._leisten_eintraege()
-        ) + " Pause: Screenshot vom Telefon, systemweit, unabhängig vom Fenster."
+        ) + " Pause oder Strg+Umschalt+B: Screenshot vom Telefon, systemweit, " \
+            "unabhängig vom Fenster."
         # Auf Zuruf: eine Vorlesetaste schweigt in keiner Stufe, sonst waere
         # die Taste abgeschaltet statt die Stimme gedaempft.
         self.sprecher.sprich(satz, art="immer")
@@ -1480,6 +1500,7 @@ class Werkbank(QMainWindow):
                 modelle=self.modelle,
                 modell_aktuell=self.modell,
                 modell_waehlen=self._modell_waehlen,
+                pausetaste_status=self._pausetaste.status(),
             )
         except Exception as fehler:  # noqa: BLE001
             log.exception("Einstellungen nicht geöffnet: %s", fehler)
@@ -1788,15 +1809,16 @@ class Werkbank(QMainWindow):
 
     @slot_geschuetzt
     def _pause_ausgeloest(self) -> None:
-        """Aufgerufen vom systemweiten Pause-Hotkey (core/pausetaste.py),
-        egal welches Fenster gerade vorn ist. Ruft exakt denselben Ablauf wie
-        ein #BILD#-Auftrag auf - keine zweite Logik. Ist die Einstellung
-        "Pause-Taste holt Screenshot" (F12 → Verhalten) aus, bleibt die Taste
-        wirkungslos; geprueft wird das bei jedem Tastendruck neu, damit ein
-        Umschalten sofort wirkt."""
+        """Aufgerufen von einem der beiden systemweiten Screenshot-Hotkeys
+        (Pause-Taste oder Strg+Umschalt+B, core/pausetaste.py), egal welches
+        Fenster gerade vorn ist. Ruft exakt denselben Ablauf wie ein
+        #BILD#-Auftrag auf - keine zweite Logik. Ist die Einstellung
+        "Pause-Taste holt Screenshot" (F12 → Verhalten) aus, bleiben beide
+        Tasten wirkungslos; geprueft wird das bei jedem Tastendruck neu,
+        damit ein Umschalten sofort wirkt."""
         if not einstellungen_lesen().get("pause_screenshot", True):
             return
-        log.info("Pause-Taste ausgeloest")
+        log.info("Screenshot-Hotkey ausgeloest")
         self._bild_markierung()
 
     def _bild_markierung(self, *, bruecke_nummer: int | None = None,
@@ -1829,7 +1851,7 @@ class Werkbank(QMainWindow):
         log.info("Bild-Auftrag gestartet (#BILD#)")
         self._status_zeigen("Screenshot wird geholt…")
         self.sprecher.sprich("Screenshot wird geholt…", art="meldung")  # stumm: Zwischenmeldung
-        self._bild_faden = BildFaden(self)
+        self._bild_faden = BildFaden(self.projekt.pfad, self)
         self._bild_faden.fertig_da.connect(self._bild_fertig)
         self._bild_faden.start()
 
@@ -1858,7 +1880,7 @@ class Werkbank(QMainWindow):
             # BildFaden-Thread QClipboard nicht anfassen darf.
             if not zielfenster.datei_in_zwischenablage_legen(str(ergebnis.pfad)):
                 log.error("Screenshot-Dateiverweis nicht in die Zwischenablage gelegt")
-                self._status_zeigen(f"Screenshot liegt nur in Downloads: {ergebnis.pfad}")
+                self._status_zeigen(f"Screenshot liegt nur unter: {ergebnis.pfad}")
                 self.sprecher.sprich(
                     "Screenshot bereit, aber nicht in die Zwischenablage gelegt.", art="fehler"
                 )

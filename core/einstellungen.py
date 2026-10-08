@@ -527,7 +527,8 @@ class EinstellungenFenster(QDialog):
     Funktionen, damit dieses Modul nichts von fenster.py wissen muss."""
 
     def __init__(self, eltern, sprecher, lesen, schreiben, projekt_pfad=None,
-                 modelle=None, modell_aktuell="", modell_waehlen=None):
+                 modelle=None, modell_aktuell="", modell_waehlen=None,
+                 pausetaste_status=None):
         super().__init__(eltern)
         self.sprecher = sprecher
         self._lesen = lesen
@@ -537,6 +538,10 @@ class EinstellungenFenster(QDialog):
         self._verbrauchstage: list[tuple[str, int]] = []
         self._zusatzprojekte: list[dict] = []
         self._freigaben: list[dict] = []
+        # Welche der beiden Screenshot-Hotkeys (core/pausetaste.py) dieser
+        # CWB-Prozess tatsaechlich bekommen hat - leer, wenn gar nicht erst
+        # versucht (z.B. in Tests ohne Werkbank).
+        self._pausetaste_status: dict[str, bool] = dict(pausetaste_status or {})
         # Welche Modelle das Abo hergibt und welches gerade laeuft, weiss nur
         # fenster.py; hier steht nur, was uebergeben wurde. Ein Wechsel wird
         # ueber den Aufruf zurueckgereicht, nicht selbst verarbeitet.
@@ -985,10 +990,12 @@ class EinstellungenFenster(QDialog):
             gruppe,
             "pause_screenshot",
             "Pause-Taste holt Screenshot",
-            "Drückst du irgendwo in Windows die Pause-Taste, holt CWB denselben "
-            "Android-Screenshot wie ein #BILD#-Auftrag — ohne Umweg über den Chat.",
+            "Drückst du irgendwo in Windows die Pause-Taste oder Strg+Umschalt+B, "
+            "holt CWB denselben Android-Screenshot wie ein #BILD#-Auftrag — ohne "
+            "Umweg über den Chat.",
             bool(werte.get("pause_screenshot", True)),
         )
+        gruppe.feld(self._pausetaste_status_zeile())
         self.bericht_kopieren = self._schalter(
             gruppe,
             "bericht_kopieren",
@@ -1305,6 +1312,27 @@ class EinstellungenFenster(QDialog):
         werte[schluessel] = bool(an)
         self._sichern(werte)
         self.sprecher.sprich(f"{titel}: {'an' if an else 'aus'}.")
+
+    def _pausetaste_status_zeile(self) -> QLabel:
+        """Reine Anzeige, welche der beiden Screenshot-Tasten dieser
+        laufende CWB-Prozess tatsaechlich bekommen hat (core/pausetaste.py) -
+        haelt eine Taste schon ein anderes Programm oder ein vergessenes
+        altes CWB-Fenster, steht das hier, statt dass Robert es erst beim
+        erfolglosen Druecken merkt."""
+        if not self._pausetaste_status:
+            text = "Tastenbelegung unbekannt."
+        else:
+            teile = [
+                f"{name}: {'aktiv' if an else 'belegt, wirkt hier nicht'}"
+                for name, an in self._pausetaste_status.items()
+            ]
+            text = " · ".join(teile)
+        zeile = QLabel(text)
+        zeile.setObjectName("gruppenhinweis")
+        zeile.setWordWrap(True)
+        zeile.setAccessibleName("Tastenbelegung für den Screenshot")
+        zeile.setAccessibleDescription(text)
+        return zeile
 
     # -- Bereich Modell -------------------------------------------------------
 

@@ -292,23 +292,28 @@ nicht.
   legen (als Dateiverweis, wie „Datei kopieren“ im Explorer), damit er per Strg+V als
   Anhang in den Chat kann.
 - **Kopfzeile:** `#BILD#` allein – **kein Inhalt nötig**, Text darunter wird ignoriert.
-- **Was passiert:** `adb exec-out screencap -p` (Zeitlimit 20 s), Datei
-  `%USERPROFILE%\Downloads\android_screenshot.png` (wird jedes Mal überschrieben),
-  Dateiverweis (CF_HDROP) in die Zwischenablage, Ansage „Screenshot bereit.“ Kein
-  Eingabefeld, kein Ausgabefeld, keine Rückspielung in ein Fenster. Läuft im eigenen Thread.
+- **Was passiert:** `adb exec-out screencap -p` (Zeitlimit 20 s), Datei im Projektordner
+  unter `wissen\bilder\screenshot_<Zeitstempel>.png` (nichts wird überschrieben,
+  `wissen\bilder\neueste.txt` nennt den Pfad der jüngsten Datei), Dateiverweis (CF_HDROP)
+  in die Zwischenablage, Ansage „Screenshot bereit.“ Kein Eingabefeld, kein Ausgabefeld,
+  keine Rückspielung in ein Fenster. Läuft im eigenen Thread.
 - **Kosten:** keine Token.
 - **Fallstricke:** Braucht `adb` im PATH und ein verbundenes, freigegebenes Gerät, sonst
   Fehleransage. Nur ein Screenshot-Auftrag zugleich. Für Aufrufe aus anderen Projekten
   gibt es zusätzlich den alten Weg `#run# python C:\Users\Entwickler\.cwb-werkzeuge\
-  android_screenshot.py` (optional `--zwischenablage`); ob die Datei dort liegt, ist aus dem
-  CWB-Code nicht prüfbar – **ungeklärt**.
-- **Vierter Weg ohne Chat:** die Pause-Taste (core/pausetaste.py), systemweiter
-  Win32-Hotkey ohne Zusatztaste, unabhängig davon, welches Fenster gerade vorn ist. Löst
-  denselben Ablauf aus wie ein #BILD#-Auftrag (`fenster.py`, `_bild_markierung`), keine
-  eigene Logik. Schaltbar über F12 → Verhalten → „Pause-Taste holt Screenshot“
-  (`pause_screenshot`, Standard an) – die Einstellung wird bei jedem Tastendruck neu
-  gelesen, ein Umschalten wirkt sofort. Ist die Taste von einem anderen Programm belegt,
-  bleibt CWB bedienbar; Fehler stehen im Log und werden beim Start einmal angesagt.
+  android_screenshot.py` (optional `--zwischenablage`) – der legt weiterhin fest unter
+  `%USERPROFILE%\Downloads\android_screenshot.png` ab (wird jedes Mal überschrieben), nicht
+  im Projektordner.
+- **Vierter Weg ohne Chat:** die Pause-Taste oder, als zweite Belegung, Strg+Umschalt+B
+  (core/pausetaste.py), beide systemweite Win32-Hotkeys, unabhängig davon, welches Fenster
+  gerade vorn ist. Lösen denselben Ablauf aus wie ein #BILD#-Auftrag (`fenster.py`,
+  `_bild_markierung`), keine eigene Logik. Schaltbar über F12 → Verhalten → „Pause-Taste
+  holt Screenshot“ (`pause_screenshot`, Standard an, gilt für beide Tasten) – die
+  Einstellung wird bei jedem Tastendruck neu gelesen, ein Umschalten wirkt sofort. Jede der
+  beiden Tasten ist systemweit exklusiv: hält sie schon ein anderes Programm oder ein
+  vergessenes altes CWB-Fenster, schlägt nur ihre Registrierung fehl, die andere bleibt
+  nutzbar; F12 → Verhalten zeigt, welche der beiden hier tatsächlich wirkt. Fehler stehen
+  zusätzlich im Log und werden beim Start einmal angesagt.
 
 ---
 

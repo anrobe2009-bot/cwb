@@ -36,14 +36,20 @@ eigenstaendigen Kommandozeilenaufruf unten (z.B. aus einem ANDEREN
 Projekt per #RUN#, wo kein Zugriff auf CWBs eigene QGuiApplication
 besteht) - der #BILD#-Ausloeser in core/fenster.py braucht sie nicht mehr.
 
-VARIANTE C - #BILD# aus dem laufenden CWB-Prozess (screenshot_ablegen()
-unten plus core/zielfenster.py, datei_in_zwischenablage_legen). Holt das
-Bild und legt es in Downloads ab wie Variante A, ohne PowerShell oder
-sonst einen zweiten Prozess - den Dateiverweis setzt core/fenster.py
-(BildFaden/_bild_fertig) danach direkt ueber QClipboard.setMimeData() auf
-dem GUI-Thread. Weil alles im selben Prozess laeuft wie CWBs eigener
-Zwischenablage-Waechter, gibt es den Zugriffskonflikt von Variante B gar
-nicht erst - der Waechter muss dafuer nicht angehalten werden.
+VARIANTE C - #BILD# und Pause-Taste/Strg+Umschalt+B aus dem laufenden
+CWB-Prozess (screenshot_ablegen() unten plus core/zielfenster.py,
+datei_in_zwischenablage_legen). Holt das Bild und legt es - anders als
+Variante A/B - dauerhaft im Projektordner unter wissen\\bilder\\ ab, mit
+fortlaufendem Zeitstempel-Namen statt eines einzigen immer ueberschriebenen
+Platzes: so bleibt jeder frühere Screenshot erhalten, und wissen\\bilder\\
+neueste.txt nennt den Pfad der jeweils juengsten Datei, damit ein Auftrag
+sie sicher wiederfindet, ohne das Verzeichnis selbst durchsuchen zu muessen.
+Ohne PowerShell oder sonst einen zweiten Prozess - den Dateiverweis setzt
+core/fenster.py (BildFaden/_bild_fertig) danach direkt ueber
+QClipboard.setMimeData() auf dem GUI-Thread. Weil alles im selben Prozess
+laeuft wie CWBs eigener Zwischenablage-Waechter, gibt es den Zugriffskonflikt
+von Variante B gar nicht erst - der Waechter muss dafuer nicht angehalten
+werden.
 
 Eigenstaendiges Kommandozeilenwerkzeug. Aus dem Projekt CWB selbst per
 #RUN#-Befehl:
@@ -190,6 +196,47 @@ def _in_downloads_ablegen(png_daten: bytes) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Variante C - dauerhaft im Projektordner, nichts wird ueberschrieben
+# ---------------------------------------------------------------------------
+
+# Name der Datei, die immer auf den juengsten Screenshot zeigt (Variante C) -
+# selbst kein Bild, nur ein Pfad als Text, damit ein spaeterer Auftrag die
+# Datei sicher findet, ohne wissen\bilder\ durchsuchen zu muessen.
+NEUESTE_DATEINAME = "neueste.txt"
+
+
+def _bilder_ordner(projekt_ordner: Path) -> Path:
+    ordner = projekt_ordner / "wissen" / "bilder"
+    ordner.mkdir(parents=True, exist_ok=True)
+    return ordner
+
+
+def _naechster_dateiname(ordner: Path) -> Path:
+    """Zeitstempel-Name - reicht im Normalfall allein, da Screenshots nicht
+    sekundengenau aufeinanderfolgen. Faellt doch einmal derselbe Zeitstempel,
+    haengt ein fortlaufender Zaehler an, statt die vorhandene Datei zu
+    ueberschreiben."""
+    stempel = time.strftime("%Y%m%d_%H%M%S")
+    ziel = ordner / f"screenshot_{stempel}.png"
+    zaehler = 2
+    while ziel.exists():
+        ziel = ordner / f"screenshot_{stempel}_{zaehler}.png"
+        zaehler += 1
+    return ziel
+
+
+def _in_projekt_ablegen(png_daten: bytes, projekt_ordner: Path) -> Path:
+    """Schreibt die PNG-Bytes dauerhaft nach wissen\\bilder\\ im uebergebenen
+    Projektordner, mit fortlaufendem Zeitstempel-Namen, und merkt den Pfad
+    in neueste.txt (siehe NEUESTE_DATEINAME)."""
+    ordner = _bilder_ordner(projekt_ordner)
+    ziel = _naechster_dateiname(ordner)
+    ziel.write_bytes(png_daten)
+    (ordner / NEUESTE_DATEINAME).write_text(str(ziel), encoding="utf-8")
+    return ziel
+
+
+# ---------------------------------------------------------------------------
 # Variante B - Zwischenablage, mit angehaltenem Waechter
 # ---------------------------------------------------------------------------
 
@@ -294,21 +341,23 @@ class ScreenshotErgebnis:
     fehler: str = ""
 
 
-def screenshot_ablegen() -> ScreenshotErgebnis:
-    """Holt den Screenshot und legt ihn dauerhaft in Downloads ab (Variante A) -
-    ruehrt die Zwischenablage nicht an. Fuer den #BILD#-Ausloeser in core/
-    fenster.py (BildFaden): laeuft in einem Hintergrund-Thread, wo QClipboard
-    nicht angefasst werden darf. Den Dateiverweis in die Zwischenablage legt
-    danach core/zielfenster.py (datei_in_zwischenablage_legen) direkt ueber
-    Qt auf dem GUI-Thread - kein PowerShell, kein zweiter Prozess. Wirft
-    nichts, wie screenshot_in_zwischenablage()."""
+def screenshot_ablegen(projekt_ordner: Path) -> ScreenshotErgebnis:
+    """Holt den Screenshot und legt ihn dauerhaft unter wissen\\bilder\\ im
+    uebergebenen Projektordner ab (Variante C) - ruehrt die Zwischenablage
+    nicht an. Fuer den #BILD#-Ausloeser und die Hotkeys (Pause-Taste/
+    Strg+Umschalt+B) in core/fenster.py (BildFaden): laeuft in einem
+    Hintergrund-Thread, wo QClipboard nicht angefasst werden darf. Den
+    Dateiverweis in die Zwischenablage legt danach core/zielfenster.py
+    (datei_in_zwischenablage_legen) direkt ueber Qt auf dem GUI-Thread -
+    kein PowerShell, kein zweiter Prozess. Wirft nichts, wie
+    screenshot_in_zwischenablage()."""
     try:
         png_daten = _screenshot_holen()
     except RuntimeError as fehler:
         return ScreenshotErgebnis(False, fehler=str(fehler))
     breite, hoehe = _png_masse(png_daten)
     try:
-        ziel = _in_downloads_ablegen(png_daten)
+        ziel = _in_projekt_ablegen(png_daten, projekt_ordner)
     except OSError as fehler:
         return ScreenshotErgebnis(False, fehler=str(fehler))
     return ScreenshotErgebnis(True, ziel, breite, hoehe)
