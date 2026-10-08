@@ -1,12 +1,12 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 08.10.2026 09:34.
+Automatisch erzeugt am 08.10.2026 17:01.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 4471 |  |
+| core\fenster.py | 4493 |  |
+| core\einstellungen.py | 1943 |  |
 | core\sitzung.py | 1916 |  |
-| core\einstellungen.py | 1915 |  |
 | core\wissen.py | 960 |  |
 | core\sicherheit.py | 930 |  |
 | core\kopfzeile.py | 929 |  |
@@ -20,8 +20,8 @@ Automatisch erzeugt am 08.10.2026 09:34.
 | core\pfade.py | 481 |  |
 | core\datenordner.py | 462 |  |
 | index\indexer.py | 460 |  |
+| core\android_screenshot.py | 433 |  |
 | memory_hub\aufraeumen.py | 421 | Memory Hub - Aufraeummodus. |
-| core\android_screenshot.py | 384 |  |
 | core\bruecke.py | 378 |  |
 | core\waechter_anzeige.py | 357 |  |
 | core\landkarte.py | 351 |  |
@@ -37,7 +37,7 @@ Automatisch erzeugt am 08.10.2026 09:34.
 | core\faden.py | 161 |  |
 | core\ablagewaechter.py | 157 |  |
 | _test_doppelstimme.py | 140 | Stummer Test: simuliert MCI (keine echte Audioausgabe), um zu pruefen, |
-| core\pausetaste.py | 84 |  |
+| core\pausetaste.py | 119 |  |
 | index\cli.py | 80 |  |
 | verlauf.css | 73 | FILE: CWB/verlauf.css |
 | memory_hub\sdk_werkzeuge.py | 73 |  |
