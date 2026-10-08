@@ -1,18 +1,18 @@
 # Landkarte von CWB
 
-Automatisch erzeugt am 07.10.2026 18:35.
+Automatisch erzeugt am 08.10.2026 09:34.
 
 | Datei | Zeilen | Zweck |
 |---|---|---|
-| core\fenster.py | 4410 |  |
+| core\fenster.py | 4471 |  |
 | core\sitzung.py | 1916 |  |
 | core\einstellungen.py | 1915 |  |
 | core\wissen.py | 960 |  |
 | core\sicherheit.py | 930 |  |
 | core\kopfzeile.py | 929 |  |
 | core\sprache.py | 901 |  |
+| core\eingangsordner.py | 680 |  |
 | core\leitstand.py | 642 |  |
-| core\eingangsordner.py | 631 |  |
 | core\zielfenster.py | 602 |  |
 | core\grundlagen.py | 575 |  |
 | core\terminal.py | 539 |  |
