@@ -15,6 +15,7 @@ Aufruf: python -m unittest core.test_eingangsordner -v
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -431,16 +432,17 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
 
     def test_ohne_laeuft_dateien_passiert_nichts(self):
         self.assertEqual(eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB",
-                                                           lambda a: None), (0, 0))
+                                                           lambda a: None), (0, 0, 0))
 
     def test_passende_datei_wird_wieder_angenommen(self):
         self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB",
                                             "text": "#CODE#\nBlock 65"})
         empfangen = []
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", empfangen.append)
         self.assertEqual(anzahl, 1)
         self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 0)
         self.assertEqual(len(empfangen), 1)
         self.assertEqual(empfangen[0].inhalt, "Block 65")
         # Die Datei bleibt in laeuft/ liegen, bis core/fenster.py einen
@@ -452,16 +454,23 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht",
                                             "text": "x"})
         empfangen = []
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", empfangen.append)
         self.assertEqual(anzahl, 0)
         self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 0)
         self.assertEqual(empfangen, [])
         self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
 
     def test_reihenfolge_aelteste_zuerst(self):
-        self._in_laeuft_anlegen("b.json", {"quelle": "bruecke", "text": "zweiter"}, mtime=2000)
-        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "erster"}, mtime=1000)
+        # mtime bewusst nur Sekunden auseinander und nah an "jetzt" - sonst
+        # griffe die Alterssicherung (WIEDERAUFNAHME_MAX_ALTER_STUNDEN) und
+        # beide Dateien würden übersprungen statt verglichen.
+        jetzt = time.time()
+        self._in_laeuft_anlegen("b.json", {"quelle": "bruecke", "text": "zweiter"},
+                                 mtime=jetzt - 10)
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "erster"},
+                                 mtime=jetzt - 20)
         empfangen = []
         eingangsordner.wieder_aufnehmen(markierung_erkennen, "CWB", empfangen.append)
         self.assertEqual([a.inhalt for a in empfangen], ["erster", "zweiter"])
@@ -472,20 +481,22 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         def ausfuehren(_auftrag):
             raise eingangsordner.AuftragSpaeter("Terminal belegt")
 
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", ausfuehren)
         self.assertEqual(anzahl, 0)
         self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 0)
         self.assertTrue((self._ordner / "a.json").exists())
         self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
 
     def test_kaputte_datei_landet_in_abgelehnt(self):
         pfad = eingangsordner.laeuft_ordner() / "a.json"
         pfad.write_text("kein json", encoding="utf-8")
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", lambda a: None)
         self.assertEqual(anzahl, 0)
         self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 0)
         self.assertTrue((eingangsordner.abgelehnt_ordner() / "a.json").exists())
 
     def test_run_wird_nicht_automatisch_wiederholt(self):
@@ -496,10 +507,11 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self._in_laeuft_anlegen("a.json", {"quelle": "lokal",
                                             "text": "#RUN#\nStart-Sleep 55"})
         aufgerufen = []
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", aufgerufen.append)
         self.assertEqual(anzahl, 0)
         self.assertEqual(verworfen, 1)
+        self.assertEqual(uebersprungen, 0)
         self.assertEqual(aufgerufen, [], "Der Befehl wurde tatsaechlich erneut ausgefuehrt")
         self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
         ziel = eingangsordner.abgelehnt_ordner() / "a.json"
@@ -508,11 +520,57 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
     def test_admin_wird_nicht_automatisch_wiederholt(self):
         self._in_laeuft_anlegen("a.json", {"quelle": "lokal", "text": "#ADMIN#\nipconfig"})
         aufgerufen = []
-        anzahl, verworfen = eingangsordner.wieder_aufnehmen(
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
             markierung_erkennen, "CWB", aufgerufen.append)
         self.assertEqual(anzahl, 0)
         self.assertEqual(verworfen, 1)
+        self.assertEqual(uebersprungen, 0)
         self.assertEqual(aufgerufen, [])
+
+    def test_zu_alte_datei_wird_uebersprungen_und_landet_in_abgelehnt(self):
+        """Block 70, Nachbesserung: eine Datei, die laenger als
+        WIEDERAUFNAHME_MAX_ALTER_STUNDEN in laeuft/ liegt, gilt als vermutlich
+        schon erledigt und wird NICHT erneut angestossen - mit Logzeile,
+        nicht still (hier per Rueckgabewert und Zielordner belegt)."""
+        zu_alt = time.time() - (eingangsordner.WIEDERAUFNAHME_MAX_ALTER_STUNDEN + 1) * 3600
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "#CODE#\nBlock 38"},
+                                 mtime=zu_alt)
+        aufgerufen = []
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", aufgerufen.append)
+        self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 1)
+        self.assertEqual(aufgerufen, [])
+        self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
+        self.assertTrue((eingangsordner.abgelehnt_ordner() / "a.json").exists())
+
+    def test_frische_datei_mit_vorhandenem_bericht_wird_uebersprungen_und_landet_in_erledigt(self):
+        """Zweiter Zweig der Sicherung: `bereits_erledigt` (von core/fenster.py
+        uebergeben) meldet fuer die Blocknummer schon einen gespeicherten
+        Bericht - dann gilt der Auftrag als erledigt, auch wenn er noch
+        frisch in laeuft/ liegt."""
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "#CODE#\nBlock 42"})
+        aufgerufen = []
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", aufgerufen.append,
+            bereits_erledigt=lambda nummer: nummer == 42)
+        self.assertEqual(anzahl, 0)
+        self.assertEqual(verworfen, 0)
+        self.assertEqual(uebersprungen, 1)
+        self.assertEqual(aufgerufen, [])
+        self.assertFalse((eingangsordner.laeuft_ordner() / "a.json").exists())
+        self.assertTrue((eingangsordner.erledigt_ordner() / "a.json").exists())
+
+    def test_bereits_erledigt_ohne_treffer_laeuft_normal_weiter(self):
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "text": "#CODE#\nBlock 43"})
+        aufgerufen = []
+        anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
+            markierung_erkennen, "CWB", aufgerufen.append,
+            bereits_erledigt=lambda nummer: nummer == 42)
+        self.assertEqual(anzahl, 1)
+        self.assertEqual(uebersprungen, 0)
+        self.assertEqual(len(aufgerufen), 1)
 
 
 class WartendeDateienTest(EingangsordnerTestBasis):

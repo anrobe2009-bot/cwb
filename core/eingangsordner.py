@@ -46,8 +46,10 @@ from pathlib import Path
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer
 
 try:
+    from .bloecke import block_erkennen
     from .pfade import EINGANG_ORDNER, log_einrichten, zusatzprojekte_lesen
 except ImportError:
+    from bloecke import block_erkennen
     from pfade import EINGANG_ORDNER, log_einrichten, zusatzprojekte_lesen
 
 log_einrichten()
@@ -99,6 +101,15 @@ _letzte_meldung: dict[str, float] = {}
 RUECKSTELL_WARTEZEIT_S = 3.0
 NACHSEHEN_ENTPRELL_MS = 500
 _naechster_versuch: dict[str, float] = {}
+
+# Block 70, Nachbesserung (07.10.2026): zweite Sicherung in wieder_aufnehmen(),
+# zusaetzlich dazu, dass core/fenster.py jeden erreichten Auftragsabschluss
+# jetzt zuverlaessiger meldet (siehe abschliessen()). Eine Datei in laeuft/,
+# die laenger als diese Schwelle dort liegt, gilt als vermutlich schon
+# erledigt - ein echter Auftrag braucht dafuer nie so lange, selbst eine
+# Kontingent-Pause ueber das Wochenende hinaus meldet sich ueber
+# _kontingent_pause_behandeln() in core/fenster.py selbst ab.
+WIEDERAUFNAHME_MAX_ALTER_STUNDEN = 12.0
 
 
 def _zurueckstellung_melden(name: str, grund) -> None:
@@ -467,7 +478,8 @@ def verwerfen(datei: Path, grund: str) -> None:
     _verschieben(datei, abgelehnt_ordner(), grund)
 
 
-def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> tuple[int, int]:
+def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren,
+                      bereits_erledigt=None) -> tuple[int, int, int]:
     """Block 70, Teil A: nimmt beim Öffnen eines Projekts alle Aufträge
     wieder auf, die beim letzten Mal nicht fertig wurden - ihre Datei liegt
     noch in laeuft/, weil `verarbeiten()` sie dort erst durch `abschliessen()`
@@ -484,19 +496,32 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> tupl
     beidem. Solche Dateien landen stattdessen in abgelehnt/, mit Begründung,
     und müssen von Hand erneut gesendet werden.
 
+    Block 70, Nachbesserung (07.10.2026): zweite Sicherung gegen einen
+    Auftrag, der in Wahrheit schon fertig war, aber durch einen Fehler nach
+    dem eigentlichen Abschluss nie bei `abschliessen()` ankam (core/fenster.py
+    hat dieses Risiko mittlerweile selbst entschärft, hier bleibt die
+    Sicherung zusätzlich bestehen). Eine Datei wird NICHT erneut angestoßen,
+    sondern mit Begründung verschoben, wenn entweder sie älter als
+    `WIEDERAUFNAHME_MAX_ALTER_STUNDEN` ist (landet in abgelehnt/, da unklar)
+    oder `bereits_erledigt` (vom Aufrufer übergeben, prüft z.B. einen schon
+    gespeicherten Bericht zur Blocknummer) für ihre Blocknummer wahr ist
+    (landet in erledigt/, da belegt). Beides steht geloggt, nie stillschweigend.
+
     Älteste zuerst, wie `wartende_dateien()`. Nur Dateien, die zu
     `projekt_name` passen (`passend_fuer_projekt`), werden hier angefasst -
-    andere bleiben liegen, bis das richtige Fenster sie holt. Gibt ein Paar
+    andere bleiben liegen, bis das richtige Fenster sie holt. Gibt ein Tripel
     zurück: Zahl der tatsächlich wieder angenommenen Aufträge, Zahl der
-    deswegen verworfenen #RUN#/#ADMIN#-Aufträge."""
+    deswegen verworfenen #RUN#/#ADMIN#-Aufträge, Zahl der wegen Alter oder
+    vorhandenem Bericht übersprungenen Aufträge."""
     sicherstellen()
     ordner = laeuft_ordner()
     if not ordner.is_dir():
-        return 0, 0
+        return 0, 0, 0
     dateien = sorted((p for p in ordner.glob("*.json") if p.is_file()),
                       key=lambda p: p.stat().st_mtime)
     anzahl = 0
     verworfen = 0
+    uebersprungen = 0
     for pfad in dateien:
         if not passend_fuer_projekt(pfad, projekt_name):
             continue
@@ -515,6 +540,30 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> tupl
             verworfen += 1
             continue
         try:
+            alter_stunden = (time.time() - pfad.stat().st_mtime) / 3600.0
+        except OSError:
+            alter_stunden = 0.0
+        zu_alt = alter_stunden > WIEDERAUFNAHME_MAX_ALTER_STUNDEN
+        block_nummer, _inhalt, _vollstaendig = block_erkennen(auftrag.art, auftrag.inhalt)
+        hat_bericht = (
+            not zu_alt and block_nummer is not None and bereits_erledigt is not None
+            and bool(bereits_erledigt(block_nummer))
+        )
+        if zu_alt or hat_bericht:
+            if hat_bericht:
+                grund = (f"Block {block_nummer} hat schon einen gespeicherten Bericht - "
+                          "vermutlich schon erledigt, kein erneuter Lauf")
+                ziel_ordner = erledigt_ordner()
+            else:
+                grund = (f"Liegt seit {alter_stunden:.1f} Stunden in laeuft/ (Grenze "
+                          f"{WIEDERAUFNAHME_MAX_ALTER_STUNDEN:.0f}) - vermutlich schon erledigt, "
+                          "bitte von Hand prüfen und bei Bedarf erneut senden")
+                ziel_ordner = abgelehnt_ordner()
+            log.warning("Wieder aufgenommene Datei übersprungen (%s): %s", pfad.name, grund)
+            _verschieben(pfad, ziel_ordner, grund)
+            uebersprungen += 1
+            continue
+        try:
             ausfuehren(auftrag)
         except AuftragSpaeter as grund:
             _zurueckstellung_melden(pfad.name, grund)
@@ -526,7 +575,7 @@ def wieder_aufnehmen(markierung_erkennen, projekt_name: str, ausfuehren) -> tupl
             _verschieben(pfad, erledigt_ordner())
             continue
         anzahl += 1
-    return anzahl, verworfen
+    return anzahl, verworfen, uebersprungen
 
 
 class Eingangswaechter(QObject):

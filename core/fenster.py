@@ -945,8 +945,9 @@ class Werkbank(QMainWindow):
         # echter Abschluss (abschliessen(), siehe _fertig/_terminal_fertig/
         # _bild_fertig) sie je nach erledigt/ verschiebt - verarbeiten()
         # selbst tut das nicht mehr.
-        wieder_aufgenommen, befehle_verworfen = wieder_aufnehmen(
-            markierung_erkennen, self.projekt.name, self._eingang_auftrag)
+        wieder_aufgenommen, befehle_verworfen, wegen_alter_uebersprungen = wieder_aufnehmen(
+            markierung_erkennen, self.projekt.name, self._eingang_auftrag,
+            bereits_erledigt=self._bericht_fuer_block_vorhanden)
         if wieder_aufgenommen:
             satz = (f"{wieder_aufgenommen} Aufträge wieder aufgenommen."
                      if wieder_aufgenommen > 1 else "Ein Auftrag wieder aufgenommen.")
@@ -965,6 +966,20 @@ class Werkbank(QMainWindow):
                      "Ein Befehl aus dem letzten Mal wurde NICHT automatisch wiederholt, "
                      "bitte bei Bedarf erneut senden.")
             log.info("Beim Start verworfen: %d #RUN#/#ADMIN#-Befehle", befehle_verworfen)
+            self._verlauf_anhaengen(satz, "hinweis")
+            self.sprecher.sprich(satz, art="hinweis")
+        if wegen_alter_uebersprungen:
+            # Block 70, Nachbesserung: core/eingangsordner.py wieder_aufnehmen()
+            # hat eine oder mehrere Dateien als vermutlich schon erledigt
+            # eingestuft (zu alt oder Bericht zur Blocknummer schon vorhanden)
+            # und NICHT erneut angestossen - Begruendung steht im Log.
+            satz = (f"{wegen_alter_uebersprungen} Aufträge aus dem letzten Mal wurden als "
+                     "vermutlich schon erledigt übersprungen, nicht erneut gestartet."
+                     if wegen_alter_uebersprungen > 1 else
+                     "Ein Auftrag aus dem letzten Mal wurde als vermutlich schon erledigt "
+                     "übersprungen, nicht erneut gestartet.")
+            log.info("Beim Start übersprungen (vermutlich schon erledigt): %d Auftraege",
+                     wegen_alter_uebersprungen)
             self._verlauf_anhaengen(satz, "hinweis")
             self.sprecher.sprich(satz, art="hinweis")
 
@@ -2110,10 +2125,22 @@ class Werkbank(QMainWindow):
         # beim Abschicken uebergeben.
         self._auftrag_laeuft = False
         self._auftrags_uhr.stop()
-        self.balken.animation_stoppen()
-        # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
-        # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
-        self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+        # Block 70, Nachbesserung (07.10.2026): beide Aufrufe standen hier
+        # ungeschuetzt vor abschliessen() weiter unten - eine Ausnahme darin
+        # (z.B. eine kaputte Anzeige) wurde von @slot_geschuetzt abgefangen
+        # und beendete _fertig() vorzeitig, OHNE dass abschliessen() je
+        # lief. Der tatsaechlich fertige Auftrag blieb dadurch in laeuft/
+        # liegen und wurde beim naechsten Neustart von wieder_aufnehmen()
+        # erneut angestossen, obwohl Claude Code ihn schon erledigt hatte
+        # ("schon erledigt" - Robert, 07.10.2026). Darum jetzt abgesichert:
+        # ein Fehler hier darf den Abschluss nicht mehr verhindern.
+        try:
+            self.balken.animation_stoppen()
+            # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
+            # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
+            self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Anzeige nach Auftragsende nicht aktualisiert: %s", fehler)
         # Block 77, Punkte 3/4: Kontingent-Zustand (Kopfzeile/F2) und
         # Sparmodus-Umschaltung - unabhaengig davon, ob der Auftrag gleich
         # als Kontingent-Pause zurueckkehrt oder normal fertig wird.
@@ -2318,6 +2345,11 @@ class Werkbank(QMainWindow):
             # Vermutlich das Wochenlimit, nicht das Fuenf-Stunden-Fenster:
             # kein automatischer Fortsetzungsversuch, die Warteschlange
             # bleibt angehalten, bis Robert selbst eingreift.
+            # Block 70, Nachbesserung: abschliessen() steht hier ganz vorn,
+            # VOR Anzeige, Ansage und Berichtsbau - ein Fehler dort darf
+            # nicht mehr verhindern, dass die Datei aus laeuft/ kommt.
+            if eingang_datei is not None:
+                abschliessen(eingang_datei)
             grund = entscheidung["grund"]
             log.warning("Kontingent-Pause abgebrochen (Wochenlimit): %s", grund)
             self._zustand_zeigen("fehler")
@@ -2337,8 +2369,6 @@ class Werkbank(QMainWindow):
             self._letzter_bericht_pfad = (
                 self._bericht_datei_speichern() if self._letzter_bericht else None
             )
-            if eingang_datei is not None:
-                abschliessen(eingang_datei)
             self._kontingent_info = None
             self._statusleiste_aktualisieren()
             return
@@ -2443,6 +2473,37 @@ class Werkbank(QMainWindow):
         else:
             teile.append("Tokenverbrauch: keine Daten")
         return "\n".join(teile).strip() + "\n"
+
+    def _bericht_fuer_block_vorhanden(self, block_nummer: int) -> bool:
+        """Block 70, Nachbesserung: True, wenn unter .cwb/bericht/ schon ein
+        gespeicherter Bericht mit der Kopfzeile "Block: {block_nummer}"
+        liegt (siehe _bericht_bauen) - Grundlage fuer die Sicherung in
+        core/eingangsordner.py wieder_aufnehmen() gegen einen Auftrag, der in
+        Wahrheit schon fertig war. Scheitert das Lesen eines einzelnen
+        Berichts (beschaedigtes ZIP, Zugriffsfehler), gilt das als kein
+        Treffer fuer diese Datei, sonst wird einfach weitergesucht."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        if not ordner.is_dir():
+            return False
+        kennung = f"Block: {block_nummer}"
+        try:
+            dateien = [p for p in ordner.iterdir()
+                       if p.is_file() and p.suffix.lower() in (".zip", ".txt")]
+        except OSError:
+            return False
+        for pfad in dateien:
+            try:
+                if pfad.suffix.lower() == ".zip":
+                    with zipfile.ZipFile(pfad) as archiv:
+                        texte = [archiv.read(name).decode("utf-8", errors="ignore")
+                                 for name in archiv.namelist()]
+                else:
+                    texte = [pfad.read_text(encoding="utf-8", errors="ignore")]
+            except (OSError, zipfile.BadZipFile):
+                continue
+            if any(kennung in text for text in texte):
+                return True
+        return False
 
     def _bericht_datei_speichern(self) -> Path | None:
         """Speichert den zuletzt gebauten Bericht (self._letzter_bericht)
