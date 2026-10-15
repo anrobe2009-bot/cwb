@@ -1,0 +1,58 @@
+﻿=== CWB PID 37416 um 2026-10-07_11-27-51 ===
+Process 37416: "C:\Program Files\Python313\pythonw.exe" C:\Users\Entwickler\Desktop\start\CWB\core\fenster.py
+Python v3.13.14 (C:\Program Files\Python313\pythonw.exe)
+
+Thread 34008 (idle): "MainThread"
+    main (fenster.py:3929)
+    <module> (fenster.py:3934)
+Thread 11020 (idle): "Thread-1 (_sprech_schleife)"
+    wait (threading.py:359)
+    get (queue.py:199)
+    _sprech_schleife (sprache.py:621)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 9640 (idle): "Thread-2 (_ton_schleife)"
+    wait (threading.py:359)
+    get (queue.py:199)
+    _ton_schleife (sprache.py:757)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 41164 (idle): "Thread-6 (_beobachten)"
+    _beobachten (zielfenster.py:240)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 3532 (idle): "Dummy-15"
+    _poll (asyncio\windows_events.py:778)
+    select (asyncio\windows_events.py:446)
+    _run_once (asyncio\base_events.py:2022)
+    run_forever (asyncio\base_events.py:683)
+    run_until_complete (asyncio\base_events.py:712)
+    run (faden.py:106)
+Thread 35252 (idle): "Dummy-21"
+    _warten (bruecke.py:232)
+    run (bruecke.py:245)
+Thread 38876 (idle): "AnyIO worker thread"
+    wait (threading.py:359)
+    get (queue.py:199)
+    run (anyio\_backends\_asyncio.py:1018)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 37252 (idle): "asyncio_0"
+    wait (threading.py:359)
+    get (queue.py:199)
+    run (concurrent\futures\thread.py:59)
+    _worker (concurrent\futures\thread.py:93)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 4908 (idle): "Dummy-127"
+    befehl_ausfuehren (terminal.py:239)
+    run (terminal.py:495)
+Thread 7584 (idle): "Thread-124 (_lesen)"
+    _lesen (terminal.py:190)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)

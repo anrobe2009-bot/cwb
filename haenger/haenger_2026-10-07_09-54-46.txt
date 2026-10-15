@@ -1,0 +1,60 @@
+﻿=== CWB PID 14236 um 2026-10-07_09-54-46 ===
+Process 14236: "C:\Program Files\Python313\pythonw.exe" C:\Users\Entwickler\Desktop\start\CWB\core\fenster.py
+Python v3.13.14 (C:\Program Files\Python313\pythonw.exe)
+
+Thread 26488 (idle): "MainThread"
+    main (fenster.py:3929)
+    <module> (fenster.py:3934)
+Thread 41956 (idle): "Thread-1 (_sprech_schleife)"
+    wait (threading.py:359)
+    get (queue.py:199)
+    _sprech_schleife (sprache.py:621)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 30464 (idle): "Thread-2 (_ton_schleife)"
+    wait (threading.py:359)
+    get (queue.py:199)
+    _ton_schleife (sprache.py:757)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 25012 (idle): "Dummy-4"
+    _poll (asyncio\windows_events.py:778)
+    select (asyncio\windows_events.py:446)
+    _run_once (asyncio\base_events.py:2022)
+    run_forever (asyncio\base_events.py:683)
+    run_until_complete (asyncio\base_events.py:712)
+    run (faden.py:106)
+Thread 38132 (idle): "Thread-5 (_beobachten)"
+    _beobachten (zielfenster.py:240)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 30184 (idle): "AnyIO worker thread"
+    wait (threading.py:359)
+    get (queue.py:199)
+    run (anyio\_backends\_asyncio.py:1018)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 40692 (idle): "asyncio_0"
+    wait (threading.py:359)
+    get (queue.py:199)
+    run (concurrent\futures\thread.py:59)
+    _worker (concurrent\futures\thread.py:93)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 37396 (idle): "Dummy-17"
+    _warten (bruecke.py:232)
+    run (bruecke.py:245)
+Thread 41728 (idle)
+    wait (threading.py:363)
+    get (queue.py:210)
+    befehl_ausfuehren (terminal.py:213)
+    run (terminal.py:495)
+Thread 36736 (idle): "Thread-43 (_lesen)"
+    _lesen (terminal.py:190)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)

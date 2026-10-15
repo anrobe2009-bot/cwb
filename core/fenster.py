@@ -1,0 +1,4797 @@
+﻿"""
+CWB - Code Workbench
+Baustein 3: Hauptfenster (Werkbank) und Programmstart.
+
+Die ständig gebrauchten Befehle liegen als flache Kachelreihe unter dem
+Fortschrittsbalken (core/tastenleiste.py), alles Übrige über Tastenkürzel;
+F1 liest sie vor. Ruht der Mauszeiger kurz auf einem Bedienelement oder
+einem Anzeigefeld, wird dessen Inhalt angesagt - im ganzen Fenster und auf
+der Einstellungsseite (core/zeigeransage.py).
+
+Grundregel: gesprochen wird nur, was du wissen musst - fertig, Fehler,
+Rückfrage, Abbruch. Alles andere nur auf Tastendruck oder Klick.
+
+Was nicht zum Hauptfenster gehört, liegt daneben: der Arbeitsfaden in
+core/faden.py, die Projektwahl in core/projektwahl.py, die Kopfzeile des
+Ausgabefelds in core/kopfzeile.py, Pfade und Einstellungen in
+core/grundlagen.py.
+
+Aussehen kommt vollständig aus stil.qss. Im Python steht keine Gestaltung.
+"""
+
+import atexit
+import ctypes
+import faulthandler
+import functools
+import html
+import json
+import logging
+import os
+import re
+import struct
+import subprocess
+import sys
+import threading
+import time
+import zipfile
+from collections import deque
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    qInstallMessageHandler,
+)
+from PySide6.QtGui import (
+    QFont,
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QListWidget,
+    QMainWindow,
+    QMenu,
+    QPlainTextEdit,
+    QPushButton,
+    QSizePolicy,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+try:
+    from .ablagewaechter import Zwischenablagewaechter
+    from .android_screenshot import ZEITLIMIT_S as BILD_ZEITLIMIT_S, screenshot_ablegen
+    from .bloecke import block_erkennen, block_zaehler_aktualisieren, kopf_metadaten_entfernen, \
+        naechste_block_nummer
+    from .bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
+    from .datenordner import erstuebernahme
+    from .eingangsordner import AuftragSpaeter, Eingangswaechter, EingangsFehler, ablegen, \
+        abschliessen, auftrag_lesen, naechste_fremde_projekt_datei, projekt_gleichwertig, \
+        verwerfen, wartende_dateien, wieder_aufnehmen
+    from .einstellungen import EinstellungenFenster
+    from .ersteinrichtung import Ersteinrichtung
+    from .faden import SitzungsFaden
+    from . import leitstand
+    from .grundlagen import (
+        CWB_WURZEL,
+        OFFENE_FENSTER,
+        auftrags_kennung,
+        einstellungen_lesen,
+        einstellungen_schreiben,
+        fenster_geometrie_merken,
+        kontingent_entscheidung,
+        slot_geschuetzt,
+        stil_erneuern,
+        stil_laden,
+        stil_verzoegert,
+        stil_wird_angewandt,
+        such_effizienz_prozent,
+        tagesverbrauch_erhoehen,
+        tagesverbrauch_heute,
+        qt_meldung_behandeln,
+        unbehandelte_ausnahme,
+        unbehandelte_ausnahme_im_faden,
+        verlauf_stil_lesen,
+    )
+    from .kopfzeile import (
+        Ausgabekopf,
+        ZUGRIFF_NUR_LESEN,
+        ZUGRIFF_SCHREIBEN,
+        ZUSTAND_TAETIGKEIT,
+        zahl_lang,
+    )
+    from .modelle import (
+        MODELLE_RUECKFALL,
+        VOREINSTELLUNG as MODELL_VOREINSTELLUNG,
+        anzeige_name,
+        eintrag_suchen,
+        modellname_aufloesen,
+    )
+    from .pausetaste import PausenTaste
+    from .pfade import ABSTURZ_DATEI, EINSTELLUNGEN_DATEI, STATUS_DATEI, VERSION, \
+        freigaben_lesen, pfade_vollstaendig
+    from .projektwahl import Start
+    from .sicherheit import Projekt, Stufe, Wache, projekte_finden
+    from .sprache import FESTE_SAETZE, Sprecher
+    from .tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG, Kachelreihe
+    from .terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
+    from .zeigeransage import zeigeransage_einrichten
+    from . import zielfenster
+    from .zuordnung import (
+        auftrag_vormerken,
+        fremdes_projekt_erkennen,
+        genanntes_projekt,
+        hinweis_auf_projekt,
+        vormerkung_abholen,
+        vormerkung_einloesen,
+        vormerkung_offen,
+        vormerkung_verwerfen,
+    )
+except ImportError:
+    from ablagewaechter import Zwischenablagewaechter
+    from android_screenshot import ZEITLIMIT_S as BILD_ZEITLIMIT_S, screenshot_ablegen
+    from bloecke import block_erkennen, block_zaehler_aktualisieren, kopf_metadaten_entfernen, \
+        naechste_block_nummer
+    from bruecke import QUELLE_BRUECKE, BerichtFaden, BrueckenFaden, NachtberichtFaden
+    from datenordner import erstuebernahme
+    from eingangsordner import AuftragSpaeter, Eingangswaechter, EingangsFehler, ablegen, \
+        abschliessen, auftrag_lesen, naechste_fremde_projekt_datei, projekt_gleichwertig, \
+        verwerfen, wartende_dateien, wieder_aufnehmen
+    from einstellungen import EinstellungenFenster
+    from ersteinrichtung import Ersteinrichtung
+    from faden import SitzungsFaden
+    import leitstand
+    from grundlagen import (
+        CWB_WURZEL,
+        OFFENE_FENSTER,
+        auftrags_kennung,
+        einstellungen_lesen,
+        einstellungen_schreiben,
+        fenster_geometrie_merken,
+        kontingent_entscheidung,
+        slot_geschuetzt,
+        stil_erneuern,
+        stil_laden,
+        stil_verzoegert,
+        stil_wird_angewandt,
+        such_effizienz_prozent,
+        tagesverbrauch_erhoehen,
+        tagesverbrauch_heute,
+        qt_meldung_behandeln,
+        unbehandelte_ausnahme,
+        unbehandelte_ausnahme_im_faden,
+        verlauf_stil_lesen,
+    )
+    from kopfzeile import (
+        Ausgabekopf,
+        ZUGRIFF_NUR_LESEN,
+        ZUGRIFF_SCHREIBEN,
+        ZUSTAND_TAETIGKEIT,
+        zahl_lang,
+    )
+    from modelle import (
+        MODELLE_RUECKFALL,
+        VOREINSTELLUNG as MODELL_VOREINSTELLUNG,
+        anzeige_name,
+        eintrag_suchen,
+        modellname_aufloesen,
+    )
+    from pausetaste import PausenTaste
+    from pfade import ABSTURZ_DATEI, EINSTELLUNGEN_DATEI, STATUS_DATEI, VERSION, \
+        freigaben_lesen, pfade_vollstaendig
+    from projektwahl import Start
+    from sicherheit import Projekt, Stufe, Wache, projekte_finden
+    from sprache import FESTE_SAETZE, Sprecher
+    from tastenleiste import KACHELN_SCHALTBAR, KACHELN_VOREINSTELLUNG, Kachelreihe
+    from terminal import ADMIN_WORKER, TerminalFaden, admin_worker_schleife
+    from zeigeransage import zeigeransage_einrichten
+    import zielfenster
+    from zuordnung import (
+        auftrag_vormerken,
+        fremdes_projekt_erkennen,
+        genanntes_projekt,
+        hinweis_auf_projekt,
+        vormerkung_abholen,
+        vormerkung_einloesen,
+        vormerkung_offen,
+        vormerkung_verwerfen,
+    )
+
+log = logging.getLogger("cwb.fenster")
+
+BILD_ENDUNGEN = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+# Die Kachel fuer das Schreibrecht nennt immer den geltenden Zustand, nie
+# eine Aufforderung: "Lesen und Schreiben" oder "Nur lesen". Die Aufschrift
+# beim Aufbau dient zugleich als Kennung, um die Kachel spaeter
+# wiederzufinden - sie bleibt gleich, auch wenn die Aufschrift wechselt.
+ZUGRIFF_KENNUNG = ZUGRIFF_SCHREIBEN
+
+# Symbol und Farbe je Zustand. Die Farben selbst stehen in stil.qss.
+ZUGRIFF_SYMBOL_SCHREIBEN = "✎"
+ZUGRIFF_SYMBOL_NUR_LESEN = "⊘"
+ZUGRIFF_FARBE_SCHREIBEN = "4"
+ZUGRIFF_FARBE_NUR_LESEN = "nurlesen"
+
+# Was beim Umschalten gesprochen wird: nur der neue Zustand.
+ZUGRIFF_SATZ_NUR_LESEN = "Nur lesen."
+ZUGRIFF_SATZ_SCHREIBEN = "Lesen und Schreiben erlaubt."
+
+# Die Kachel hinter der Projektwarnung. Sie steht nur da, solange ein Auftrag
+# vorgemerkt ist, und fuehrt ihn im geoeffneten Projekt aus. Die Aufschrift
+# beim Aufbau dient zugleich als Kennung zum Wiederfinden.
+TROTZDEM_KENNUNG = "Trotzdem hier ausführen"
+TROTZDEM_SYMBOL = "⤓"
+TROTZDEM_FARBE = "1"
+
+# Kachel fuer den Schalter "Bruecke" (Vorhaben "Bruecke" Stufe B3, siehe
+# wissen/plan_bruecke.md). Die Aufschrift beim Aufbau dient zugleich als
+# Kennung zum Wiederfinden, genau wie bei TROTZDEM_KENNUNG/ZUGRIFF_KENNUNG.
+BRUECKE_KENNUNG = "Brücke"
+BRUECKE_SYMBOL_AUS = "🌉"
+BRUECKE_SYMBOL_AN = "🛰"
+BRUECKE_FARBE_AUS = "1"
+BRUECKE_FARBE_AN = "4"
+
+# Kachel fuer den Schalter "Leitstand" (Block 72, siehe
+# wissen/plan_leitstand.md). Die Aufschrift beim Aufbau dient zugleich als
+# Kennung zum Wiederfinden, genau wie bei BRUECKE_KENNUNG.
+LEITSTAND_KENNUNG = "Leitstand"
+LEITSTAND_SYMBOL_AUS = "🌙"
+LEITSTAND_SYMBOL_AN = "🛸"
+LEITSTAND_FARBE_AUS = "1"
+LEITSTAND_FARBE_AN = "4"
+
+# Kontingent-Pause (Max-Abo): bricht ein Auftrag mit einer RateLimitEvent-
+# Meldung status="rejected" ab (core/sitzung.py, auftrag()), haelt CWB die
+# Warteschlange an statt den Auftrag als gescheitert zu werten. Die
+# Zeitentscheidung (Wochenlimit oder Fuenf-Stunden-Fenster, wann der naechste
+# Versuch startet) liegt reiner Logik wegen in core/grundlagen.py,
+# kontingent_entscheidung() - hier nur der Vorspann fuer den
+# Fortsetzungsversuch.
+KONTINGENT_VORSPANN = (
+    "Das Kontingent war erschöpft. Setze genau dort fort, wo du aufgehört "
+    "hast; prüfe dafür wissen/offen.md und git status.\n\n"
+)
+
+# Ordner fuer die Berichtdateien, relativ zum Projekt. Der Bericht liegt schon
+# in der Zwischenablage; fuer den Fall, dass daraus beim Einfuegen im Chat nur
+# eine leere Anlage wird, gibt es ihn zusaetzlich als Datei zum Hochladen.
+# Die Datei ist ein ZIP mit der Textdatei darin: einzeln hochgeladene
+# Textdateien kamen im Chat regelmaessig leer an, verpackt kommen sie durch.
+# Eine lose Textdatei daneben braucht niemand - vorgelesen wird aus dem
+# Speicher (_letzter_bericht), nicht von der Platte.
+BERICHT_UNTERORDNER = Path(".cwb") / "bericht"
+# So viele Berichtdateien bleiben liegen, aeltere werden beim naechsten
+# Speichern entfernt - sonst sammeln sich dort Hunderte an.
+BERICHTE_BEHALTEN = 30
+
+# Markierungen am Anfang des Eingabefelds. Steht eine davon in der ersten
+# Zeile, gilt alles darunter als Auftrag; die Markierungszeile selbst wird
+# nicht mit uebergeben. Gross- und Kleinschreibung ist egal.
+#
+# #CODE# geht wie ein gewoehnlicher Auftrag an Claude Code.
+# #RUN# und #ADMIN# laufen dagegen nie ueber Claude Code, sondern direkt als
+# PowerShell-Befehl im Projektordner - ohne Modellaufruf, ohne
+# Tokenverbrauch. #ADMIN# fragt dafuer immer erst mit dem vollen Befehl
+# zurueck und laeuft danach mit erhoehten Rechten (siehe core/terminal.py).
+# #BILD# braucht keinen Befehlstext dahinter: die Markierung allein holt
+# einen Screenshot vom verbundenen Android-Geraet (core/android_screenshot.py,
+# BildFaden unten) und legt einen Dateiverweis in die Zwischenablage - ohne
+# Claude Code, ohne Terminal, ohne jede Text-Rueckspielung ins Zielfenster.
+MARKIERUNG_CODE = "#CODE#"
+MARKIERUNG_RUN = "#RUN#"
+MARKIERUNG_ADMIN = "#ADMIN#"
+MARKIERUNG_BILD = "#BILD#"
+
+# #RUN#-Befehle, die ihr Ergebnis selbst als Bild in die Zwischenablage legen
+# (core/android_screenshot.py, auch ueber das Startskript in
+# .cwb-werkzeuge). Fuer sie darf die Text-Rueckspielung unten in
+# _terminal_fertig() das Bild nicht mit der gedruckten Meldung ueberschreiben.
+# Bleibt fuer den alten #RUN#-Aufrufweg bestehen - #BILD# unten braucht diese
+# Ausnahme nicht mehr, weil es nie ueber das Terminal laeuft.
+BEFEHLE_OHNE_TEXT_RUECKSPIELUNG = ("android_screenshot.py",)
+
+_MARKIERUNGEN = {
+    MARKIERUNG_CODE: "code",
+    MARKIERUNG_RUN: "run",
+    MARKIERUNG_ADMIN: "admin",
+    MARKIERUNG_BILD: "bild",
+}
+
+# Leerraum, der vor der Markierung stehen darf. Neben den ueblichen
+# Leerzeichen und Zeilenumbruechen auch die unsichtbaren Zeichen, die beim
+# Kopieren aus Browser oder Editor mitkommen (Byte-Markierung, Nullbreite).
+RANDZEICHEN = " \t\r\n\v\f\u00a0\u200b\u200e\u200f\ufeff"
+
+
+def markierung_erkennen(text: str) -> tuple[str, str]:
+    """Zerlegt eine Eingabe in Markierung und Inhalt.
+
+    Rueckgabe: ("code" | "run" | "admin" | "bild" | "", Inhalt ohne
+    Markierungszeile). Leerraum und Leerzeilen vor der Markierung werden
+    uebergangen. Ohne Markierung bleibt der Text unveraendert und die Art ist
+    leer - er gilt dann als gewoehnlicher Auftrag und wird nie verworfen. Bei
+    "bild" ist ein leerer Inhalt der Normalfall: die Markierung allein loest
+    schon aus, es gehoert kein Befehlstext dahinter."""
+    ohne_rand = text.lstrip(RANDZEICHEN)
+    kopf, _, rest = ohne_rand.partition("\n")
+    art = _MARKIERUNGEN.get(kopf.strip(RANDZEICHEN).upper())
+    if art:
+        return art, rest.strip(RANDZEICHEN)
+    return "", text.strip(RANDZEICHEN)
+
+
+# Block 649: "#MODELL# name" als optionale zweite Zeile direkt nach einer
+# Markierung (#CODE#/#RUN#/#ADMIN#/#BILD#) - markierung_erkennen() oben hat
+# die erste Zeile da schon entfernt, diese Zeile ist jetzt die erste von
+# `inhalt`. Steht sie nicht an dieser Stelle, bleibt sie unangetastet und
+# gilt als gewoehnlicher Auftragstext.
+_MODELL_ZEILE_MUSTER = re.compile(r"^#MODELL#\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def modell_zeile_erkennen(inhalt: str) -> tuple[str, str | None]:
+    """Zerlegt den Auftragsinhalt in (Inhalt ohne '#MODELL#'-Zeile, roher
+    Modellname oder None). Die Zeile muss die allererste von `inhalt` sein -
+    steht sie weiter unten, wird sie nicht erkannt und bleibt als normaler
+    Text stehen, statt irgendwo im Auftrag herausgegriffen zu werden."""
+    kopf, trenner, rest = inhalt.partition("\n")
+    treffer = _MODELL_ZEILE_MUSTER.match(kopf.strip(RANDZEICHEN))
+    if not treffer:
+        return inhalt, None
+    if not trenner:
+        return "", treffer.group(1).strip()
+    return rest.strip(RANDZEICHEN), treffer.group(1).strip()
+
+
+class BildFaden(QThread):
+    """#BILD#/Pause-Taste/Strg+Umschalt+B: holt den Android-Screenshot in
+    einem eigenen Thread (core/android_screenshot.py, screenshot_ablegen) -
+    der adb-Aufruf darf das Fenster nicht haengen lassen. Legt die Datei nur
+    unter wissen\\bilder\\ im uebergebenen Projektordner ab, ruehrt die
+    Zwischenablage nicht an: QClipboard darf nur auf dem GUI-Thread laufen,
+    das erledigt _bild_fertig() unten nach fertig_da."""
+
+    fertig_da = Signal(object)
+
+    def __init__(self, projekt_ordner: Path, eltern=None):
+        super().__init__(eltern)
+        self._projekt_ordner = projekt_ordner
+
+    def run(self) -> None:
+        self.fertig_da.emit(screenshot_ablegen(self._projekt_ordner))
+
+
+# Hoechstzahl Saetze, die von einer Rueckfrage oder Fehlermeldung gesprochen
+# wird. Notbremse in Zeichen fuer Meldungen ganz ohne Satzzeichen, etwa
+# Stapelverfolgungen oder JSON-Brocken.
+ANSAGE_SAETZE = 2
+ANSAGE_ZEICHEN = 240
+
+SATZ_MUSTER = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
+
+# Datei- und Ordnerpfade in Rueckfragen und Fehlermeldungen: weder Windows-
+# ("C:\a\b.py") noch Unix-Schreibweise ("a/b.py") soll die Stimme vorlesen -
+# nur der Wortlaut ohne Pfad. Volle Pfade bleiben im Ausgabefeld und im Log.
+PFAD_MUSTER = re.compile(r"(?:[A-Za-zÄÖÜäöüß]:[\\/])?(?:[\w.\-]+[\\/])+[\w.\-]+")
+
+
+def kurzfassen(text: str, saetze: int = ANSAGE_SAETZE) -> str:
+    """Kuerzt eine Meldung auf hoechstens zwei Saetze fuer die Sprachausgabe.
+
+    Rueckfragen und Fehlermeldungen muessen gesprochen werden, aber niemand
+    will eine Stapelverfolgung oder einen Dateipfad vorgelesen bekommen. Der
+    volle Wortlaut bleibt im Ausgabefeld, in der Statuszeile und im Log
+    stehen; gekuerzt wird nur, was durch die Stimme geht."""
+    sauber = " ".join(PFAD_MUSTER.sub("Datei", str(text)).split())
+    if not sauber:
+        return ""
+    kurz = "".join(SATZ_MUSTER.findall(sauber)[:saetze]).strip() or sauber
+    if len(kurz) > ANSAGE_ZEICHEN:
+        kurz = kurz[:ANSAGE_ZEICHEN].rstrip() + " …"
+    return kurz
+
+
+# Textarten im Ausgabefeld. Der Schluessel ist zugleich die Klasse in
+# verlauf.css, der Wert das Vorsatzzeichen samt Klartextwort - damit die
+# Bedeutung nicht nur in der Farbe steckt, sondern auch vorgelesen wird.
+VERLAUF_ARTEN = {
+    "auftrag": "▶  Auftrag: ",
+    "antwort": "",
+    "frage": "❓  FRAGE: ",
+    "fehler": "✖  FEHLER: ",
+    "hinweis": "—  ",
+    "terminal": "▸  TERMINAL: ",
+    # Werkzeugaufrufe waehrend des Auftrags: kein Vorsatzzeichen, der Satz
+    # beginnt schon mit der Taetigkeit ("liest fenster.py"). Wird nicht
+    # gesprochen, nur farblich passend zum Aktivitaetsbalken mitgefuehrt.
+    "liest": "",
+    "sucht": "",
+    "schreibt": "",
+    "fuehrt_aus": "",
+    "netz": "",
+    "denkt": "",
+}
+
+# Zustaende, die einen echten Werkzeugaufruf markieren (siehe
+# sitzung.WERKZEUG_ZUSTAND) - fuer diese, und nur wenn eine Taetigkeit
+# mitkommt, entsteht eine eigene Zeile im Ausgabefeld.
+WERKZEUG_ZUSTAENDE = {"liest", "sucht", "schreibt", "fuehrt_aus", "netz", "denkt"}
+
+
+# Platzwoerter fuer die Ansage der Warteschlange. Gesprochen klingt "Platz
+# zwei" natuerlicher als "Platz 2"; ab zwoelf reicht die Ziffer.
+PLATZWOERTER = {
+    2: "zwei", 3: "drei", 4: "vier", 5: "fünf", 6: "sechs",
+    7: "sieben", 8: "acht", 9: "neun", 10: "zehn", 11: "elf",
+}
+
+
+def platzwort(platz: int) -> str:
+    """Die Platznummer als gesprochenes Wort, ab zwoelf als Ziffer."""
+    return PLATZWOERTER.get(int(platz), str(platz))
+
+
+# Block 77, Punkt 2: ab wie vielen Fehlschlaegen eines Auftrags aus Eingang/
+# Bruecke/Leitstand in Folge der naechste (dritte) Versuch mit Opus laeuft.
+HOCHSTUFUNG_AB_FEHLSCHLAEGEN = 2
+
+
+def _modell_ist_opus(wert: str) -> bool:
+    """Block 77, Punkt 2: ob der in F12 gewaehlte Standard (CLI-Kurzname wie
+    "default"/"opus[1m]"/"opus"/"sonnet"/"haiku") schon Opus ist - dann
+    hochstuft nichts mehr. "default"/leer zaehlt mit: core/modelle.py loest
+    ihn (Stand 05.09.2026) auf Opus auf."""
+    wert = (wert or "default").lower()
+    return wert in ("", "default") or "opus" in wert
+
+
+def datei_in_zwischenablage(pfad: Path) -> bool:
+    """Legt eine Datei als Dateiverweis in die Windows-Zwischenablage
+    (CF_HDROP) - so, wie beim Kopieren einer Datei im Explorer. Andere
+    Programme (etwa ein Chat-Fenster) fuegen sie damit ueber Strg+V als
+    echten Anhang ein, nicht als Text."""
+    try:
+        import win32clipboard
+        import win32con
+    except ImportError as fehler:
+        log.error("pywin32 fehlt, Datei nicht in Zwischenablage legbar: %s", fehler)
+        return False
+    dateiliste = (str(pfad) + "\0\0").encode("utf-16le")
+    # DROPFILES-Kopf (20 Byte): Offset zur Dateiliste, Bildpunkt (ungenutzt),
+    # kein Nicht-Client-Modus, Dateiliste in UTF-16 (fWide=1).
+    kopf = struct.pack("<Iiiii", 20, 0, 0, 0, 1)
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_HDROP, kopf + dateiliste)
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Datei nicht in die Zwischenablage gelegt (%s): %s", pfad, fehler)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Aktivitätsbalken: Farbe zeigt den Zustand, ein wandernder Streifen zeigt,
+# dass gerade gearbeitet wird
+# ---------------------------------------------------------------------------
+
+class Aktivitaetsbalken(QFrame):
+    """Der Balken oben. Ein heller Streifen wandert waehrend eines Auftrags
+    ruhig und gleichmaessig von links nach rechts und beginnt von vorn.
+    Die Farbe (Zustand) kommt weiter aus stil.qss ueber das Attribut.
+
+    Der Balken traegt selbst die laufende Taetigkeit ('liest', 'schreibt', …)
+    und dahinter den Dateinamen, gross und fett - die frueheren getrennten
+    Felder in der Kopfzeile (core/kopfzeile.py) entfallen dafuer."""
+
+    STREIFEN_ANTEIL = 0.22
+    STREIFEN_DAUER_MS = 2600
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.glanz = QFrame(self)
+        self.glanz.setObjectName("balkenglanz")
+        self.glanz.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.glanz.hide()
+
+        self.text = QLabel("", self)
+        self.text.setObjectName("balkentext")
+        self.text.setAlignment(Qt.AlignCenter)
+        self.text.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.text.raise_()
+
+        self._animation = QPropertyAnimation(self.glanz, b"pos", self)
+        self._animation.setDuration(self.STREIFEN_DAUER_MS)
+        self._animation.setEasingCurve(QEasingCurve.Linear)
+        self._animation.setLoopCount(-1)
+        self._laeuft = False
+
+    def _streifen_geometrie_setzen(self) -> None:
+        breite = max(30, int(self.width() * self.STREIFEN_ANTEIL))
+        self.glanz.setFixedSize(breite, self.height())
+        self._animation.setStartValue(QPoint(-breite, 0))
+        self._animation.setEndValue(QPoint(self.width(), 0))
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        self._streifen_geometrie_setzen()
+        self.text.setGeometry(self.rect())
+        if self._laeuft:
+            self._animation.start()
+
+    def animation_starten(self) -> None:
+        self._laeuft = True
+        self._streifen_geometrie_setzen()
+        self.glanz.show()
+        self._animation.start()
+
+    def animation_stoppen(self) -> None:
+        self._laeuft = False
+        self._animation.stop()
+        self.glanz.hide()
+
+    def zustand_setzen(self, zustand: str) -> None:
+        """Faerbt Balken und Text gemeinsam. Die Farben stehen in stil.qss
+        und haengen am Attribut 'zustand'."""
+        self.setProperty("zustand", zustand)
+        self.style().polish(self)
+        self.update()
+        self.text.setProperty("zustand", zustand)
+        self.text.style().polish(self.text)
+
+    def taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
+        """Traegt die Taetigkeit ('liest') und dahinter den Dateinamen ohne
+        Pfad ('ablagewaechter.py') im Balken ein. Ohne betroffene Datei steht
+        nur die Taetigkeit da. Der volle Pfad bleibt als Kurzhinweis."""
+        try:
+            name = Path(pfad).name if pfad else ""
+            text = f"{taetigkeit}  —  {name}" if (taetigkeit and name) else taetigkeit
+            self.text.setText(text or "")
+            self.text.setToolTip(pfad)
+            self.text.setAccessibleDescription(
+                f"{taetigkeit or 'keine Tätigkeit'}. {name or 'keine Datei'}."
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Tätigkeit im Balken nicht gesetzt: %s", fehler)
+
+
+# ---------------------------------------------------------------------------
+# Warteschlange einzeln verwalten
+# ---------------------------------------------------------------------------
+
+# Ein Eintrag in self._warteschlange/self._sparmodus_wartend: Auftragstext,
+# Bilder, Bruecken-/Blocknummer, Eingangsordner-Datei, Modellwunsch/-grund
+# und - seit Block 82 - Quelle und Zeitpunkt der Annahme (core/grundlagen.py,
+# auftrags_kennung) fuer die Leiste "Wartet: ..." ueber dem Ausgabefeld.
+WARTESCHLANGEN_EINTRAG = tuple[
+    str, list[Path], int | None, int | None, Path | None, str | None, str | None,
+    str, datetime,
+]
+
+
+class WarteschlangenFenster(QDialog):
+    """Zeigt jeden wartenden Auftrag als eigene Zeile und entfernt einen
+    einzelnen daraus - anders als F4/Umschalt+F4 zusammen: F4 leert die
+    ganze Warteschlange, dieses Fenster (Umschalt+F4 oder Antippen der
+    Warteanzeige in der Kopfzeile) nimmt nur den ausgewaehlten Eintrag
+    heraus. Die Liste ist eine per QListWidget normal mit Pfeiltasten
+    navigierbare, vom Bildschirmleser vorgelesene Auswahl - kein eigener
+    Zustand hier, `warteschlange` wird direkt veraendert und wirkt sofort
+    im aufrufenden Fenster. Rechtsklick auf einen Eintrag oeffnet zusaetzlich
+    ein Kontextmenue mit "Löschen" (Block 60) - Entf/Rueckschritt bleiben
+    daneben bestehen."""
+
+    def __init__(self, warteschlange: list[WARTESCHLANGEN_EINTRAG], eltern=None):
+        super().__init__(eltern)
+        self._warteschlange = warteschlange
+        self.setWindowTitle("Warteschlange verwalten")
+        self.setAccessibleName("Warteschlange verwalten")
+
+        aufbau = QVBoxLayout(self)
+
+        hinweis = QLabel(
+            "Zahl in der Kopfzeile antippen öffnet dieses Fenster. "
+            "Rechtsklick auf einen Eintrag löscht ihn, ebenso Entf oder "
+            "die Schaltfläche „Entfernen“."
+        )
+        hinweis.setObjectName("warteschlange_hinweis")
+        hinweis.setWordWrap(True)
+        aufbau.addWidget(hinweis)
+
+        self.liste = QListWidget(self)
+        self.liste.setAccessibleName("Wartende Aufträge")
+        self.liste.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.liste.customContextMenuRequested.connect(self._kontextmenue)
+        aufbau.addWidget(self.liste)
+
+        knopfreihe = QHBoxLayout()
+        self.entfernen = QPushButton("Entfernen")
+        self.entfernen.setAccessibleName("Ausgewählten Auftrag entfernen")
+        self.entfernen.clicked.connect(self._entfernen)
+        self.schliessen = QPushButton("Schließen")
+        self.schliessen.setAccessibleName("Schließen")
+        self.schliessen.clicked.connect(self.accept)
+        knopfreihe.addWidget(self.entfernen)
+        knopfreihe.addWidget(self.schliessen)
+        aufbau.addLayout(knopfreihe)
+
+        self._liste_fuellen()
+        self.liste.setFocus()
+
+    def _liste_fuellen(self) -> None:
+        self.liste.clear()
+        for nummer, (text, _bilder, _bruecke_nummer, _block_nummer, _eingang_datei,
+                     _modell_wunsch, _modell_grund, _quelle, _zeit, _modell_sticky,
+                     _modell_hinweis) in enumerate(
+                self._warteschlange, start=1):
+            kurz = " ".join(text.split())[:80]
+            self.liste.addItem(f"Platz {nummer}: {kurz}")
+        if self._warteschlange:
+            self.liste.setCurrentRow(0)
+        else:
+            self.accept()
+
+    def keyPressEvent(self, ereignis) -> None:
+        if ereignis.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self._entfernen()
+            return
+        super().keyPressEvent(ereignis)
+
+    def _entfernen(self) -> None:
+        zeile = self.liste.currentRow()
+        if zeile < 0 or zeile >= len(self._warteschlange):
+            return
+        log.info("Auftrag einzeln aus der Warteschlange entfernt, Platz %d: %s",
+                  zeile + 1, self._warteschlange[zeile][0][:120])
+        eingang_datei = self._warteschlange[zeile][4]
+        if eingang_datei is not None:
+            verwerfen(eingang_datei, "Einzeln aus der Warteschlange entfernt")
+        del self._warteschlange[zeile]
+        self._liste_fuellen()
+
+    def _kontextmenue(self, position) -> None:
+        """Rechtsklick auf einen Eintrag (Block 60): waehlt ihn aus und
+        bietet "Löschen" an, statt nur die Pfeiltasten-/Entf-Bedienung zu
+        verlangen."""
+        eintrag = self.liste.itemAt(position)
+        if eintrag is None:
+            return
+        self.liste.setCurrentItem(eintrag)
+        menue = QMenu(self.liste)
+        loeschen = menue.addAction("Löschen")
+        gewaehlt = menue.exec(self.liste.mapToGlobal(position))
+        if gewaehlt == loeschen:
+            self._entfernen()
+
+
+# ---------------------------------------------------------------------------
+# Hauptfenster
+# ---------------------------------------------------------------------------
+
+class Werkbank(QMainWindow):
+
+    def __init__(self, projekt: Projekt, sprecher: Sprecher):
+        super().__init__()
+        self.projekt = projekt
+        self.sprecher = sprecher
+        self.bilder: list[Path] = []
+        self.letzte_antwort = ""
+        self.letzter_auftrag = ""
+        self.letzter_verbrauch: dict = {}
+        # Bericht des zuletzt beendeten Auftrags. Er wird gemerkt, damit F6 ihn
+        # jederzeit erneut in die Zwischenablage legen kann.
+        self._letzter_bericht = ""
+        # Pfad der zuletzt gespeicherten Berichtdatei unter .cwb/bericht/ -
+        # damit sich die Datei erneut als Dateiverweis in die Zwischenablage
+        # legen laesst (Strg+F7), ohne den Bericht neu zu bauen.
+        self._letzter_bericht_pfad: Path | None = None
+        # Wahr, solange ein fertiger Bericht darauf wartet, kopiert zu werden:
+        # war das Fenster beim Ende des Auftrags nicht im Vordergrund, wuerde
+        # das Kopieren fremdes Kopiergut ueberschreiben.
+        self._bericht_wartet = False
+        self.frage_offen = False
+        # Steht ein #run#- oder #admin#-Befehl auf eine Rueckfrage-Antwort,
+        # liegt er hier - unabhaengig von den Rueckfragen aus Claude Code
+        # selbst, die ueber den Arbeitsfaden laufen.
+        self._pending_terminal: dict | None = None
+        # Ein Block, dessen "Ende Block N"-Zeile fehlte (core/bloecke.py) -
+        # er wurde NICHT ausgefuehrt, sondern liegt hier zur Entscheidung:
+        # F5 fuehrt ihn trotzdem aus, Escape verwirft ihn. Ein neu
+        # ankommender Block ueberschreibt eine aeltere Vormerkung, so wie bei
+        # der Projektwarnung (siehe _vormerkung_zeigen).
+        self._pending_block: dict | None = None
+        # Die letzten zehn angenommenen Auftraege an Claude Code (Art "code"
+        # oder ohne Markierung, geglaetteter Text, Zeitpunkt) - einzige
+        # Grundlage der Dublettensperre, siehe _dublette_abgewiesen.
+        # Waechter, F7 und das Eingabefeld tragen hier ein; "run", "admin"
+        # und "bild" laufen an dieser Stelle nie vorbei, weil sie nie an
+        # Claude Code gehen.
+        self._auftragsverlauf: deque[tuple[str, str, datetime]] = deque(maxlen=10)
+        # Haelt den laufenden Terminalbefehl, damit er nicht vom Garbage
+        # Collector eingesammelt wird, bevor er fertig ist.
+        self._terminal_faden: TerminalFaden | None = None
+        # Haelt den laufenden #BILD#-Auftrag, aus demselben Grund.
+        self._bild_faden: BildFaden | None = None
+        # Bruecke zu claude.ai im Browser (core/bruecke.py, Vorhaben
+        # "Bruecke" Stufe B3): laeuft nur, solange der Schalter an ist
+        # (siehe _bruecke_zustand_anwenden). Die drei Nummer-Felder tragen
+        # die auftrag_nummer eines laufenden Bruecken-Auftrags vom Eingang
+        # bis zum Abschluss mit - None heisst "kein Bruecken-Auftrag". Ein
+        # #CODE#-Auftrag kann in der Warteschlange stehen, darum traegt dort
+        # jeder Eintrag seine eigene Nummer mit (siehe _warteschlange).
+        self.bruecke_faden: BrueckenFaden | None = None
+        self.leitstand_faden: leitstand.EntscheidungsFaden | None = None
+        self._leitstand_plan_mtime: float | None = None
+        self._nachtberichte: list[NachtberichtFaden] = []
+        self._bruecke_berichte: list[BerichtFaden] = []
+        self._bruecke_code_nummer: int | None = None
+        self._terminal_bruecke_nummer: int | None = None
+        self._bild_bruecke_nummer: int | None = None
+        # Die Blocknummer (core/bloecke.py, "Block N") eines laufenden oder
+        # wartenden #CODE#-Auftrags, bis _fertig() sie in den Bericht
+        # uebernimmt - None, wenn der Auftrag keine Nummer trug.
+        self._aktueller_block_nummer: int | None = None
+        # Block 82: Kennung des GERADE LAUFENDEN Auftrags (CODE, RUN, ADMIN
+        # oder BILD - nie zwei davon gleichzeitig) fuer die neue Leiste
+        # "Läuft: ..." ueber dem Ausgabefeld und fuer F2 - gesetzt in
+        # _auftrag_starten/_terminal_starten/_bild_markierung, gelesen in
+        # _laeuft_kennung(). Bleibt nach Abschluss unveraendert stehen (wie
+        # _laufender_modell_wunsch) statt eigens zurueckgesetzt zu werden:
+        # _laeuft_kennung() prueft ohnehin zuerst, ob ueberhaupt noch etwas
+        # laeuft, ein veralteter Wert wird also nie angezeigt.
+        self._laufender_block_nummer: int | None = None
+        self._laufender_quelle: str = ""
+        self._laufender_zeit: datetime | None = None
+        # Block 77, Punkte 1/2: der einmalige Modellwunsch (CLI-Kurzname wie
+        # "opus") des gerade laufenden oder wartenden Auftrags sowie, nur bei
+        # einer Hochstufung nach Fehlschlaegen (nicht bei einer ausdruecklichen
+        # "Modell:"-Zeile), ein kurzer Grund fuer Ansage und Bericht - beide
+        # None im Regelfall. Gesetzt in _auftrag_starten, verbraucht in
+        # _fertig (Bericht) bzw. _kontingent_pause_behandeln (Fortsetzung).
+        self._laufender_modell_wunsch: str | None = None
+        self._laufender_modell_grund: str | None = None
+        # Block 649: Hinweistext, wenn die Zeile "#MODELL# name" einen
+        # unbekannten Namen nannte (dann leer) - landet im Bericht (_fertig)
+        # genauso wie ein spaeter async gemeldeter Fehlschlag des
+        # Modellwechsels selbst (core/faden.py, bilanz["modell_hinweis"]).
+        self._laufender_modell_hinweis: str = ""
+        # Block 70, Teil A: die laeuft/-Datei (core/eingangsordner.py) eines
+        # laufenden oder wartenden Auftrags aus dem Eingangsordner - None,
+        # wenn der Auftrag ueber die Zwischenablage oder das Eingabefeld kam.
+        # Erst wenn der Auftrag wirklich abgeschlossen ist (Bericht
+        # geschrieben oder hochgeladen), verschiebt abschliessen() die Datei
+        # nach erledigt/ - vorher gilt sie als nicht erledigt und wird nach
+        # einem Absturz oder Projektwechsel wieder aufgenommen.
+        self._eingang_code_datei: Path | None = None
+        self._terminal_eingang_datei: Path | None = None
+        self._bild_eingang_datei: Path | None = None
+        # Bildanhaenge des gerade laufenden Auftrags - fuer den Fall, dass
+        # ihn _fertig() wegen einer Kontingent-Pause fortsetzen muss.
+        self._aktuelle_bilder: list[Path] = []
+        # Kontingent-Pause (Max-Abo): None ausserhalb einer Pause. Haelt den
+        # pausierten Auftrag (Text, Bilder, Bruecken-/Blocknummer) sowie die
+        # zuletzt gemeldete Freigabezeit, bis _kontingent_fortsetzen() ihn
+        # erneut startet (core/fenster.py, _fertig).
+        self._kontingent_info: dict | None = None
+        self._kontingent_uhr = QTimer(self)
+        self._kontingent_uhr.setSingleShot(True)
+        self._kontingent_uhr.timeout.connect(self._kontingent_fortsetzen)
+        # Das fremde Fenster, das beim Erkennen der Markierung zuletzt vorn
+        # war - dorthin geht das Ergebnis automatisch zurueck (zielfenster.py).
+        self._terminal_ziel: tuple | None = None
+        # Wahr, solange das Ausgabefeld einem laufenden #run#/#admin#-Befehl
+        # gehoert. Ein gleichzeitig laufender Claude-Auftrag schreibt so lange
+        # nicht mit hinein, sondern wartet in `_verlauf_puffer` - sonst waere
+        # das eben geleerte Feld sofort wieder voll fremdem Text.
+        self._terminal_anzeige_belegt = False
+        self._verlauf_puffer: list[tuple[str, str]] = []
+        # Waehrend `_verlauf_anhaengen` schreibt, wandert der Schreibzeiger und
+        # loest `_absatz_ansagen` aus. Ohne diese Sperre laese die Stimme jeden
+        # einlaufenden Absatz der Antwort mit vor.
+        self._verlauf_waechst = False
+        self.wechselt = False
+        self.start_fenster = None
+        self.nur_lesen = False
+        # Block 662: kein Modellfeld mehr in der Oberflaeche - der Standard
+        # ist immer Sonnet (core/modelle.py, VOREINSTELLUNG), unabhaengig von
+        # einstellungen.json. Ein anderes Modell gilt nur fuer genau einen
+        # Auftrag ueber die Zeile "#MODELL# name" (_modell_zeile_verarbeiten,
+        # _auftrag_starten). Die Liste der waehlbaren Modelle kommt spaeter
+        # von Claude Code selbst; bis dahin steht die Rueckfallliste im Feld.
+        self.modell = MODELL_VOREINSTELLUNG
+        self.modelle: list[dict] = list(MODELLE_RUECKFALL)
+        # Block 70, Teil B: (aufgeloester Name, abweichend?, erwarteter Name)
+        # der letzten Modell-Ansage - verhindert, dass ein erneuter Verbindungs-
+        # aufbau mit unveraendertem Modell (z.B. nach einer Kontingent-Pause)
+        # dieselbe Ansage wiederholt.
+        self._modell_angesagt: tuple | None = None
+        # Block 77, Punkt 1: haelt mit, wieviele der naechsten Meldungen aus
+        # _modell_verbunden zu einem einmaligen Modellwechsel fuer genau
+        # einen Auftrag gehoeren (Hinwechsel und Ruecklwechsel zum Standard,
+        # siehe _auftrag_starten) - sie werden dort stumm gehalten, die eigene
+        # Ansage ("Modell X für Block N.") uebernimmt _auftrag_starten selbst.
+        self._modell_eigenauftrag_rest = 0
+        # Block 77, Punkt 2: wieviele Auftraege aus Eingang/Bruecke/Leitstand
+        # (also mit gesetzter eingang_datei, siehe _absenden) in Folge mit
+        # einem Fehler endeten - ab 2 laeuft der naechste (dritte) mit Opus,
+        # siehe _absenden und _fertig. Ein manuell abgeschickter Auftrag
+        # (Zwischenablage/Eingabefeld) zaehlt nicht mit und setzt ihn auch
+        # nicht zurueck.
+        self._fehlschlaege_eingang_folge = 0
+        # Block 77, Punkt 3: Sparmodus bei knappem Wochenkontingent -
+        # solange an, laufen nur noch Auftraege mit der Zeile "Dringend: ja"
+        # (siehe _absenden), alle anderen sammeln sich in
+        # self._sparmodus_wartend statt in self._warteschlange und werden
+        # erst eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
+        self._sparmodus_aktiv = False
+        self._sparmodus_wartend: list[WARTESCHLANGEN_EINTRAG] = []
+        # Block 36: je eine einmalige Ansage beim Ueberschreiten von 90 %
+        # bzw. 95 % Wochenauslastung - zurueckgesetzt, sobald die Auslastung
+        # wieder unter 90 % faellt (neue Woche), damit eine spaetere
+        # Ueberschreitung erneut angesagt wird. Siehe
+        # _kontingent_anzeige_aktualisieren().
+        self._kontingent_warnung_90_gegeben = False
+        self._kontingent_warnung_95_gegeben = False
+        # Auftraege, die abgeschickt wurden, bevor der Arbeitsfaden stand.
+        # Sie gehen nicht verloren, sondern laufen los, sobald er da ist.
+        self._wartende_auftraege: list[tuple[str, list[Path]]] = []
+        # Warteschlange: Auftraege, die abgeschickt wurden, waehrend schon
+        # einer lief. Sie werden der Reihe nach abgearbeitet, einer nach dem
+        # anderen - nichts geht verloren, nichts blockiert. F4 leert sie. Das
+        # dritte Tupelglied ist die Bruecken-auftrag_nummer (None ausser bei
+        # einem #CODE#-Auftrag aus der Bruecke, core/bruecke.py), das vierte
+        # die Blocknummer (core/bloecke.py, "Block N", None ohne Nummer), das
+        # fuenfte die laeuft/-Datei aus dem Eingangsordner (core/
+        # eingangsordner.py, Block 70 Teil A, None ausser bei einem Auftrag
+        # von dort) - erst abschliessen() auf diese Datei macht den Auftrag
+        # endgueltig erledigt, nicht schon das Einreihen hier. Das sechste und
+        # siebte Glied sind Modellwunsch und -grund fuer genau diesen einen
+        # Auftrag (Block 77, Punkt 1/2, core/bloecke.py "Modell: …" bzw.
+        # Hochstufung nach Fehlschlaegen) - beide None ohne Wunsch. Das achte
+        # und neunte Glied sind Quelle und Zeitpunkt der Annahme (Block 82,
+        # siehe WARTESCHLANGEN_EINTRAG oben).
+        self._warteschlange: list[WARTESCHLANGEN_EINTRAG] = []
+        # Wahr, solange ein Auftrag beim Arbeitsfaden liegt. Nur daran
+        # erkennt _absenden, ob der neue Auftrag warten muss.
+        self._auftrag_laeuft = False
+        # Wahr, solange ein vorgemerkter Auftrag aus einem anderen Projekt
+        # nachgeholt wird. Nur so wird er nicht erneut als fremd erkannt.
+        self._holt_vorgemerkten = False
+        # Ausgangsschrift der Textfelder, gemerkt beim Aufbau. Strg+0 stellt sie
+        # wieder her, falls doch einmal etwas an der Groesse gedreht hat.
+        self._schrift_ausgang: list[tuple[QWidget, QFont]] = []
+
+        # Beleg, welche Fassung der Datei wirklich laeuft. Ohne diese Zeile
+        # laesst sich nicht unterscheiden, ob eine Aenderung fehlt oder nur
+        # ein alter Prozess noch offen ist.
+        quelle = Path(__file__).resolve()
+        log.info(
+            "Werkbank startet aus %s (geändert %s), _aus_zwischenablage vorhanden: %s",
+            quelle,
+            datetime.fromtimestamp(quelle.stat().st_mtime).strftime("%d.%m.%Y %H:%M:%S"),
+            callable(getattr(self, "_aus_zwischenablage", None)),
+        )
+
+        self.setWindowTitle(f"CWB {VERSION} — Projekt: {projekt.name}")
+
+        # Der Faden entsteht vor der Oberflaeche. Sonst kann eine Kachel oder
+        # ein Kuerzel schon zuschlagen, waehrend es ihn noch nicht gibt.
+        # Angelegt wird er hier, gestartet erst nach dem Aufbau.
+        self.faden = SitzungsFaden(projekt, self.modell)
+        self.faden.ereignis_da.connect(self._ereignis)
+        self.faden.text_da.connect(self._text)
+        self.faden.fertig_da.connect(self._fertig)
+        self.faden.frage_da.connect(self._frage)
+        self.faden.bereit_da.connect(self._bereit)
+        self.faden.verbrauch_da.connect(self._verbrauch)
+        self.faden.modelle_da.connect(self._modelle_anbieten)
+        self.faden.modell_verbunden_da.connect(self._modell_verbunden)
+
+        self._aufbauen()
+        self._tasten()
+
+        # Ansage bei Mauszeiger fuer das ganze Fenster. Sie haengt an der
+        # Anwendung und gilt darum auch fuer die Einstellungsseite. Ob
+        # gesprochen wird, entscheidet der Schalter in den Einstellungen.
+        self.zeigeransage = zeigeransage_einrichten(self.sprecher, einstellungen_lesen)
+        if self.zeigeransage is None:
+            log.error("Ansage bei Mauszeiger konnte nicht eingerichtet werden")
+
+        # Schreibrecht von Anfang an sichtbar: Kachel und Kopfzeile nennen den
+        # geltenden Zustand, nicht erst nach dem ersten Umschalten.
+        self._zugriff_zeigen()
+        # Rueckfrage-Ausnahmen (Internet, Loeschen im Projekt) von Anfang an
+        # sichtbar - beide Schalter stehen ab Werk aus.
+        self._sicherheitshinweis_aktualisieren()
+        # Modellanzeige von Anfang an sichtbar, auch vor der ersten Verbindung
+        # (Block 70, Teil B): zunaechst mit der gemerkten Wahl, _modell_verbunden
+        # ersetzt sie durch den tatsaechlich aufgeloesten Namen, sobald die
+        # Sitzung steht.
+        voll = eintrag_suchen(self.modelle, self.modell).get("voll") or self.modell
+        self.ausgabekopf.modell_zeigen(*anzeige_name(voll))
+        # Die Warteanzeige steht von Anfang an richtig da: leer, mit
+        # verständlicher Beschreibung für den Screenreader.
+        self._warteschlange_zeigen()
+        # "Trotzdem hier ausführen" gibt es erst, wenn eine Projektwarnung
+        # einen Auftrag zurueckgehalten hat.
+        self._vormerkung_zeigen(False)
+
+        self.faden.start()
+        self._wartende_absenden()
+
+        # Der Waechter laeuft immer mit; ob er handelt, entscheidet bei jedem
+        # Blick die Einstellung - so wirkt das Umschalten sofort.
+        self.ablage_waechter = Zwischenablagewaechter(
+            markierung_erkennen,
+            lambda: einstellungen_lesen().get("ablage_waechter", True),
+            self._ablage_auftrag,
+            self,
+        )
+        self.ablage_waechter.starten()
+
+        # Eingangsordner (core/eingangsordner.py, Vorhaben "Bruecke", Stufe
+        # B1, siehe wissen/plan_bruecke.md): Auftraege, die als Datei statt
+        # ueber die Zwischenablage hereinkommen - Zeitschaltung, von Hand,
+        # spaeter die Bruecke zu claude.ai im Browser. Laeuft bei gesperrter
+        # Sitzung genauso weiter wie der Arbeitsfaden selbst.
+        # Block 63: Namen der fremden Projekte, fuer die zuletzt angesagt
+        # wurde, dass Auftraege im Eingang warten - verhindert, dass dieselbe
+        # Ansage bei jedem Blick des Waechters (alle paar Sekunden) wiederholt
+        # wird. Nur bei Stillstand aktualisiert (siehe _eingang_fremde_melden);
+        # laeuft gerade ein Auftrag, bleibt der alte Stand stehen, damit die
+        # Ansage nachgeholt wird, sobald wieder Ruhe ist.
+        self._eingang_fremde_angesagt: frozenset = frozenset()
+        # Block 70, Teil C: der Rohname aus dem Feld "projekt" der aeltesten
+        # wartenden Fremddatei, fuer die zuletzt "unbekanntes Projekt"
+        # angesagt wurde - verhindert, dass dieselbe Ansage bei jedem Blick
+        # wiederholt wird, solange sich daran nichts aendert.
+        self._auto_projekt_unbekannt_angesagt: str | None = None
+        self.eingang_waechter = Eingangswaechter(
+            markierung_erkennen,
+            lambda: True,
+            lambda: self.projekt.name,
+            self._eingang_auftrag,
+            self,
+            fremde_melden=self._eingang_fremde_melden,
+        )
+        self.eingang_waechter.starten()
+
+        # Block 70, Teil A: Auftraege aus dem Eingangsordner oder der Bruecke,
+        # die beim letzten Mal nicht fertig wurden - sei es durch Absturz,
+        # kompletten Neustart (Strg+F4) oder Projektwechsel (F9), der den
+        # Faden und die Warteschlange dieses Fensters mitnimmt. Ihre Datei
+        # liegt noch in core/eingangsordner.py, laeuft_ordner(), weil nur ein
+        # echter Abschluss (abschliessen(), siehe _fertig/_terminal_fertig/
+        # _bild_fertig) sie je nach erledigt/ verschiebt - verarbeiten()
+        # selbst tut das nicht mehr.
+        wieder_aufgenommen, befehle_verworfen, wegen_alter_uebersprungen = wieder_aufnehmen(
+            markierung_erkennen, self.projekt.name, self._eingang_auftrag,
+            bereits_erledigt=self._bericht_fuer_block_vorhanden)
+        if wieder_aufgenommen:
+            satz = (f"{wieder_aufgenommen} Aufträge wieder aufgenommen."
+                     if wieder_aufgenommen > 1 else "Ein Auftrag wieder aufgenommen.")
+            log.info("Beim Start wieder aufgenommen: %d Auftraege", wieder_aufgenommen)
+            self._verlauf_anhaengen(satz, "hinweis")
+            self.sprecher.sprich(satz, art="hinweis")
+        if befehle_verworfen:
+            # #RUN#/#ADMIN# werden beim Wiederaufnehmen nie automatisch
+            # erneut angestossen (core/eingangsordner.py, wieder_aufnehmen) -
+            # sie koennten schon gewirkt oder ein eigenes Programm gestartet
+            # haben. Die Datei liegt jetzt in abgelehnt/, Robert entscheidet,
+            # ob er sie erneut schickt.
+            satz = (f"{befehle_verworfen} Befehle aus dem letzten Mal wurden NICHT "
+                     "automatisch wiederholt, bitte bei Bedarf erneut senden."
+                     if befehle_verworfen > 1 else
+                     "Ein Befehl aus dem letzten Mal wurde NICHT automatisch wiederholt, "
+                     "bitte bei Bedarf erneut senden.")
+            log.info("Beim Start verworfen: %d #RUN#/#ADMIN#-Befehle", befehle_verworfen)
+            self._verlauf_anhaengen(satz, "hinweis")
+            self.sprecher.sprich(satz, art="hinweis")
+        if wegen_alter_uebersprungen:
+            # Block 70, Nachbesserung: core/eingangsordner.py wieder_aufnehmen()
+            # hat eine oder mehrere Dateien als vermutlich schon erledigt
+            # eingestuft (zu alt oder Bericht zur Blocknummer schon vorhanden)
+            # und NICHT erneut angestossen - Begruendung steht im Log.
+            satz = (f"{wegen_alter_uebersprungen} Aufträge aus dem letzten Mal wurden als "
+                     "vermutlich schon erledigt übersprungen, nicht erneut gestartet."
+                     if wegen_alter_uebersprungen > 1 else
+                     "Ein Auftrag aus dem letzten Mal wurde als vermutlich schon erledigt "
+                     "übersprungen, nicht erneut gestartet.")
+            log.info("Beim Start übersprungen (vermutlich schon erledigt): %d Auftraege",
+                     wegen_alter_uebersprungen)
+            self._verlauf_anhaengen(satz, "hinweis")
+            self.sprecher.sprich(satz, art="hinweis")
+
+        # Bruecke zu claude.ai im Browser (core/bruecke.py, Vorhaben
+        # "Bruecke" Stufe B3): laeuft nur, solange der Schalter "bruecke_aktiv"
+        # an ist (F12 -> Verhalten, Kachel/Umschalt+F8). Ab Werk aus - dieser
+        # Aufruf bringt Thread, Kachel und Kopfzeile von Anfang an auf den
+        # gemerkten Stand, auch wenn er aus einer frueheren Sitzung noch an war.
+        self._bruecke_zustand_anwenden()
+
+        # Leitstand (core/leitstand.py, Block 72): bringt Kachel und
+        # Kopfzeile auf den Stand des Schalters "leitstand_aktiv", ohne beim
+        # stillen Start selbst etwas anzusagen - reagiert erst nach dem
+        # naechsten abgeschlossenen Auftrag.
+        self._leitstand_zustand_anwenden()
+
+        # Systemweite Hotkeys fuer den Screenshot (core/pausetaste.py):
+        # Pause-Taste und, als zweite Belegung, Strg+Umschalt+B - beide
+        # loesen denselben Ablauf wie #BILD# aus, egal welches Fenster
+        # gerade vorn ist. Jede der beiden Tasten ist systemweit exklusiv:
+        # haelt sie schon ein anderes Programm oder ein vergessenes altes
+        # CWB-Fenster, schlaegt nur ihre Registrierung fehl, CWB bleibt
+        # bedienbar, nur ohne diese eine Taste (status() in F12 -> Verhalten
+        # zeigt, welche der beiden hier tatsaechlich wirkt). Standard AUS
+        # (Schalter "pause_screenshot"): angemeldet wird nur, wenn er an ist -
+        # sonst bleiben beide Tasten frei fuer das eigenstaendige Werkzeug
+        # "Pausetaste" (siehe core/pausetaste.py).
+        self._pausetaste = PausenTaste(QApplication.instance(), self._pause_ausgeloest)
+        self._pausetaste_zustand_anwenden()
+
+        # Der Fensterbeobachter laeuft ab jetzt mit, nicht erst ab dem ersten
+        # #run#/#admin#-Auftrag: sonst haette genau der erste Auftrag einer
+        # Sitzung noch kein Zielfenster und das Ergebnis laege nur in der
+        # Zwischenablage (siehe zielfenster.py).
+        zielfenster.beobachter_starten()
+
+        # Wartet ein Auftrag auf genau dieses Projekt, laeuft er jetzt los.
+        # Gehoert die Vormerkung zu einem anderen, verfaellt sie hier.
+        QTimer.singleShot(0, self._vorgemerkten_holen)
+
+        # Das Fenster ist sofort bedienbar, die Verbindung laeuft nebenher.
+        self._status_zeigen("Verbinde mit Claude Code, Eingabe ist schon moeglich")
+        self.eingabe.setEnabled(True)
+        self.senden.setEnabled(True)
+
+        self.eingabe.setFocus()
+
+    # -- Aufbau -------------------------------------------------------------
+
+    def _leisten_eintraege(self) -> list[tuple[str, str, object]]:
+        """Alle Befehle mit ihrem Tastenkürzel. Grundlage der Hilfe (F1);
+        die Kachelreihe zeigt nur die ständig gebrauchten daraus."""
+        return [
+            ("Strg+Eingabe", "Auftrag abschicken", self._absenden),
+            ("F7", "Aus Zwischenablage abschicken", self._aus_zwischenablage),
+            ("F8", "Not-Aus, Auftrag abbrechen", self._not_aus),
+            ("Escape", "Ansage abbrechen", self.sprecher.schweig),
+            ("F3", "Letzte Antwort vorlesen", self._antwort_vorlesen),
+            ("F2", "Wo stehen wir", self._wo_stehen_wir),
+            ("Strg+L", "Markiertes vorlesen", self._markiertes_vorlesen),
+            ("Strg+K", "Ausgabe kopieren", self._verlauf_kopieren),
+            ("Strg+0", "Schriftgröße zurücksetzen", self._schrift_zuruecksetzen),
+            ("F10", "Nur lesen ein- oder ausschalten", self._nur_lesen_umschalten),
+            ("Strg+Z", "Letzten Auftrag zurücknehmen", self._zuruecknehmen),
+            ("Strg+B", "Bild anhängen", self._bild_waehlen),
+            ("F5", "Zum Eingabefeld, nach Projektwarnung oder unvollständigem "
+             "Block: trotzdem ausführen", self._f5),
+            ("F6", "Bericht-Text kopieren", self._bericht_erneut_kopieren),
+            ("Strg+F6", "Berichtordner öffnen", self._berichtordner_oeffnen),
+            ("Strg+F7", "Bericht-Datei kopieren", self._berichtdatei_kopieren),
+            ("F11", "Zum Verlauf", lambda: self._springe(self.verlauf, "Verlauf")),
+            ("F1", "Hilfe vorlesen", self._hilfe),
+            ("F9", "Projekt wechseln", self._projekt_wechseln),
+            ("F4", "Warteschlange leeren", self._warteschlange_leeren),
+            ("Umschalt+F4", "Warteschlange einzeln verwalten", self._warteschlange_verwalten),
+            ("Strg+F4", "Kompletter Neustart", self._neustart),
+            ("F12", "Einstellungen", self._einstellungen_zeigen),
+            ("Umschalt+F8", "Brücke ein- oder ausschalten", self._bruecke_umschalten),
+            ("Umschalt+F9", "Leitstand ein- oder ausschalten", self._leitstand_umschalten),
+        ]
+
+    def _kachel_eintraege(self) -> list[tuple[str, str, str, str, object]]:
+        """Die Kachelreihe unter dem Balken: nur ständig gebrauchte Befehle.
+        Reihenfolge (symbol, beschriftung, taste, farbe, ziel). Die Farbnummer
+        gehört dauerhaft zur Kachel, damit sie wiedererkennbar bleibt."""
+        return [
+            # "Abschicken" hat hier keine Kachel: dafuer gibt es den Pfeil
+            # neben dem Eingabefeld und Strg+Eingabe.
+            # "Aus Zwischenablage" hat keine Kachel mehr: der Waechter holt
+            # markierte Auftraege von selbst. F7 bleibt als Notweg.
+            ("⏹", "Not-Aus", "F8", "notaus", self._not_aus),
+            ("✖", "Ansage abbrechen", "Escape", "2", self.sprecher.schweig),
+            ("▶", "Letzte Antwort", "F3", "3", self._antwort_vorlesen),
+            # Diese Kachel zeigt den Zustand an, nicht den Befehl: sie heisst
+            # so, wie das Schreibrecht gerade steht.
+            (ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_KENNUNG, "F10",
+             ZUGRIFF_FARBE_SCHREIBEN, self._nur_lesen_umschalten),
+            # Zeigt den Zustand des Schalters "Bruecke" (F12 -> Verhalten),
+            # ab Werk aus.
+            (BRUECKE_SYMBOL_AUS, BRUECKE_KENNUNG, "Umschalt+F8",
+             BRUECKE_FARBE_AUS, self._bruecke_umschalten),
+            # Zeigt den Zustand des Schalters "Leitstand" (F12 -> Leitstand),
+            # ab Werk aus.
+            (LEITSTAND_SYMBOL_AUS, LEITSTAND_KENNUNG, "Umschalt+F9",
+             LEITSTAND_FARBE_AUS, self._leitstand_umschalten),
+            # Steht nur da, solange ein Auftrag vorgemerkt ist; sonst
+            # ausgeblendet (_vormerkung_zeigen).
+            (TROTZDEM_SYMBOL, TROTZDEM_KENNUNG, "F5", TROTZDEM_FARBE,
+             self._trotzdem_hier),
+            ("⧉", "Bericht-Text kopieren", "F6", "2", self._bericht_erneut_kopieren),
+            ("📎", "Bericht-Datei kopieren", "Strg+F7", "3", self._berichtdatei_kopieren),
+            ("📁", "Berichtordner öffnen", "Strg+F6", "1", self._berichtordner_oeffnen),
+            ("⏏", "Warteschlange leeren", "F4", "8", self._warteschlange_leeren),
+            ("⟳", "Neu starten", "Strg+F4", "5", self._neustart),
+            ("⇄", "Projekt wechseln", "F9", "6", self._projekt_wechseln),
+            ("⚙", "Einstellungen", "F12", "7", self._einstellungen_zeigen),
+        ]
+
+    def _kacheln_sichtbarkeit_anwenden(self) -> None:
+        """Blendet die abschaltbaren Kacheln nach der gemerkten Auswahl ein
+        oder aus (Einstellungen, Reiter Kacheln, Schlüssel "sichtbare_kacheln"
+        in einstellungen.json). Not-Aus, Zugriffsplakette und "Trotzdem hier
+        ausführen" bleiben davon unberührt, ebenso jedes Tastenkürzel."""
+        sichtbare = einstellungen_lesen().get("sichtbare_kacheln")
+        if not isinstance(sichtbare, list):
+            sichtbare = KACHELN_VOREINSTELLUNG
+        # Das Ein-/Ausblenden von Kacheln raeumt nur die Kachelreihe neu ein.
+        # Die Fenstergroesse wird dabei nicht mehr gemessen und zurueckgesetzt
+        # (das war die Quelle unnoetiger resizeEvent-Kaskaden) - die
+        # Fenstergroesse aendert sich programmatisch nur noch beim Start
+        # (fenster_geometrie_anwenden) und durch aktives Ziehen am Rahmen.
+        for name in KACHELN_SCHALTBAR:
+            try:
+                self.kacheln.kachel_zeigen(name, name in sichtbare)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Kachel-Sichtbarkeit nicht angewendet (%s): %s", name, fehler)
+
+    def _aufbauen(self) -> None:
+        mitte = QWidget()
+        mitte.setObjectName("arbeitsflaeche")
+        aufbau = QVBoxLayout(mitte)
+        # Ohne diese Zeile setzt Qt die Mindestbreite/-hoehe des Fensters
+        # automatisch auf die Summe der Breiten aller Kindelemente in voller
+        # (ungeskalierter) Schriftgroesse - das Fenster liesse sich dann nie
+        # unter diesen Wert ziehen, auch nicht durch Andocken (Windows-Taste
+        # + Pfeil) oder die Skalierung des Stilblatts (stil_anwenden), weil
+        # die dafuer noetige Groessenaenderung gar nicht erst zugelassen
+        # wuerde. SetNoConstraint gibt diese Grenze frei; die Kindelemente
+        # (Kachelreihe, Ausgabekopf) weichen bei wenig Platz selbst aus
+        # (Umbruch bzw. kuerzere Texte), siehe core/tastenleiste.py und
+        # core/kopfzeile.py.
+        aufbau.setSizeConstraint(QLayout.SetNoConstraint)
+
+        balken_zeile = QWidget()
+        balken_zeile.setObjectName("balkenzeile")
+        balken_quer = QHBoxLayout(balken_zeile)
+        balken_quer.setContentsMargins(0, 0, 0, 0)
+
+        self.balken = Aktivitaetsbalken()
+        self.balken.setObjectName("balken")
+        self.balken.setProperty("zustand", "bereit")
+        self.balken.setAccessibleName("Aktivitätsanzeige")
+        self._letzter_zustand = "bereit"
+        balken_quer.addWidget(self.balken, 1)
+
+        self.zeit_anzeige = QLabel("")
+        self.zeit_anzeige.setObjectName("zeitanzeige")
+        self.zeit_anzeige.setAccessibleName("Verstrichene Zeit")
+        balken_quer.addWidget(self.zeit_anzeige)
+
+        aufbau.addWidget(balken_zeile)
+
+        # Kachelreihe direkt unter dem Balken. Sie teilt die Fensterbreite
+        # gleichmaessig unter den Kacheln auf und waechst mit dem Fenster.
+        self.kacheln = Kachelreihe(self._kachel_eintraege())
+        aufbau.addWidget(self.kacheln)
+        self._kacheln_sichtbarkeit_anwenden()
+
+        self._auftrags_beginn: datetime | None = None
+        self._auftrags_uhr = QTimer(self)
+        self._auftrags_uhr.setInterval(1000)
+        self._auftrags_uhr.timeout.connect(self._zeit_aktualisieren)
+
+        # Eine einzige Kopfzeile ueber dem Ausgabefeld traegt alles, was zum
+        # Stand der Arbeit gehoert (core/kopfzeile.py).
+        self.ausgabekopf = Ausgabekopf()
+        aufbau.addWidget(self.ausgabekopf)
+        # Antippen/Anklicken der Warteanzeige oeffnet direkt "Warteschlange
+        # verwalten" (Block 60) - derselbe Weg wie Umschalt+F4, nur ohne
+        # Tastatur erreichbar.
+        self.ausgabekopf.warteanzeige.geklickt.connect(self._warteschlange_verwalten)
+        # Merkt sich Schriftart und -groesse, mit der die Kopfzeile zuletzt
+        # ausgemessen wurde (siehe changeEvent): so wird bei Stil-Ereignissen
+        # ohne echte Schriftaenderung nicht unnoetig neu gemessen.
+        self._kopf_schrift_merker = None
+        self.ausgabekopf.masse_festlegen()
+        # Der Tageszaehler steht schon beim Start richtig da: er kommt aus
+        # einstellungen.json und faengt nicht mit jedem Neustart neu an.
+        self.ausgabekopf.tag_zeigen(tagesverbrauch_heute())
+        # "Such-Effizienz" (Block C10) ebenso: der Verlauf steht schon aus
+        # frueheren Auftraegen in einstellungen.json.
+        self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+
+        # Formatierter Text statt einfachem: nur so lassen sich Auftrag,
+        # Antwort und Rueckfrage farblich auseinanderhalten. Die Farben kommen
+        # aus verlauf.css, nicht aus dem Python.
+        # Block 82: durchgehende Leiste ueber dem Ausgabefeld. LINKS der
+        # Platzhalter fuer den Waechter-Farbknopf (core/waechter_anzeige.py,
+        # eigener Prozess, siehe _waechter_platzhalter_geometrie/
+        # _herzschlag_schreiben), dann "Läuft: ..."/"Wartet: ...". RECHTS die
+        # Kontingent-Anzeige (hierher verlegt aus der Kopfzeile, vorher dort
+        # core/kopfzeile.py Ausgabekopf.kontingent_zeigen) und ganz aussen der
+        # (von hier verschobene, vorher auf self.verlauf schwebende)
+        # Kopieren-Knopf. Eine eigene Zeile statt eines Overlays, weil sie
+        # mehrere variabel lange Texte tragen muss, die sonst mit dem Knopf
+        # kollidieren wuerden.
+        statusleiste = QWidget()
+        statusleiste.setObjectName("statusleiste")
+        statusquer = QHBoxLayout(statusleiste)
+        statusquer.setContentsMargins(0, 0, 0, 0)
+
+        # Reine Platzflaeche: der eigenstaendige Waechter-Prozess legt sich
+        # per Fenstergeometrie passgenau darauf (kein Qt-Kind, ein zweiter
+        # Prozess ueberlebt auch einen haengenden/abgestuerzten CWB). Ohne
+        # eigenen Text/Tooltip - die Farbe und ihr Name stehen am Waechter-
+        # Fenster selbst (Barrierefreiheitsname dort).
+        self.waechter_platzhalter = QWidget()
+        self.waechter_platzhalter.setObjectName("waechter_platzhalter")
+        self.waechter_platzhalter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        statusquer.addWidget(self.waechter_platzhalter)
+
+        self.laeuft_anzeige = QLabel("Läuft: –")
+        self.laeuft_anzeige.setObjectName("laeuft_anzeige")
+        self.laeuft_anzeige.setAccessibleName("Läuft")
+        statusquer.addWidget(self.laeuft_anzeige)
+
+        self.wartet_anzeige = QLabel("Wartet: –")
+        self.wartet_anzeige.setObjectName("wartet_anzeige")
+        self.wartet_anzeige.setAccessibleName("Wartet")
+        self.wartet_anzeige.setWordWrap(True)
+        statusquer.addWidget(self.wartet_anzeige, 1)
+
+        # Kontingent-Zustand (Block 36/37, Felder und Faerbung von hierher
+        # aus core/kopfzeile.py verlegt - dort stand nur noch die doppelte
+        # Anzeige): Sitzung (Fuenf-Stunden-Fenster) zuerst, dann Woche. Ohne
+        # bekannte Prozentzahl steht ein ruhiger Platzhalter statt einer
+        # erfundenen Zahl - siehe _kontingent_zeigen.
+        self.kontingent_sitzung_anzeige = QLabel("Sitzung: –")
+        self.kontingent_sitzung_anzeige.setObjectName("kontingentsitzunganzeige")
+        self.kontingent_sitzung_anzeige.setAccessibleName("Sitzungskontingent")
+        statusquer.addWidget(self.kontingent_sitzung_anzeige)
+
+        self.kontingent_anzeige = QLabel("Woche: unter Warnschwelle")
+        self.kontingent_anzeige.setObjectName("kontingentanzeige")
+        self.kontingent_anzeige.setAccessibleName("Wochenkontingent")
+        statusquer.addWidget(self.kontingent_anzeige)
+
+        self.kopieren = QPushButton("⧉ Kopieren")
+        self.kopieren.setObjectName("kopieren")
+        self.kopieren.setAccessibleName("Ganze Ausgabe kopieren")
+        self.kopieren.setToolTip("Ganze Ausgabe kopieren (Strg+K)")
+        self.kopieren.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.kopieren.clicked.connect(self._verlauf_kopieren)
+        statusquer.addWidget(self.kopieren)
+
+        aufbau.addWidget(statusleiste)
+
+        self.verlauf = QTextEdit()
+        self.verlauf.setObjectName("verlauf")
+        self.verlauf.setReadOnly(True)
+        self.verlauf.setAccessibleName("Verlauf")
+        self.verlauf.document().setDefaultStyleSheet(verlauf_stil_lesen())
+        self.verlauf.cursorPositionChanged.connect(self._absatz_ansagen)
+        aufbau.addWidget(self.verlauf, 12)
+
+        eingabezeile = QWidget()
+        eingabezeile.setObjectName("eingabezeile")
+        eingabequer = QHBoxLayout(eingabezeile)
+        eingabequer.setContentsMargins(0, 0, 0, 0)
+
+        self.eingabe = QPlainTextEdit()
+        self.eingabe.setObjectName("eingabe")
+        self.eingabe.setAccessibleName("Auftrag eingeben")
+        eingabequer.addWidget(self.eingabe)
+
+        self.senden = QPushButton("↑")
+        self.senden.setObjectName("senden")
+        self.senden.setAccessibleName("Auftrag abschicken")
+        self.senden.setAccessibleDescription("Wie Strg und Eingabetaste")
+        # Senkrecht mitwachsend: der Knopf ist immer genau so hoch wie das
+        # Eingabefeld daneben, auch wenn dessen Hoehe sich aendert.
+        self.senden.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.senden.clicked.connect(self._absenden)
+        eingabequer.addWidget(self.senden)
+
+        # Ohne Streckung: das Eingabefeld bleibt flach (Hoehe aus stil.qss),
+        # der ganze uebrige Platz geht an das Ausgabefeld.
+        aufbau.addWidget(eingabezeile, 0)
+
+        # Strg+Mausrad wuerde in Verlauf und Eingabefeld die Schrift zoomen und
+        # die Groesse aus stil.qss dauerhaft ueberschreiben. Der Filter schluckt
+        # das Ereignis, damit es gar nicht erst dazu kommt.
+        for feld in (self.verlauf, self.eingabe):
+            self._schrift_ausgang.append((feld, QFont(feld.font())))
+            feld.installEventFilter(self)
+            feld.viewport().installEventFilter(self)
+
+        self.setCentralWidget(mitte)
+        # Dieselbe Sperre wie bei `aufbau` oben, jetzt fuer das Fenster
+        # selbst: ohne sie uebernaehme QMainWindow die (ungeskalierte)
+        # Mindestgroesse von `mitte` unveraendert als eigene, vom
+        # Fenstermanager erzwungene Untergrenze - das Fenster liesse sich
+        # dann trotz allem nicht auf ein Drittel Bildschirmbreite
+        # verkleinern. Stattdessen eine kleine, feste Untergrenze (Block 49):
+        # klein genug, dass sie beim Ziel von etwa 600x540 nicht selbst zur
+        # Grenze wird.
+        if self.layout() is not None:
+            self.layout().setSizeConstraint(QLayout.SetNoConstraint)
+        self.setMinimumSize(480, 360)
+
+    def _kuerzel_merken(self, folge: str, ziel) -> None:
+        """Schreibt nur die Logzeile, dass die Taste im Fenster angekommen ist.
+        Das Ziel haengt als eigene Verbindung am selben Signal und wird nicht
+        von hier aus aufgerufen."""
+        log.info("Kürzel ausgelöst: %s → %s", folge, getattr(ziel, "__name__", ziel))
+
+    def _tasten(self) -> None:
+        kurz = [
+            ("Ctrl+Return", self._absenden),
+            ("Ctrl+Enter", self._absenden),
+            ("Esc", self._escape),
+            ("F1", self._hilfe),
+            ("F2", self._wo_stehen_wir),
+            ("F3", self._antwort_vorlesen),
+            ("F5", self._f5),
+            ("F6", self._bericht_erneut_kopieren),
+            ("Ctrl+F6", self._berichtordner_oeffnen),
+            ("Ctrl+F7", self._berichtdatei_kopieren),
+            ("F11", lambda: self._springe(self.verlauf, "Verlauf")),
+            ("F8", self._not_aus),
+            ("F4", self._warteschlange_leeren),
+            ("Shift+F4", self._warteschlange_verwalten),
+            ("Ctrl+F4", self._neustart),
+            ("F7", self._aus_zwischenablage),
+            ("Ctrl+Z", self._zuruecknehmen),
+            ("Ctrl+B", self._bild_waehlen),
+            ("Ctrl+L", self._markiertes_vorlesen),
+            ("Ctrl+K", self._verlauf_kopieren),
+            ("Ctrl+0", self._schrift_zuruecksetzen),
+            ("F10", self._nur_lesen_umschalten),
+            ("F9", self._projekt_wechseln),
+            ("F12", self._einstellungen_zeigen),
+            ("Shift+F8", self._bruecke_umschalten),
+            ("Shift+F9", self._leitstand_umschalten),
+            ("Return", self._enter),
+        ]
+        # Alle Kuerzel gelten nur im eigenen Fenster, nicht in anderen.
+        # Die Kuerzel werden in einer Liste behalten. Ohne eigene Verweise
+        # haengen sie nur am Qt-Elternteil; die Liste macht sie zaehlbar und
+        # ueberpruefbar.
+        self.kuerzel: list[QShortcut] = []
+        for folge, ziel in kurz:
+            taste = QKeySequence(folge)
+            if taste.isEmpty():
+                log.error("Kürzel nicht lesbar, wird übergangen: %s", folge)
+                continue
+            kuerzel = QShortcut(taste, self)
+            kuerzel.setContext(Qt.WindowShortcut)
+            # Zwei getrennte Verbindungen: erst die Logzeile, dann das Ziel
+            # selbst - unmittelbar, ohne Zwischenschritt. So steht im Log der
+            # echte Methodenname und kein Huellenname, und nichts kann eine
+            # Ausnahme des Ziels unterwegs verschlucken.
+            kuerzel.activated.connect(functools.partial(self._kuerzel_merken, folge, ziel))
+            kuerzel.activated.connect(ziel)
+            self.kuerzel.append(kuerzel)
+            log.info(
+                "Kürzel angelegt: %s (%s) → %s",
+                folge, taste.toString(), getattr(ziel, "__name__", ziel),
+            )
+        log.info("Kürzel insgesamt angelegt: %d von %d", len(self.kuerzel), len(kurz))
+
+    # -- Ansagen ------------------------------------------------------------
+
+    def _zustand_zeigen(self, zustand: str) -> None:
+        if zustand == self._letzter_zustand:
+            return
+        self._letzter_zustand = zustand
+        self.balken.zustand_setzen(zustand)
+
+    def _status_zeigen(self, text: str) -> None:
+        """Setzt die Statusmeldung in der Kopfzeile."""
+        self.ausgabekopf.status_zeigen(text)
+
+    def _taetigkeit_zeigen(self, taetigkeit: str, pfad: str = "") -> None:
+        """Setzt Taetigkeit und Dateiname im Aktivitaetsbalken."""
+        self.balken.taetigkeit_zeigen(taetigkeit, pfad)
+
+    def _auftrag_aktiv(self) -> bool:
+        """Wahr, solange dieses Fenster irgendeinen Auftrag abarbeitet - einen
+        Claude-Auftrag (#CODE#, self._auftrag_laeuft) oder einen Terminal-/
+        Admin-Befehl bzw. Screenshot (#RUN#/#ADMIN#/#BILD#, eigene Faeden).
+        Einzige Stelle, die der Herzschlag fuer core/waechter_anzeige.py
+        (Modulende dieser Datei, _herzschlag_schreiben) befragt."""
+        return bool(
+            self._auftrag_laeuft
+            or (self._terminal_faden is not None and self._terminal_faden.isRunning())
+            or (self._bild_faden is not None and self._bild_faden.isRunning())
+        )
+
+    def _auftrag_kurz(self) -> str:
+        """Kurze Bezeichnung des laufenden Auftrags fuer den Herzschlag -
+        nur zur Anzeige/zum Nachsehen, nichts haengt an ihrem genauen Text."""
+        if self._auftrag_laeuft:
+            return self.balken.text.text() or "Claude-Auftrag"
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            return "Terminalbefehl"
+        if self._bild_faden is not None and self._bild_faden.isRunning():
+            return "Screenshot"
+        return ""
+
+    def _zugriff_zeigen(self) -> None:
+        """Bringt Kachel und Kopfzeile auf den geltenden Zustand. Die Kachel
+        nennt und faerbt ihn als einzige dauerhafte Anzeige; die Kopfzeile
+        haengt den Zustand nur an die gesprochene Statusmeldung."""
+        if self.nur_lesen:
+            text, symbol, farbe = (
+                ZUGRIFF_NUR_LESEN, ZUGRIFF_SYMBOL_NUR_LESEN, ZUGRIFF_FARBE_NUR_LESEN
+            )
+        else:
+            text, symbol, farbe = (
+                ZUGRIFF_SCHREIBEN, ZUGRIFF_SYMBOL_SCHREIBEN, ZUGRIFF_FARBE_SCHREIBEN
+            )
+        self.kacheln.kachel_beschriften(ZUGRIFF_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(ZUGRIFF_KENNUNG, farbe)
+        self.ausgabekopf.nur_lesen_setzen(self.nur_lesen)
+
+    def _sicherheitshinweis_aktualisieren(self) -> None:
+        """Liest die drei Rueckfrage-Schalter aus den Einstellungen (Reiter
+        Verhalten) und die Freigabenliste (Reiter Freigaben) und zeigt beides
+        in der Kopfzeile an. Wird beim Start und nach jedem Schliessen der
+        Einstellungsseite aufgerufen."""
+        werte = einstellungen_lesen()
+        self.ausgabekopf.sicherheitshinweis_setzen(
+            bool(werte.get("internet_ohne_rueckfrage", False)),
+            bool(werte.get("loeschen_ohne_rueckfrage", False)),
+            bool(werte.get("installieren_ohne_rueckfrage", False)),
+        )
+        try:
+            freigaben = [eintrag["name"] for eintrag in freigaben_lesen()]
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Freigabenliste nicht lesbar: %s", fehler)
+            freigaben = []
+        self.ausgabekopf.freigaben_zeigen(freigaben)
+
+    def _nur_lesen_umschalten(self) -> None:
+        """Schaltet den Nur-Lesen-Modus um: Schreiben und Loeschen wird
+        abgelehnt, Lesen und Suchen bleiben erlaubt."""
+        self.nur_lesen = not self.nur_lesen
+        try:
+            self.faden.nur_lesen_setzen(self.nur_lesen)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Nur-Lesen-Modus nicht weitergereicht: %s", fehler)
+        self._zugriff_zeigen()
+        log.info("Schreibrecht: %s", ZUGRIFF_NUR_LESEN if self.nur_lesen
+                 else ZUGRIFF_SCHREIBEN)
+        self.sprecher.sprich(
+            ZUGRIFF_SATZ_NUR_LESEN if self.nur_lesen else ZUGRIFF_SATZ_SCHREIBEN
+        )
+
+    def _zeit_aktualisieren(self) -> None:
+        if self._auftrags_beginn is None:
+            return
+        sekunden = int((datetime.now() - self._auftrags_beginn).total_seconds())
+        self.zeit_anzeige.setText(f"{sekunden} s")
+
+    def _springe(self, feld, name: str) -> None:
+        feld.setFocus()
+        self.sprecher.sprich(name)
+
+    def _hilfe(self) -> None:
+        satz = f"CWB, Version {VERSION}. " \
+               "Unter dem Balken liegen die Kacheln mit den häufigsten Befehlen. " \
+               "Alle Befehle mit Tastenkürzel: " + " ".join(
+            f"{taste}: {beschriftung}." for taste, beschriftung, _ in self._leisten_eintraege()
+        ) + " Pause oder Strg+Umschalt+B: Screenshot vom Telefon, systemweit, " \
+            "unabhängig vom Fenster."
+        # Auf Zuruf: eine Vorlesetaste schweigt in keiner Stufe, sonst waere
+        # die Taste abgeschaltet statt die Stimme gedaempft.
+        self.sprecher.sprich(satz, art="immer")
+
+    def _einstellungen_zeigen(self) -> None:
+        """F12: die Einstellungsseite mit Sprache, Tönen, Verhalten und Skills
+        (core/einstellungen.py). Jede Änderung wirkt sofort."""
+        try:
+            fenster = EinstellungenFenster(
+                self,
+                self.sprecher,
+                einstellungen_lesen,
+                einstellungen_schreiben,
+                self.projekt.pfad,
+                pausetaste_status=self._pausetaste.status(),
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Einstellungen nicht geöffnet: %s", fehler)
+            self.sprecher.sprich("Einstellungen konnten nicht geöffnet werden.",
+                                 art="fehler")
+            return
+        self.sprecher.sprich("Einstellungen.")
+        fenster.exec()
+        self._sicherheitshinweis_aktualisieren()
+        self._kacheln_sichtbarkeit_anwenden()
+        self._bruecke_zustand_anwenden()
+        self._pausetaste_zustand_anwenden()
+
+    def _wo_stehen_wir(self) -> None:
+        # Block 82: "Läuft: ..."/"Wartet: ..." gehoert zu fenster.py (mehrere
+        # Warteschlangen, Eingangsordner), nicht zu Sitzung.stand() - darum
+        # hier angehaengt statt dort eingebaut.
+        if self.faden.sitzung:
+            satz = self.faden.sitzung.stand()
+        else:
+            satz = "Noch nicht verbunden."
+        self.sprecher.sprich(f"{satz} {self._statusleiste_satz()}", art="immer")
+
+    def _antwort_vorlesen(self) -> None:
+        self.sprecher.sprich(self.letzte_antwort or "Keine Antwort vorhanden.",
+                             art="immer")
+
+    def _markiertes_vorlesen(self) -> None:
+        for feld in (self.verlauf, self.eingabe):
+            markiert = feld.textCursor().selectedText().replace("\u2029", " ")
+            if markiert.strip():
+                self.sprecher.sprich(markiert, art="immer")
+                return
+        self.sprecher.sprich("Nichts markiert.", art="immer")
+
+    def _schrift_zuruecksetzen(self) -> None:
+        """Strg+0: Setzt die Schrift aller Textfelder auf den Ausgangswert aus
+        stil.qss zurueck, egal was vorher an der Groesse gedreht wurde."""
+        try:
+            for feld, schrift in self._schrift_ausgang:
+                feld.setFont(QFont(schrift))
+                feld.style().unpolish(feld)
+                feld.style().polish(feld)
+                feld.update()
+            stil_erneuern(self.width(), self.height())
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Schriftgröße nicht zurückgesetzt: %s", fehler)
+            self.sprecher.sprich("Schriftgröße konnte nicht zurückgesetzt werden.",
+                                 art="fehler")
+            return
+        self.sprecher.sprich("Schriftgröße zurückgesetzt.")
+
+    def _verlauf_kopieren(self) -> None:
+        text = self.verlauf.toPlainText()
+        if not text.strip():
+            self.sprecher.sprich("Ausgabefenster ist leer.")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.sprecher.sprich("Ausgabe kopiert.")
+
+    def _absatz_ansagen(self) -> None:
+        """Liest den Absatz vor, auf den der Nutzer im Ausgabefeld springt.
+
+        Nur bei eigener Bewegung: waehrend einlaufender Text angehaengt wird,
+        wandert der Zeiger von allein - dann bleibt es still, sonst wuerde die
+        Antwort doch wieder automatisch vorgelesen."""
+        if self._verlauf_waechst or not self.verlauf.hasFocus():
+            return
+        zeile = self.verlauf.textCursor().block().text().strip()
+        if zeile:
+            self.sprecher.sprich(zeile)
+
+    def _escape(self) -> None:
+        # Laeuft noch eine Ansage, bricht der erste Druck nur sie ab - sonst
+        # wuerde er ungewollt zugleich eine offene Rueckfrage mit Nein
+        # beantworten, noch bevor die Rueckfrage ueberhaupt zu Ende gesprochen ist.
+        if self.frage_offen and not self.sprecher.spricht():
+            self._frage_beantworten(False)
+            return
+        if self._pending_block is not None and not self.sprecher.spricht():
+            self._block_verwerfen()
+            return
+        self.sprecher.schweig()
+
+    def _enter(self) -> None:
+        if self.frage_offen:
+            self._frage_beantworten(True)
+
+    # -- Rückfrage ----------------------------------------------------------
+
+    @slot_geschuetzt
+    def _frage(self, satz: str, kurz_satz: str) -> None:
+        self.frage_offen = True
+        self._zustand_zeigen("wartet")
+        self._status_zeigen(f"Rückfrage: {satz}   Eingabe = ja, Escape = nein")
+        self._verlauf_anhaengen(
+            f"{satz}\nEingabe = ja, Escape = nein", "frage"
+        )
+        # Gesprochen wird ausschliesslich der fertig gekuerzte kurz_satz aus
+        # sitzung.py (Anlass ohne Befehl oder Pfad, hoechstens ein kurzer
+        # Satz). Der volle Wortlaut steht in Statuszeile und Ausgabefeld.
+        self.sprecher.melde("wartet", kurz_satz, sprechen=True, art="frage")
+
+    @slot_geschuetzt
+    def _frage_beantworten(self, ja: bool) -> None:
+        self.frage_offen = False
+        self._verlauf_anhaengen("Freigegeben." if ja else "Abgelehnt.", "hinweis")
+        self._status_zeigen("Freigegeben." if ja else "Abgelehnt.")
+        self.sprecher.sprich("Ja." if ja else "Nein.")
+        if self._pending_terminal is not None:
+            wartend, self._pending_terminal = self._pending_terminal, None
+            if ja:
+                self._terminal_starten(wartend["befehl"], wartend["admin"],
+                                        bruecke_nummer=wartend.get("bruecke_nummer"),
+                                        eingang_datei=wartend.get("eingang_datei"),
+                                        block_nummer=wartend.get("block_nummer"),
+                                        quelle=wartend.get("quelle", ""))
+            elif wartend.get("eingang_datei") is not None:
+                verwerfen(wartend["eingang_datei"], "Rückfrage mit Nein beantwortet")
+            return
+        self.faden.frage_beantworten(ja)
+
+    # -- Terminal (#run# und #admin#) ---------------------------------------
+
+    def _terminal_markierung(self, art: str, befehl: str, *,
+                              bruecke_nummer: int | None = None,
+                              eingang_datei: Path | None = None,
+                              block_nummer: int | None = None,
+                              quelle: str = "Eingabe") -> None:
+        """Verarbeitet einen #run#- oder #admin#-Auftrag. Laeuft nie ueber
+        Claude Code: kein Modellaufruf, kein Tokenverbrauch. Ordnergrenze,
+        verbotene Befehle und Sperrliste aus core/sicherheit.py gelten
+        unveraendert; #admin# fragt mit dem vollen Befehl zurueck, bevor er
+        mit erhoehten Rechten laeuft - aber nur, wenn der Schalter
+        rueckfrage_bei_befehl an ist. `bruecke_nummer` kommt nur aus der
+        Bruecke (core/bruecke.py) und wird bis zum Abschluss mitgefuehrt,
+        auch ueber eine Rueckfrage hinweg (siehe _pending_terminal).
+        `block_nummer`/`quelle` (Block 82) dienen nur der Anzeige ("Läuft: ...",
+        core/fenster.py _laeuft_kennung) und werden ebenso durch eine
+        Rueckfrage hindurch mitgefuehrt."""
+        # Das fremde Fenster, aus dem der Auftrag kam (Zwischenablage,
+        # Waechter oder das Fenster, aus dem gerade zu CWB gewechselt wurde),
+        # steht jetzt fest - CWB selbst ist zu diesem Zeitpunkt im
+        # Vordergrund und darf hier nicht mit gemerkt werden.
+        self._terminal_ziel = zielfenster.fenster_merken()
+        befehl = befehl.strip()
+        if not befehl:
+            self.sprecher.sprich("Nach der Markierung steht kein Befehl.", art="fehler")
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, "Nach der Markierung stand kein Befehl")
+            return
+        admin = art == "admin"
+        wache = Wache(self.projekt)
+        wache.nur_lesen = self.nur_lesen
+        urteil = wache.darf_befehl(befehl)
+        if urteil.verboten:
+            satz = urteil.ansage()
+            log.warning("Terminalbefehl abgelehnt: %s", befehl)
+            self._verlauf_anhaengen(satz, "terminal")
+            self._status_zeigen(satz)
+            self.sprecher.sprich(kurzfassen(satz), art="fehler")
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, satz)
+            return
+        rueckfrage_an = einstellungen_lesen().get("rueckfrage_bei_befehl", False)
+        if (admin or urteil.stufe is Stufe.RUECKFRAGE) and rueckfrage_an:
+            grund = "Admin-Befehl mit erhöhten Rechten" if admin else urteil.begruendung
+            satz = f"{grund}: {befehl}. Fortfahren?"
+            kurz_satz = f"{grund}. Fortfahren?"
+            self._pending_terminal = {"befehl": befehl, "admin": admin,
+                                       "bruecke_nummer": bruecke_nummer,
+                                       "eingang_datei": eingang_datei,
+                                       "block_nummer": block_nummer, "quelle": quelle}
+            self._frage(satz, kurz_satz)
+            return
+        self._terminal_starten(befehl, admin, bruecke_nummer=bruecke_nummer,
+                                eingang_datei=eingang_datei, block_nummer=block_nummer,
+                                quelle=quelle)
+
+    def _terminal_starten(self, befehl: str, admin: bool, *,
+                           bruecke_nummer: int | None = None,
+                           eingang_datei: Path | None = None,
+                           block_nummer: int | None = None,
+                           quelle: str = "Eingabe") -> None:
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            self.sprecher.sprich("Es läuft schon ein Terminalbefehl.", art="fehler")
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, "Terminal war beim Start belegt")
+            return
+        self._terminal_bruecke_nummer = bruecke_nummer
+        self._terminal_eingang_datei = eingang_datei
+        # Block 82: Kennung fuer "Läuft: ..." - siehe Docstring von
+        # self._laufender_block_nummer in __init__.
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = datetime.now()
+        self._statusleiste_aktualisieren()
+        art = "admin" if admin else "run"
+        satz = "Admin-Befehl läuft…" if admin else "Terminalbefehl läuft…"
+        log.info("Terminalbefehl gestartet (%s): %s", art, befehl)
+        # Diese Methode ist der einzige Weg, auf dem ein Terminalbefehl
+        # losgeht - egal ob #run# oder #admin#, aus dem Eingabefeld, aus der
+        # Zwischenablage, vom Waechter, nach einer Rueckfrage oder aus einer
+        # Vormerkung. Darum steht das Leeren genau hier und nirgends sonst.
+        self._ausgabe_leeren(f"Terminalbefehl ({art})")
+        self._terminal_anzeige_belegt = True
+        self._verlauf_anhaengen(befehl, "terminal")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="meldung")  # stumm: Zwischenmeldung
+        self._terminal_faden = TerminalFaden(art, befehl, self.projekt.pfad, self)
+        self._terminal_faden.fertig_da.connect(self._terminal_fertig)
+        self._terminal_faden.teil_da.connect(self._terminal_teil)
+        self._terminal_faden.admin_wartet_auf_uac.connect(self._admin_uac_hinweis)
+        self._terminal_faden.start()
+
+    @slot_geschuetzt
+    def _admin_uac_hinweis(self) -> None:
+        """Ertoent, kurz bevor Windows den UAC-Dialog fuer den erhoehten
+        Admin-Worker zeigt - macht hoerbar, dass jetzt eine Reaktion noetig
+        ist, statt dass CWB scheinbar haengt."""
+        self.sprecher.ton("wartet")
+        self.sprecher.sprich("Bitte Rechteanforderung von Windows bestätigen.", art="meldung")
+
+    @slot_geschuetzt
+    def _terminal_teil(self, zeile: str) -> None:
+        """Nur bei #run#: eine Ausgabezeile, waehrend der Befehl noch laeuft.
+        #admin# laeuft im erhoehten Worker-Prozess ohne verbundene Rohre und
+        meldet sich erst am Ende ueber _terminal_fertig."""
+        zeile = zeile.rstrip("\n")
+        if zeile:
+            self._verlauf_anhaengen(zeile, "terminal")
+
+    @slot_geschuetzt
+    def _terminal_fertig(self, ergebnis) -> None:
+        # Block 82: "Läuft: ..." zeigt wieder "–", sobald self._terminal_faden
+        # nicht mehr laeuft (_laeuft_kennung prueft das zuerst).
+        self._statusleiste_aktualisieren()
+        # Gehoerte der Befehl zur Bruecke (core/bruecke.py), wird die Ausgabe
+        # weiter unten zusaetzlich dorthin hochgeladen - die Rueckspielung ins
+        # zuletzt aktive fremde Fenster (Zwischenablage + Strg+V) laeuft
+        # trotzdem mit, genau wie bei allen anderen Wegen.
+        bruecke_nummer, self._terminal_bruecke_nummer = self._terminal_bruecke_nummer, None
+        # Block 70, Teil A: der Befehl ist jetzt wirklich fertig (Erfolg oder
+        # Fehler) - erst jetzt gilt sein Eingangsordner-Auftrag als erledigt.
+        eingang_datei, self._terminal_eingang_datei = self._terminal_eingang_datei, None
+        if eingang_datei is not None:
+            abschliessen(eingang_datei)
+        # Das Ausgabefeld ist ab hier wieder frei: der Befehl ist fertig, das
+        # Ergebnis kommt gleich hinein - danach darf auch Zurueckgehaltenes
+        # aus einem parallel laufenden Auftrag nachruecken.
+        self._terminal_anzeige_belegt = False
+        text = ergebnis.ausgabe or ergebnis.fehler or "(keine Ausgabe)"
+        kopf = "Terminalausgabe" if ergebnis.erfolg else f"Terminalausgabe (Fehler, Code {ergebnis.code})"
+        log.info("Terminalbefehl beendet, Erfolg=%s, Code=%s", ergebnis.erfolg, ergebnis.code)
+        self._verlauf_anhaengen(f"{kopf}:\n{text}", "terminal")
+        satz = "Terminalbefehl fertig." if ergebnis.erfolg else "Terminalbefehl fehlgeschlagen."
+        befehl_lief = self._terminal_faden.befehl if self._terminal_faden else ""
+        marker_treffer = next(
+            (m for m in BEFEHLE_OHNE_TEXT_RUECKSPIELUNG if m in befehl_lief), None
+        )
+        bild_bleibt = ergebnis.erfolg and marker_treffer is not None
+        if marker_treffer and not ergebnis.erfolg:
+            log.info(
+                "Text-Rueckspielung NICHT uebersprungen: Marker '%s' im Befehl gefunden, "
+                "aber Befehl fehlgeschlagen (Code %s): %s",
+                marker_treffer, ergebnis.code, befehl_lief,
+            )
+        elif bild_bleibt:
+            log.info(
+                "Text-Rueckspielung uebersprungen: Marker '%s' im Befehl gefunden: %s",
+                marker_treffer, befehl_lief,
+            )
+        else:
+            log.info(
+                "Text-Rueckspielung normal ausgefuehrt: kein Marker aus "
+                "BEFEHLE_OHNE_TEXT_RUECKSPIELUNG im Befehl gefunden: %s",
+                befehl_lief,
+            )
+        if bruecke_nummer is not None:
+            # Hochladen an die Bruecke - zusaetzlich zur Rueckspielung unten,
+            # nicht statt ihr (wissen/plan_bruecke.md, Stufe B3).
+            self._bruecke_bericht_hochladen(bruecke_nummer, text)
+        # Ergebnis geht automatisch in das Fenster zurueck, aus dem der
+        # Auftrag kam (siehe zielfenster.py) - das gilt gleich fuer Auftraege
+        # aus dem Eingabefeld, der Zwischenablage und der Bruecke. Ist beim
+        # Auftragsstart keins gemerkt worden, nimmt zielfenster.einfuegen()
+        # das zuletzt bekannte Ziel. Nur wenn noch nie eins bekannt war,
+        # bleibt das Ergebnis in der Zwischenablage liegen.
+        if bild_bleibt:
+            # Das Skript hat sein Bild schon selbst in die Zwischenablage
+            # gelegt - die Text-Rueckspielung wuerde es sofort wieder mit der
+            # gedruckten Meldung ueberschreiben, darum bleibt sie hier aus.
+            satz += " Bild liegt in der Zwischenablage."
+        elif zielfenster.einfuegen(self._terminal_ziel, text):
+            satz += " Ergebnis eingefügt."
+        else:
+            satz += " Ergebnis liegt in der Zwischenablage."
+        if bruecke_nummer is not None:
+            satz += " Auch an Brücke hochgeladen."
+        self._terminal_ziel = None
+        self._status_zeigen(satz)
+        # Abschluss eines #run#/#admin#-Auftrags - die eine Ansage am Ende.
+        self.sprecher.sprich(satz, art="fertig" if ergebnis.erfolg else "fehler")
+        self._verlauf_nachtragen()
+
+    # -- Bild (#BILD#) --------------------------------------------------------
+
+    def _pausetaste_zustand_anwenden(self) -> None:
+        """Bringt die beiden systemweiten Screenshot-Hotkeys (core/pausetaste.py)
+        auf den Stand des Schalters "pause_screenshot" (einstellungen.json).
+        Aufgerufen beim Start und nach jedem Schliessen der Einstellungen
+        (F12), genau wie `_bruecke_zustand_anwenden`. Ist der Schalter aus,
+        wird gar nicht erst angemeldet - keine Ansage, kein Fehler im Log,
+        die Tasten bleiben frei fuer das eigenstaendige Werkzeug
+        "Pausetaste"."""
+        an = bool(einstellungen_lesen().get("pause_screenshot", False))
+        registriert = any(self._pausetaste.status().values())
+        if an and not registriert:
+            if not self._pausetaste.registrieren():
+                self.sprecher.sprich(
+                    "Weder Pause-Taste noch Strg+Umschalt+B für den Screenshot "
+                    "konnten eingerichtet werden, vermutlich von einem anderen "
+                    "Programm oder einem anderen CWB-Fenster belegt.",
+                    art="fehler",
+                )
+            else:
+                fehlende = [name for name, an2 in self._pausetaste.status().items()
+                            if not an2]
+                if fehlende:
+                    self.sprecher.sprich(
+                        f"{' und '.join(fehlende)} für den Screenshot konnte nicht "
+                        "eingerichtet werden, vermutlich von einem anderen Programm "
+                        "oder einem anderen CWB-Fenster belegt.",
+                        art="fehler",
+                    )
+        elif not an and registriert:
+            self._pausetaste.abmelden()
+
+    @slot_geschuetzt
+    def _pause_ausgeloest(self) -> None:
+        """Aufgerufen von einem der beiden systemweiten Screenshot-Hotkeys
+        (Pause-Taste oder Strg+Umschalt+B, core/pausetaste.py), egal welches
+        Fenster gerade vorn ist. Ruft exakt denselben Ablauf wie ein
+        #BILD#-Auftrag auf - keine zweite Logik. Ist die Einstellung
+        "Pause-Taste holt Screenshot" (F12 → Verhalten) aus, bleiben beide
+        Tasten wirkungslos; geprueft wird das bei jedem Tastendruck neu,
+        damit ein Umschalten sofort wirkt. Seit Block 657 Standard AUS: das
+        eigenstaendige Werkzeug "Pausetaste"
+        (C:\\Users\\Entwickler\\.cwb-werkzeuge\\pausetaste) uebernimmt die
+        Taste, dieser Weg hier funktionierte nur einmal pro CWB-Lauf
+        zuverlaessig."""
+        if not einstellungen_lesen().get("pause_screenshot", False):
+            return
+        log.info("Screenshot-Hotkey ausgeloest")
+        self._bild_markierung()
+
+    def _bild_markierung(self, *, bruecke_nummer: int | None = None,
+                          eingang_datei: Path | None = None,
+                          block_nummer: int | None = None,
+                          quelle: str = "Eingabe") -> None:
+        """Verarbeitet einen #BILD#-Auftrag: die Markierung allein genuegt,
+        es gehoert kein Befehlstext dahinter. Laeuft nie ueber Claude Code
+        und nie ueber das Terminal - kein Ausgabefeld wird belegt, keine
+        Zwischenablage mit Text ueberschrieben, kein Ergebnis in ein fremdes
+        Fenster zurueckgespielt. Danach steht nur ein Dateiverweis auf den
+        Screenshot in der Zwischenablage (core/android_screenshot.py).
+        `bruecke_nummer` kommt nur aus der Bruecke (core/bruecke.py) - die
+        Bilddatei selbst laesst sich darueber nicht hochladen (die Brücke
+        kennt nur Text), darum bekommt sie dort nur eine kurze Textmeldung.
+        `block_nummer`/`quelle` (Block 82) dienen nur der Anzeige
+        ("Läuft: ...", core/fenster.py _laeuft_kennung); ohne expliziten
+        Aufrufer (Pause-Taste) gilt "Eingabe"."""
+        if self._bild_faden is not None and self._bild_faden.isRunning():
+            self.sprecher.sprich("Es läuft schon ein Screenshot-Auftrag.", art="fehler")
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, "Screenshot-Weg war beim Start belegt")
+            return
+        self._bild_bruecke_nummer = bruecke_nummer
+        self._bild_eingang_datei = eingang_datei
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = datetime.now()
+        self._statusleiste_aktualisieren()
+        log.info("Bild-Auftrag gestartet (#BILD#)")
+        self._status_zeigen("Screenshot wird geholt…")
+        self.sprecher.sprich("Screenshot wird geholt…", art="meldung")  # stumm: Zwischenmeldung
+        self._bild_faden = BildFaden(self.projekt.pfad, self)
+        self._bild_faden.fertig_da.connect(self._bild_fertig)
+        self._bild_faden.start()
+
+    @slot_geschuetzt
+    def _bild_fertig(self, ergebnis) -> None:
+        # Block 82: "Läuft: ..." zeigt wieder "–", sobald self._bild_faden
+        # nicht mehr laeuft (_laeuft_kennung prueft das zuerst).
+        self._statusleiste_aktualisieren()
+        # Gehoerte der Auftrag zur Bruecke (core/bruecke.py): die Bilddatei
+        # selbst kann dorthin nicht hochgeladen werden (nur Text), darum nur
+        # eine kurze Textmeldung - der lokale Ablauf (Zwischenablage, Ansage)
+        # bleibt unveraendert, ein blinder Nutzer am PC profitiert ja genauso.
+        bruecke_nummer, self._bild_bruecke_nummer = self._bild_bruecke_nummer, None
+        # Block 70, Teil A: der Screenshot-Auftrag ist jetzt wirklich fertig
+        # (Erfolg oder Fehler) - erst jetzt gilt sein Eingangsordner-Auftrag
+        # als erledigt.
+        eingang_datei, self._bild_eingang_datei = self._bild_eingang_datei, None
+        if eingang_datei is not None:
+            abschliessen(eingang_datei)
+        if ergebnis.erfolg:
+            log.info(
+                "Screenshot bereit: %s (%dx%d)", ergebnis.pfad, ergebnis.breite, ergebnis.hoehe
+            )
+            # Dateiverweis erst hier in die Zwischenablage legen: dieser Slot
+            # laeuft auf dem GUI-Thread (fertig_da-Signal), waehrend der
+            # BildFaden-Thread QClipboard nicht anfassen darf.
+            if not zielfenster.datei_in_zwischenablage_legen(str(ergebnis.pfad)):
+                log.error("Screenshot-Dateiverweis nicht in die Zwischenablage gelegt")
+                self._status_zeigen(f"Screenshot liegt nur unter: {ergebnis.pfad}")
+                self.sprecher.sprich(
+                    "Screenshot bereit, aber nicht in die Zwischenablage gelegt.", art="fehler"
+                )
+                if bruecke_nummer is not None:
+                    self._bruecke_bericht_hochladen(
+                        bruecke_nummer,
+                        f"Screenshot bereit, aber nicht in die Zwischenablage gelegt: "
+                        f"{ergebnis.pfad}",
+                    )
+                return
+            self._status_zeigen(f"Screenshot bereit: {ergebnis.pfad}")
+            # Die eine kurze Ansage - kein Text geht ins Ausgabefeld, die
+            # Zwischenablage traegt schon den Dateiverweis und bleibt
+            # unangetastet.
+            self.sprecher.sprich("Screenshot bereit.", art="fertig")
+            if bruecke_nummer is not None:
+                self._bruecke_bericht_hochladen(
+                    bruecke_nummer,
+                    f"Screenshot bereit ({ergebnis.breite}x{ergebnis.hoehe}). Die Bilddatei "
+                    f"selbst lässt sich über die Brücke nicht hochladen, nur diese Meldung.",
+                )
+        else:
+            log.error("Screenshot fehlgeschlagen: %s", ergebnis.fehler)
+            self._status_zeigen(f"Screenshot fehlgeschlagen: {ergebnis.fehler}")
+            self.sprecher.sprich(
+                kurzfassen(ergebnis.fehler) or "Screenshot fehlgeschlagen.", art="fehler"
+            )
+            if bruecke_nummer is not None:
+                self._bruecke_bericht_hochladen(
+                    bruecke_nummer, f"Screenshot fehlgeschlagen: {ergebnis.fehler}")
+
+    # -- Modellwahl ---------------------------------------------------------
+
+    @slot_geschuetzt
+    def _modelle_anbieten(self, eintraege: list) -> None:
+        """Uebernimmt die Liste, die Claude Code selbst gemeldet hat - einzig
+        fuer die Aufloesung von Namen in einer "#MODELL#"-Zeile
+        (modellname_aufloesen) und fuer die Kopfzeilenanzeige. Kein
+        Auswahlfeld mehr in der Oberflaeche (Block 662), darum keine
+        Rueckwirkung mehr auf `self.modell`."""
+        if not eintraege:
+            return
+        self.modelle = list(eintraege)
+
+    @slot_geschuetzt
+    def _modell_verbunden(self, modell_name: str) -> None:
+        """Block 70, Teil B (Wiederholung des verlorenen Block 65): meldet
+        sich bei jedem Verbindungsaufbau und jedem Modellwechsel mit dem
+        tatsaechlich aufgeloesten Modellnamen (core/sitzung.py,
+        Sitzung.modell_name, z.B. "claude-sonnet-5") - nicht nur beim
+        allerersten Aufbau. Zeigt ihn dauerhaft in der Kopfzeile (core/
+        kopfzeile.py, modell_zeigen) und sagt ihn an, wenn sich der Stand
+        seit der letzten Ansage geaendert hat; eine reine Kontingent-
+        Reconnect mit demselben Modell wiederholt die Ansage darum nicht.
+        Weicht der aufgeloeste Name von der gespeicherten Wahl ab (z.B. weil
+        das Abo das gewaehlte Modell nicht mehr hergibt), warnt die Ansage
+        ausdruecklich statt nur den neuen Namen zu nennen."""
+        lang, kurz = anzeige_name(modell_name)
+        self.ausgabekopf.modell_zeigen(lang, kurz)
+        if self._modell_eigenauftrag_rest > 0:
+            # Block 77, Punkte 1/2: Hin- oder Rueckwechsel eines einmaligen
+            # Modellwechsels fuer genau einen Auftrag (_auftrag_starten) -
+            # die Kopfzeile zeigt das neue Modell, angesagt wird nichts
+            # zusaetzlich: entweder hat _auftrag_starten den Satz schon
+            # gesprochen (ausdruecklicher Wunsch), oder es war eine stille
+            # Hochstufung.
+            self._modell_eigenauftrag_rest -= 1
+            return
+        erwartet_voll = eintrag_suchen(self.modelle, self.modell).get("voll") or ""
+        abweichend = bool(erwartet_voll) and erwartet_voll != modell_name
+        erwartet_lang = anzeige_name(erwartet_voll)[0] if erwartet_voll else ""
+        stand = (modell_name, abweichend, erwartet_lang)
+        if stand == self._modell_angesagt:
+            return
+        self._modell_angesagt = stand
+        if abweichend:
+            log.warning("Modell abweichend: verbunden mit %s statt %s",
+                        modell_name, erwartet_voll)
+            self.sprecher.sprich(f"Achtung, verbunden mit {lang} statt {erwartet_lang}.",
+                                  art="immer")
+        else:
+            self.sprecher.sprich(f"Modell {lang}.", art="immer")
+
+    # -- Ereignisse aus der Sitzung ----------------------------------------
+
+    def _bereit(self) -> None:
+        self._zustand_zeigen("bereit")
+        modell = self.faden.sitzung.modell_name if self.faden.sitzung else ""
+        zusatz = f", Modell {modell}" if modell else ""
+        self._status_zeigen(f"Bereit — Projekt {self.projekt.name}{zusatz}")
+        self.sprecher.melde("bereit", "Bereit.", sprechen=True)
+
+    @slot_geschuetzt
+    def _ereignis(self, zustand: str, ansage: str, detail: str,
+                  pfad: str = "", taetigkeit: str = "", ablehnung: bool = False,
+                  hinweis: bool = False) -> None:
+        """Waehrend der Arbeit bleibt die Statusmeldung leer: die laufende
+        Taetigkeit steht ausschliesslich in der Plakette neben 'Ausgabe',
+        farblich passend zum Balken, die betroffene Datei im Feld daneben.
+        Die Statusmeldung zeigt nur Ergebnisse.
+
+        Bei einer abgelehnten Aktion (ablehnung=True) ist ansage bewusst kurz
+        und ohne Pfad - das ist alles, was gesprochen und in der Statuszeile
+        angezeigt wird. Der volle Wortlaut mit Pfad steckt in detail und
+        kommt, rot markiert wie ein Fehler, ins Ausgabefeld.
+
+        Ein Hinweis (hinweis=True) ist eine erlaubte Aktion, von der der
+        Nutzer trotzdem einmal erfahren soll - etwa der erste Zugriff
+        ausserhalb des Projekts in einem Auftrag. Er wird gesprochen (Art
+        'hinweis', siehe sprache.ERLAUBTE_ARTEN), steht in der Statuszeile
+        und als Hinweiszeile im Ausgabefeld; Balken und Ton bleiben, wie sie
+        sind, der Auftrag laeuft ohne Unterbrechung weiter."""
+        if hinweis:
+            self._status_zeigen(ansage)
+            self._verlauf_anhaengen(detail or ansage, "hinweis")
+            self.sprecher.sprich(kurzfassen(ansage), unterbrechen=False, art="hinweis")
+            return
+        self._zustand_zeigen(zustand)
+        self._taetigkeit_zeigen(
+            taetigkeit or ZUSTAND_TAETIGKEIT.get(zustand, ""), pfad
+        )
+        if ablehnung:
+            self._status_zeigen(ansage)
+            self._verlauf_anhaengen(detail or ansage, "fehler")
+        elif zustand == "fehler":
+            self._status_zeigen(ansage)
+            self._verlauf_anhaengen(ansage, "fehler")
+        elif zustand in WERKZEUG_ZUSTAENDE and taetigkeit:
+            self._verlauf_anhaengen(
+                self._werkzeug_zeile(taetigkeit, pfad, ansage), zustand
+            )
+        # Waehrend der Arbeit wird nichts gesprochen, nur der Ton wechselt.
+        # Fehler und Ablehnungen werden gesprochen, aber auf zwei Saetze gekuerzt.
+        gesprochen = kurzfassen(ansage) if (zustand == "fehler" or ablehnung) else ""
+        self.sprecher.melde(zustand, gesprochen, sprechen=bool(gesprochen),
+                            art="fehler")
+
+    def _werkzeug_zeile(self, taetigkeit: str, pfad: str, ansage: str) -> str:
+        """Baut die Zeile fuer einen Werkzeugaufruf im Ausgabefeld: bei einer
+        betroffenen Datei Taetigkeit und Dateiname ('liest fenster.py'),
+        sonst Taetigkeit und das Ziel aus der Ansage ('fuehrt aus: git
+        status') - dieselbe Kurzform, die auch im Aktivitaetsbalken steht."""
+        if pfad:
+            return f"{taetigkeit} {Path(pfad).name}"
+        ziel = ansage.split(": ", 1)[1] if ": " in ansage else ""
+        return f"{taetigkeit}: {ziel}" if ziel else taetigkeit
+
+    def _ausgabe_leeren(self, grund: str) -> None:
+        """Leert das Ausgabefeld. Einzige Stelle, an der das geschieht - der
+        Logeintrag macht hinterher nachweisbar, ob und wofuer geleert wurde,
+        statt es beim naechsten Zweifel wieder raten zu muessen."""
+        try:
+            self.verlauf.clear()
+            self._verlauf_puffer.clear()
+            log.info("Ausgabefeld geleert: %s", grund)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Ausgabefeld nicht geleert (%s): %s", grund, fehler)
+
+    def _terminal_belegt(self) -> bool:
+        """Gehoert das Ausgabefeld gerade einem laufenden Terminalbefehl? Der
+        Merker allein genuegt nicht: bliebe er nach einem Absturz des Fadens
+        haengen, verschwaende jede weitere Ausgabe im Puffer. Darum zaehlt
+        zusaetzlich, ob der Faden ueberhaupt noch laeuft."""
+        if not self._terminal_anzeige_belegt:
+            return False
+        faden = self._terminal_faden
+        if faden is None or not faden.isRunning():
+            self._terminal_anzeige_belegt = False
+            return False
+        return True
+
+    def _verlauf_nachtragen(self) -> None:
+        """Traegt nach, was waehrend eines Terminalbefehls zurueckgehalten
+        wurde - nichts geht verloren, es kommt nur spaeter."""
+        if not self._verlauf_puffer:
+            return
+        wartend, self._verlauf_puffer = self._verlauf_puffer, []
+        log.info("Zurueckgehaltene Absaetze nachgetragen: %d", len(wartend))
+        for text, art in wartend:
+            self._absatz_schreiben(text, art)
+
+    def _verlauf_anhaengen(self, text: str, art: str = "antwort") -> None:
+        """Haengt einen Absatz an das Ausgabefeld. Die Art bestimmt die Klasse
+        (Farbe aus verlauf.css) und das Vorsatzzeichen; unbekannte Arten
+        gelten als gewoehnliche Antwort.
+
+        Laeuft gerade ein #run#/#admin#-Befehl, wird alles zurueckgehalten,
+        was nicht zu ihm gehoert - nur so bleibt wirklich nur der aktuelle
+        Befehl sichtbar. Rueckfragen und Fehler gehen immer sofort durch, die
+        darf niemand uebersehen."""
+        if art not in VERLAUF_ARTEN:
+            art = "antwort"
+        if art not in ("terminal", "frage", "fehler") and self._terminal_belegt():
+            self._verlauf_puffer.append((text, art))
+            return
+        self._absatz_schreiben(text, art)
+
+    def _absatz_schreiben(self, text: str, art: str) -> None:
+        """Schreibt einen Absatz wirklich ins Feld - ohne die Rueckhaltung aus
+        `_verlauf_anhaengen`, damit das Nachtragen nicht wieder im Puffer
+        landet."""
+        inhalt = f"{VERLAUF_ARTEN[art]}{text}".strip()
+        if not inhalt:
+            return
+        self._verlauf_waechst = True
+        try:
+            self.verlauf.append(
+                f'<div class="{art}">'
+                + html.escape(inhalt).replace(chr(10), "<br>")
+                + "</div>"
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Verlauf nicht ergänzt: %s", fehler)
+            return
+        finally:
+            self._verlauf_waechst = False
+        leiste = self.verlauf.verticalScrollBar()
+        leiste.setValue(leiste.maximum())
+
+    def _text(self, text: str) -> None:
+        self._verlauf_anhaengen(text, "antwort")
+
+    def _verbrauch(self, verbrauch: dict) -> None:
+        """Merkt den Verbrauch fuer den Bericht und zeigt ihn in der Kopfzeile.
+        Was dieser Auftrag gekostet hat, wird zugleich dem heutigen Kalendertag
+        in einstellungen.json gutgeschrieben - so zaehlt der Tageszaehler ueber
+        Sitzungen und Neustarts hinweg weiter."""
+        verbrauch = dict(verbrauch)
+        verbrauch["heute"] = tagesverbrauch_erhoehen(verbrauch.get("gesamt", 0))
+        self.letzter_verbrauch = verbrauch
+        self.ausgabekopf.verbrauch_zeigen(verbrauch)
+
+    @slot_geschuetzt
+    def _fertig(self, bilanz: dict) -> None:
+        self.letzte_antwort = bilanz.get("antwort", "")
+        # Gehoerte der gerade beendete Auftrag zur Bruecke (core/bruecke.py,
+        # Vorhaben "Bruecke" Stufe B3), wird der Bericht weiter unten dorthin
+        # hochgeladen - sofort geleert, damit der naechste Auftrag (ohne
+        # Bruecke) nicht faelschlich mithochlaedt.
+        bruecke_nummer, self._bruecke_code_nummer = self._bruecke_code_nummer, None
+        block_nummer, self._aktueller_block_nummer = self._aktueller_block_nummer, None
+        eingang_datei, self._eingang_code_datei = self._eingang_code_datei, None
+        # Block 649: Hinweis zur Zeile "#MODELL# name" (unbekannter Name) -
+        # ein spaeter async gemeldeter Fehlschlag des Wechsels selbst kommt
+        # stattdessen ueber bilanz["modell_hinweis"] (core/faden.py), beide
+        # schliessen sich gegenseitig aus (ein unbekannter Name versucht nie
+        # einen Wechsel).
+        modell_hinweis = self._laufender_modell_hinweis or bilanz.get("modell_hinweis") or ""
+        self._laufender_modell_hinweis = ""
+        # Der Platz beim Arbeitsfaden ist wieder frei; die Bilder wurden schon
+        # beim Abschicken uebergeben.
+        self._auftrag_laeuft = False
+        self._auftrags_uhr.stop()
+        # Block 70, Nachbesserung (07.10.2026): beide Aufrufe standen hier
+        # ungeschuetzt vor abschliessen() weiter unten - eine Ausnahme darin
+        # (z.B. eine kaputte Anzeige) wurde von @slot_geschuetzt abgefangen
+        # und beendete _fertig() vorzeitig, OHNE dass abschliessen() je
+        # lief. Der tatsaechlich fertige Auftrag blieb dadurch in laeuft/
+        # liegen und wurde beim naechsten Neustart von wieder_aufnehmen()
+        # erneut angestossen, obwohl Claude Code ihn schon erledigt hatte
+        # ("schon erledigt" - Robert, 07.10.2026). Darum jetzt abgesichert:
+        # ein Fehler hier darf den Abschluss nicht mehr verhindern.
+        try:
+            self.balken.animation_stoppen()
+            # Das Auftragsprotokoll (core/sitzung.py, _protokoll_schreiben) hat
+            # den Verlauf schon vor diesem Aufruf fortgeschrieben (Block C10).
+            self.ausgabekopf.such_effizienz_zeigen(such_effizienz_prozent())
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Anzeige nach Auftragsende nicht aktualisiert: %s", fehler)
+        # Block 77, Punkte 3/4: Kontingent-Zustand (Kopfzeile/F2) und
+        # Sparmodus-Umschaltung - unabhaengig davon, ob der Auftrag gleich
+        # als Kontingent-Pause zurueckkehrt oder normal fertig wird.
+        self._kontingent_anzeige_aktualisieren()
+
+        kontingent = bilanz.get("kontingent")
+        if kontingent is not None:
+            # Das Max-Kontingent ist erschoepft (core/sitzung.py, auftrag()) -
+            # kein gescheiterter Auftrag, sondern eine Pause. Weder Bericht
+            # noch Bruecken-Upload noch "naechsten_starten" noch abschliessen()
+            # auf eingang_datei: das holt _kontingent_fortsetzen() nach,
+            # sobald der Auftrag wirklich zu Ende ist - bis dahin bleibt die
+            # Datei in laeuft/ liegen.
+            self._kontingent_pause_behandeln(kontingent, bruecke_nummer, block_nummer,
+                                              eingang_datei)
+            return
+        # Block 70, Teil A: der Auftrag ist jetzt wirklich fertig (Erfolg,
+        # Fehler oder Abbruch) - erst jetzt gilt sein Eingangsordner-Auftrag
+        # als erledigt.
+        if eingang_datei is not None:
+            abschliessen(eingang_datei)
+            # Block 77, Punkt 2: Hochstufung bei Misserfolg - nur Auftraege
+            # aus Eingang, Bruecke oder Leitstand zaehlen mit (erkennbar an
+            # eingang_datei), ein manuell abgeschickter Auftrag weder zaehlt
+            # noch setzt zurueck (siehe Docstring von
+            # self._fehlschlaege_eingang_folge). "Abgebrochen" (Not-Aus) ist
+            # keine Modell-Schwaeche und bleibt neutral - weder Zaehlung noch
+            # Ruecksetzung.
+            if bilanz.get("fehler"):
+                self._fehlschlaege_eingang_folge += 1
+            elif not bilanz.get("abgebrochen"):
+                self._fehlschlaege_eingang_folge = 0
+
+        # `satz` steht in der Statuszeile und muss in eine Zeile passen.
+        # `hinweis` ergaenzt ihn im Ausgabefeld und wird nicht gesprochen.
+        # `ansage` ist das Einzige, was durch die Stimme geht.
+        hinweis = ""
+        # `satzart` entscheidet, ob der Satz ueberhaupt gesprochen wird
+        # (siehe sprache.ERLAUBTE_ARTEN): nur Abschluss und Fehler.
+        satzart = "fertig"
+        if bilanz.get("fehler"):
+            self._zustand_zeigen("fehler")
+            satz = "Fehler."
+            hinweis = f" {bilanz['fehler']}"
+            ansage = kurzfassen(f"Fehler. {bilanz['fehler']}")
+            satzart = "fehler"
+        elif bilanz.get("abgebrochen"):
+            self._zustand_zeigen("abgebrochen")
+            satz = "Abgebrochen."
+            ansage = satz
+        else:
+            self._zustand_zeigen("fertig")
+            geaendert = bilanz.get("geaendert", [])
+            anzahl = len(geaendert)
+            if anzahl == 0:
+                satz = "Fertig, keine Datei geändert."
+            elif anzahl == 1:
+                satz = f"Fertig, eine Datei geändert: {Path(geaendert[0]).name}."
+            else:
+                satz = f"Fertig, {anzahl} Dateien geändert."
+            hinweis = " Antwort vorlesen mit F3, zurücknehmen mit Strg Z."
+            # Gesprochen wird nur "Fertig" - die Bilanz (wie viele Dateien
+            # geaendert) steht in Statuszeile und Ausgabefeld.
+            ansage = "Fertig."
+
+        try:
+            self._letzter_bericht = self._bericht_bauen(bilanz, block_nummer, modell_hinweis)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Bericht nicht gebaut: %s", fehler)
+            self._letzter_bericht = ""
+
+        self._letzter_bericht_pfad = (
+            self._bericht_datei_speichern() if self._letzter_bericht else None
+        )
+        if self._letzter_bericht_pfad:
+            hinweis += f" Bericht auch gespeichert unter {self._letzter_bericht_pfad}."
+
+        if bruecke_nummer is not None:
+            self._bruecke_bericht_hochladen(
+                bruecke_nummer, self._letzter_bericht or ansage)
+            hinweis += " Bericht an Brücke hochgeladen."
+
+        self._status_zeigen(satz)
+        self._verlauf_anhaengen(satz + hinweis,
+                                "fehler" if bilanz.get("fehler") else "hinweis")
+        # Die einzige Ansage nach einem Auftrag: "Fertig" (oder der Fehler)
+        # samt Hinweis, dass der Bericht in der Zwischenablage liegt. Der
+        # Inhalt des Ausgabefelds wird nie von allein vorgelesen - dafuer F3.
+        self.sprecher.sprich(
+            (ansage + self._bericht_ablegen_nach_auftrag()).strip(), art=satzart)
+
+        # Wartet noch ein Auftrag, laeuft er jetzt von allein los.
+        self._naechsten_starten()
+        # Block 82: "Läuft: ..." auf den neuen Stand bringen - entweder den
+        # gerade gestarteten naechsten Auftrag (schon in _auftrag_starten
+        # gesetzt, hier nur zur Sicherheit erneut gezeichnet) oder "–", wenn
+        # die Warteschlange jetzt leer ist.
+        self._statusleiste_aktualisieren()
+
+        # Leitstand (core/leitstand.py, Block 72): reagiert nur, wenn der
+        # Schalter an ist und das Projekt wissen/nachtplan.md hat - sonst
+        # kehrt die Methode sofort zurueck.
+        self._leitstand_nach_auftrag(bilanz, block_nummer, satz)
+
+    def _kontingent_anzeige_aktualisieren(self) -> None:
+        """Block 36 (vorher 77, Punkte 3 und 4): liest nach jedem beendeten
+        Auftrag die zuletzt gemeldeten RateLimitEvent-Meldungen der Sitzung
+        (core/sitzung.py, `kontingent_zustand`/`sparmodus_aktiv`) und zieht
+        daraus drei Dinge: die Kontingent-Anzeige mit echten Prozentzahlen
+        fuer die Statusleiste ueber dem Ausgabefeld (Block 82, `_kontingent_zeigen`;
+        F2 nennt denselben Zustand ueber `Sitzung.stand()`), die einmalige Ansage
+        beim Ueberschreiten von
+        90 % bzw. 95 % Wochenauslastung sowie, sofern F12 -> Verhalten ->
+        "Sparmodus bei knappem Wochenkontingent" an ist (Ab Werk an), die
+        Sparmodus-Umschaltung anhand der dort einstellbaren Prozent-Schwelle
+        (Ab Werk 95 %): beim Eintritt eine einmalige Ansage, beim Austritt
+        laufen die zurueckgestellten Auftraege (`self._sparmodus_wartend`)
+        wieder in die normale Warteschlange ein. Ohne Sitzung (ganz am
+        Anfang, Verbindung steht noch nicht) geschieht nichts."""
+        faden = getattr(self, "faden", None)
+        sitzung = getattr(faden, "sitzung", None) if faden else None
+        if sitzung is None:
+            return
+        try:
+            zustand = sitzung.kontingent_zustand()
+            self._kontingent_zeigen(
+                zustand.get("stufe", "normal"), zustand.get("text", ""),
+                zustand.get("woche_anzeige", ""), zustand.get("sitzung_anzeige"),
+            )
+
+            woche_prozent = zustand.get("woche_prozent")
+            if woche_prozent is not None:
+                if woche_prozent >= 90 and not self._kontingent_warnung_90_gegeben:
+                    self._kontingent_warnung_90_gegeben = True
+                    self.sprecher.sprich("Wochenkontingent 90 Prozent.", art="immer")
+                if woche_prozent >= 95 and not self._kontingent_warnung_95_gegeben:
+                    self._kontingent_warnung_95_gegeben = True
+                    self.sprecher.sprich("Wochenkontingent 95 Prozent.", art="immer")
+                if woche_prozent < 90:
+                    self._kontingent_warnung_90_gegeben = False
+                    self._kontingent_warnung_95_gegeben = False
+
+            einstellungen = einstellungen_lesen()
+            schalter_an = einstellungen.get("sparmodus_wochenkontingent", True)
+            schwelle_prozent = int(einstellungen.get("sparmodus_schwelle_prozent", 95))
+            soll_aktiv = schalter_an and sitzung.sparmodus_aktiv(schwelle_prozent)
+            if soll_aktiv and not self._sparmodus_aktiv:
+                self._sparmodus_aktiv = True
+                log.info("Sparmodus eingeschaltet: Wochenkontingent wird knapp")
+                self.sprecher.sprich(
+                    "Wochenkontingent wird knapp, nur noch dringende Aufträge.",
+                    art="immer")
+            elif not soll_aktiv and self._sparmodus_aktiv:
+                self._sparmodus_aktiv = False
+                log.info("Sparmodus ausgeschaltet, %d zurückgestellte Aufträge laufen wieder an",
+                          len(self._sparmodus_wartend))
+                if self._sparmodus_wartend:
+                    self._warteschlange.extend(self._sparmodus_wartend)
+                    self._sparmodus_wartend = []
+                    self._warteschlange_zeigen()
+                    if not self._auftrag_laeuft and self._kontingent_info is None:
+                        self._naechsten_starten()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kontingent-Anzeige/Sparmodus nicht aktualisiert: %s", fehler)
+
+    def _kontingent_pause_behandeln(self, kontingent: dict, bruecke_nummer: int | None,
+                                     block_nummer: int | None,
+                                     eingang_datei: Path | None = None) -> None:
+        """Haelt die Warteschlange an, statt den Auftrag als gescheitert zu
+        werten: das Max-Kontingent ist erschoepft (core/sitzung.py,
+        auftrag(), Rueckgabefeld "kontingent", RateLimitEvent des Agent-SDK
+        mit status="rejected"). Beim ersten Aufruf einer Pause merkt
+        `self._kontingent_info` Text, Bilder sowie Bruecken-/Blocknummer
+        einmalig - jeder weitere Aufruf (ein Fortsetzungsversuch, der selbst
+        wieder abgewiesen wurde) aktualisiert nur die Freigabezeit, damit
+        der Fortsetzungs-Vorspann (KONTINGENT_VORSPANN) sich nicht mit jedem
+        Versuch neu um den Auftragstext legt."""
+        erster_versuch = self._kontingent_info is None
+        if erster_versuch:
+            self._kontingent_info = {
+                "text": self.letzter_auftrag,
+                "bilder": list(self._aktuelle_bilder),
+                "bruecke_nummer": bruecke_nummer,
+                "block_nummer": block_nummer,
+                "eingang_datei": eingang_datei,
+                # Block 77: ein einmaliger Modellwunsch fuer diesen Auftrag
+                # (Punkt 1) bzw. eine Hochstufung (Punkt 2) gilt auch fuer
+                # den Fortsetzungsversuch nach der Pause.
+                "modell_wunsch": self._laufender_modell_wunsch,
+                "modell_grund": self._laufender_modell_grund,
+                # Block 82: Kennung fuer "Läuft: ..." waehrend der Pause
+                # (core/fenster.py, _laeuft_kennung).
+                "quelle": self._laufender_quelle,
+                "zeit": self._laufender_zeit,
+            }
+        else:
+            log.info("Kontingent weiterhin erschöpft, neue Freigabezeit übernommen")
+
+        entscheidung = kontingent_entscheidung(kontingent.get("resets_at"), datetime.now())
+
+        if entscheidung["wochenlimit"]:
+            # Vermutlich das Wochenlimit, nicht das Fuenf-Stunden-Fenster:
+            # kein automatischer Fortsetzungsversuch, die Warteschlange
+            # bleibt angehalten, bis Robert selbst eingreift.
+            # Block 70, Nachbesserung: abschliessen() steht hier ganz vorn,
+            # VOR Anzeige, Ansage und Berichtsbau - ein Fehler dort darf
+            # nicht mehr verhindern, dass die Datei aus laeuft/ kommt.
+            if eingang_datei is not None:
+                abschliessen(eingang_datei)
+            grund = entscheidung["grund"]
+            log.warning("Kontingent-Pause abgebrochen (Wochenlimit): %s", grund)
+            self._zustand_zeigen("fehler")
+            self._status_zeigen(grund)
+            self._verlauf_anhaengen(grund, "fehler")
+            self.sprecher.sprich(grund, art="fehler")
+            try:
+                bilanz_fuer_bericht = {
+                    "antwort": self.letzte_antwort, "geaendert": [], "fehler": grund,
+                    "abgebrochen": False,
+                }
+                self._letzter_bericht = self._bericht_bauen(
+                    bilanz_fuer_bericht, self._kontingent_info.get("block_nummer"))
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Bericht nicht gebaut (Kontingent-Wochenlimit): %s", fehler)
+                self._letzter_bericht = ""
+            self._letzter_bericht_pfad = (
+                self._bericht_datei_speichern() if self._letzter_bericht else None
+            )
+            self._kontingent_info = None
+            self._statusleiste_aktualisieren()
+            return
+
+        status, ansage = entscheidung["status"], entscheidung["ansage"]
+        self._zustand_zeigen("wartet_kontingent")
+        self._taetigkeit_zeigen("wartet auf Kontingent")
+        self._status_zeigen(status)
+        if erster_versuch:
+            # Nur beim ersten Mal gesprochen - ein stiller Fortsetzungsversuch,
+            # der selbst wieder abgewiesen wird, loest keine zweite Ansage aus.
+            self._verlauf_anhaengen(status, "hinweis")
+            self.sprecher.sprich(ansage, art="fehler")
+        log.warning(
+            "Kontingent erschöpft (Typ %s): %s - nächster Versuch in %d Sekunden",
+            kontingent.get("rate_limit_type"), status, int(entscheidung["wartesekunden"]),
+        )
+        self._kontingent_uhr.start(int(entscheidung["wartesekunden"] * 1000))
+        self._statusleiste_aktualisieren()
+
+    @slot_geschuetzt
+    def _kontingent_fortsetzen(self) -> None:
+        """Vom Kontingent-Timer gerufen (_kontingent_pause_behandeln): setzt
+        den pausierten Auftrag mit dem Fortsetzungs-Vorspann fort - in
+        derselben Sitzung, wenn sie noch lebt, sonst verbindet
+        core/sitzung.py (_neu_verbinden) von selbst neu, bevor der Auftrag
+        gesendet wird.
+
+        Block 80: vorher dieselbe Eingangsreihenfolge-Pruefung wie im
+        Leerlauf (_naechstes_fremdes_projekt/_auto_projekt_pruefen) - sonst
+        wuerde nach jeder Pause immer das zuletzt aktive Projekt fortgesetzt,
+        auch wenn laut Eingangsordner ein anderes Projekt laenger wartet. Nur
+        bei einem Auftrag aus dem Eingangsordner (eingang_datei gesetzt):
+        seine Datei liegt bereits unveraendert in eingang/laeuft/ (Block 70,
+        Teil A) und wird beim naechsten Oeffnen dieses Projekts von
+        wieder_aufnehmen() erneut angestossen - ein von Hand eingegebener
+        Auftrag ohne Eingangsdatei hat keine solche Ablage und wird deshalb
+        immer fortgesetzt, sonst ginge er verloren."""
+        info, self._kontingent_info = self._kontingent_info, None
+        if info is None:
+            # F8 (Not-Aus) hat die Pause inzwischen verworfen.
+            return
+        if info.get("eingang_datei") is not None:
+            projekt = self._naechstes_fremdes_projekt()
+            if projekt is not None:
+                log.info(
+                    "Kontingent-Pause vorbei, aber Projekt %s wartet laenger in der "
+                    "Eingangsreihenfolge - wechsle, statt eigenen Auftrag fortzusetzen",
+                    projekt.name,
+                )
+                self._statusleiste_aktualisieren()
+                QTimer.singleShot(
+                    0, lambda zielprojekt=projekt: self._auto_projekt_wechseln(zielprojekt))
+                return
+        log.info("Kontingent-Pause vorbei, setze Auftrag fort: %s", info["text"][:120])
+        self._auftrag_starten(
+            f"{KONTINGENT_VORSPANN}{info['text']}", info["bilder"], ansagen=False,
+            bruecke_nummer=info["bruecke_nummer"], block_nummer=info["block_nummer"],
+            eingang_datei=info.get("eingang_datei"),
+            modell_wunsch=info.get("modell_wunsch"), modell_grund=info.get("modell_grund"),
+            quelle=info.get("quelle") or "Eingabe", zeit=info.get("zeit"),
+        )
+
+    def _bericht_bauen(self, bilanz: dict, block_nummer: int | None = None,
+                        modell_hinweis: str = "") -> str:
+        """Baut den Bericht für die Zwischenablage: Auftrag, Antwort, geänderte
+        Dateien und Tokenverbrauch des letzten Aufrufs. Trug der Auftrag eine
+        Blocknummer (core/bloecke.py, "Block N" - die Zeile selbst wurde vor
+        der Übergabe an Claude Code entfernt), steht sie hier im Kopf, sonst
+        fehlte sie im Bericht ganz. `modell_hinweis` (Block 649) ist nur bei
+        einer unbekannten oder gescheiterten "#MODELL#"-Zeile gesetzt."""
+        teile = [f"Projekt: {self.projekt.name}",
+                 f"Zeit: {datetime.now():%d.%m.%Y %H:%M}"]
+        if block_nummer is not None:
+            teile.append(f"Block: {block_nummer}")
+        teile.append("")
+        teile += ["Auftrag:", self.letzter_auftrag or "—", ""]
+        teile += ["Antwort:", bilanz.get("antwort") or "—", ""]
+
+        if bilanz.get("fehler"):
+            teile += ["Fehler:", str(bilanz["fehler"]), ""]
+        elif bilanz.get("abgebrochen"):
+            teile += ["Abgebrochen.", ""]
+
+        if bilanz.get("hintergrund_warnung"):
+            teile += ["Warnung:", str(bilanz["hintergrund_warnung"]), ""]
+
+        if modell_hinweis:
+            teile += [modell_hinweis, ""]
+
+        geaendert = bilanz.get("geaendert") or []
+        teile.append("Geänderte Dateien:")
+        teile += [f"- {pfad}" for pfad in geaendert] if geaendert else ["- keine"]
+        teile.append("")
+
+        verbrauch = self.letzter_verbrauch
+        if verbrauch:
+            teile += [
+                "Tokenverbrauch (ohne Cache gerechnet):",
+                f"- Sitzung gesamt: {zahl_lang(verbrauch.get('sitzung', 0))}",
+                f"- letzter Aufruf: {zahl_lang(verbrauch.get('gesamt', 0))}",
+                f"- letzter Aufruf, Eingabe: {zahl_lang(verbrauch.get('eingabe', 0))}",
+                f"- letzter Aufruf, Ausgabe: {zahl_lang(verbrauch.get('ausgabe', 0))}",
+                f"- letzter Aufruf, Cache gelesen: {zahl_lang(verbrauch.get('cache_gelesen', 0))}",
+                f"- letzter Aufruf, Cache erstellt: {zahl_lang(verbrauch.get('cache_erstellt', 0))}",
+            ]
+        else:
+            teile.append("Tokenverbrauch: keine Daten")
+        teile.append("")
+        # Block 649/662, Punkt 9: nennt mit voller Versionsbezeichnung das
+        # Modell, mit dem dieser Auftrag tatsaechlich lief - unabhaengig
+        # davon, ob es die Voreinstellung (Sonnet), eine "#MODELL#"-Zeile
+        # oder die Hochstufung nach Fehlschlaegen war.
+        faden = getattr(self, "faden", None)
+        sitzung = getattr(faden, "sitzung", None) if faden else None
+        modell_name = sitzung.modell_name if sitzung else ""
+        lang, _kurz = anzeige_name(modell_name) if modell_name else anzeige_name(self.modell)
+        teile.append(f"Modell: {lang}")
+        return "\n".join(teile).strip() + "\n"
+
+    def _bericht_fuer_block_vorhanden(self, block_nummer: int) -> bool:
+        """Block 70, Nachbesserung: True, wenn unter .cwb/bericht/ schon ein
+        gespeicherter Bericht mit der Kopfzeile "Block: {block_nummer}"
+        liegt (siehe _bericht_bauen) - Grundlage fuer die Sicherung in
+        core/eingangsordner.py wieder_aufnehmen() gegen einen Auftrag, der in
+        Wahrheit schon fertig war. Scheitert das Lesen eines einzelnen
+        Berichts (beschaedigtes ZIP, Zugriffsfehler), gilt das als kein
+        Treffer fuer diese Datei, sonst wird einfach weitergesucht."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        if not ordner.is_dir():
+            return False
+        kennung = f"Block: {block_nummer}"
+        try:
+            dateien = [p for p in ordner.iterdir()
+                       if p.is_file() and p.suffix.lower() in (".zip", ".txt")]
+        except OSError:
+            return False
+        for pfad in dateien:
+            try:
+                if pfad.suffix.lower() == ".zip":
+                    with zipfile.ZipFile(pfad) as archiv:
+                        texte = [archiv.read(name).decode("utf-8", errors="ignore")
+                                 for name in archiv.namelist()]
+                else:
+                    texte = [pfad.read_text(encoding="utf-8", errors="ignore")]
+            except (OSError, zipfile.BadZipFile):
+                continue
+            if any(kennung in text for text in texte):
+                return True
+        return False
+
+    def _bericht_datei_speichern(self) -> Path | None:
+        """Speichert den zuletzt gebauten Bericht (self._letzter_bericht)
+        zusaetzlich unter .cwb/bericht/, mit Datum und Uhrzeit im Dateinamen.
+        Steht der Schalter "Bericht als ZIP-Datei" an (Standard), liegt der
+        Text als ZIP darin - das kommt beim Hochladen in den Chat
+        zuverlaessiger an als eine lose Textdatei. Steht er aus, wird die
+        Textdatei direkt abgelegt. Raeumt danach alte Berichte weg."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        try:
+            ordner.mkdir(parents=True, exist_ok=True)
+        except OSError as fehler:
+            log.error("Berichtordner nicht anlegbar: %s", fehler)
+            return None
+        name = f"{datetime.now():%Y-%m-%d_%H-%M-%S}"
+        als_zip = einstellungen_lesen().get("bericht_als_zip", True)
+        ziel = ordner / (f"{name}.zip" if als_zip else f"{name}.txt")
+        try:
+            if als_zip:
+                with zipfile.ZipFile(ziel, "w", compression=zipfile.ZIP_DEFLATED) as archiv:
+                    archiv.writestr(f"{name}.txt", self._letzter_bericht)
+            else:
+                ziel.write_text(self._letzter_bericht, encoding="utf-8")
+        except (OSError, zipfile.BadZipFile) as fehler:
+            log.error("Berichtdatei nicht schreibbar: %s", fehler)
+            return None
+        log.info("Bericht als Datei gespeichert: %s", ziel)
+        self._berichte_aufraeumen(ordner, behalten=ziel)
+        return ziel
+
+    @staticmethod
+    def _berichte_aufraeumen(ordner: Path, behalten: Path) -> None:
+        """Laesst die juengsten BERICHTE_BEHALTEN Berichtdateien liegen und
+        loescht den Rest - Textdateien aus der Zeit vor dem ZIP eingeschlossen.
+        Die Namen beginnen mit dem Zeitstempel, deshalb reicht Sortieren nach
+        Namen. `behalten` bleibt in jedem Fall stehen."""
+        try:
+            dateien = sorted(
+                p for p in ordner.iterdir()
+                if p.is_file() and p.suffix.lower() in (".zip", ".txt")
+            )
+        except OSError as fehler:
+            log.warning("Berichtordner nicht lesbar: %s", fehler)
+            return
+        alte = [p for p in dateien[:-BERICHTE_BEHALTEN] if p != behalten]
+        for datei in alte:
+            try:
+                datei.unlink()
+            except OSError as fehler:
+                log.warning("Alter Bericht nicht loeschbar: %s (%s)", datei, fehler)
+        if alte:
+            log.info("Alte Berichte entfernt: %s, %s bleiben", len(alte), BERICHTE_BEHALTEN)
+
+    def _berichtordner_oeffnen(self) -> None:
+        """Oeffnet den Ordner mit den Berichtdateien im Explorer, damit die
+        zuletzt gespeicherte Datei sofort hochgeladen werden kann."""
+        ordner = self.projekt.pfad / BERICHT_UNTERORDNER
+        if not ordner.is_dir():
+            log.warning("Berichtordner fehlt: %s", ordner)
+            self.sprecher.sprich("Es gibt noch keinen gespeicherten Bericht.",
+                                 art="fehler")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(ordner))  # noqa: S606
+            else:
+                subprocess.Popen(["xdg-open", str(ordner)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        except OSError as fehler:
+            log.exception("Explorer nicht zu öffnen (%s): %s", ordner, fehler)
+            self.sprecher.sprich("Der Ordner ließ sich nicht öffnen.", art="fehler")
+            return
+        log.info("Berichtordner geöffnet: %s", ordner)
+        self.sprecher.sprich("Berichtordner geöffnet.", art="meldung")
+
+    def _bericht_ablegen(self) -> str:
+        """Legt den Bericht in die Zwischenablage: vorzugsweise als
+        Dateiverweis auf die gespeicherte Berichtdatei (self.
+        _letzter_bericht_pfad), sonst als Text. So laesst er sich mit Strg+V
+        andernorts als echter Anhang einfuegen statt als leerer Text.
+
+        Rückgabe nennt, welche der beiden Formen jetzt dort liegt - haengt
+        sich an den Ergebnissatz an, damit Bilanz und Zwischenablage-Hinweis
+        in einer einzigen Ansage zusammenkommen statt in zwei kurz
+        hintereinander."""
+        if self._letzter_bericht_pfad and datei_in_zwischenablage(self._letzter_bericht_pfad):
+            return " Bericht-Datei liegt in der Zwischenablage."
+        if self._letzter_bericht:
+            try:
+                QGuiApplication.clipboard().setText(self._letzter_bericht)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Bericht nicht in die Zwischenablage gelegt: %s", fehler)
+                return " Bericht konnte nicht kopiert werden."
+            return " Bericht-Text liegt in der Zwischenablage."
+        return " Bericht konnte nicht erstellt werden."
+
+    def _bericht_ablegen_nach_auftrag(self) -> str:
+        """Legt den Bericht nach jedem Auftrag in die Zwischenablage (siehe
+        _bericht_ablegen), sofern in den Einstellungen nicht abgeschaltet.
+
+        Abgelegt wird nur, wenn das CWB-Fenster im Vordergrund ist. Sonst
+        wuerde das ueberschreiben, was der Nutzer inzwischen anderswo kopiert
+        hat; es wird dann gemerkt und beim naechsten Wechsel ins Fenster
+        nachgelegt."""
+        if not self._letzter_bericht:
+            return " Bericht konnte nicht erstellt werden."
+        if not einstellungen_lesen().get("bericht_kopieren", True):
+            return ""
+        if not self.isActiveWindow():
+            self._bericht_wartet = True
+            log.info("Bericht vorgemerkt, Fenster ist nicht im Vordergrund")
+            return ""
+        return self._bericht_ablegen()
+
+    def _bericht_nachlegen(self) -> None:
+        """Legt einen vorgemerkten Bericht in die Zwischenablage, sobald das
+        Fenster wieder im Vordergrund ist, und sagt es an."""
+        if not self._bericht_wartet or not self._letzter_bericht:
+            return
+        self._bericht_wartet = False
+        zusatz = self._bericht_ablegen().strip()
+        if not zusatz:
+            return
+        log.info("Vorgemerkter Bericht abgelegt: %s", zusatz)
+        # Gehoert zur Abschlussmeldung: beim Fertigwerden war das Fenster nicht
+        # im Vordergrund, der Hinweis auf die Zwischenablage kommt erst jetzt.
+        self.sprecher.sprich(zusatz, art="fertig")
+
+    @slot_geschuetzt
+    def _bericht_erneut_kopieren(self) -> None:
+        """F6: legt den Bericht des letzten Auftrags noch einmal als Text in
+        die Zwischenablage, egal was inzwischen dort lag. Fuer die Datei gibt
+        es die eigene Taste Strg+F7 (_berichtdatei_kopieren)."""
+        if not self._letzter_bericht:
+            self.sprecher.sprich("Es gibt noch keinen Bericht.", art="fehler")
+            return
+        self._bericht_wartet = False
+        if not zielfenster._in_zwischenablage_legen(self._letzter_bericht):
+            self.sprecher.sprich("Bericht konnte nicht kopiert werden.", art="fehler")
+            return
+        log.info("Bericht-Text erneut in die Zwischenablage gelegt (F6)")
+        self.sprecher.sprich("Bericht-Text liegt jetzt in der Zwischenablage.",
+                             art="meldung")
+
+    @slot_geschuetzt
+    def _berichtdatei_kopieren(self) -> None:
+        """Strg+F7: legt die zuletzt gespeicherte Berichtdatei noch einmal als
+        Dateiverweis in die Zwischenablage, egal was inzwischen dort lag - so
+        laesst sie sich mit Strg+V direkt als Anhang einfuegen."""
+        if not self._letzter_bericht_pfad or not self._letzter_bericht_pfad.exists():
+            self.sprecher.sprich("Es gibt noch keine gespeicherte Berichtdatei.",
+                                 art="fehler")
+            return
+        self._bericht_wartet = False
+        if not datei_in_zwischenablage(self._letzter_bericht_pfad):
+            self.sprecher.sprich("Bericht-Datei konnte nicht kopiert werden.",
+                                 art="fehler")
+            return
+        log.info("Berichtdatei erneut in die Zwischenablage gelegt: %s",
+                 self._letzter_bericht_pfad)
+        self.sprecher.sprich("Bericht-Datei liegt jetzt in der Zwischenablage.",
+                             art="meldung")
+
+    # -- Bedienung ----------------------------------------------------------
+
+    @slot_geschuetzt
+    def _aus_zwischenablage(self) -> None:
+        """F7: holt den Text aus der Zwischenablage, sagt die erkannte
+        Auftragsart an und schickt ihn sofort ab.
+
+        Notweg von Hand: gewoehnlich holt der Waechter markierte Auftraege von
+        selbst, darum gibt es dafuer keine Kachel mehr. Die erste Zeile im Log
+        ist der Beleg, dass die Taste ueberhaupt ankommt - vorher
+        (Strg+Umschalt+V) verschluckten die Textfelder sie.
+
+        Die Zwischenablage wird sofort nach dem Lesen geleert - sonst faende
+        der Waechter zwei Sekunden spaeter denselben Text noch vor und hielte
+        ihn faelschlich fuer einen neuen, zweiten Auftrag. Die Dublettensperre
+        (`_dublette_abgewiesen`) prueft hier genauso wie beim Waechter - F7
+        ist kein Weg an ihr vorbei."""
+        log.info("Aus Zwischenablage aufgerufen (F7)")
+        try:
+            zwischenablage = QGuiApplication.clipboard()
+            text = zwischenablage.text()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage nicht lesbar: %s", fehler)
+            self.sprecher.sprich("Zwischenablage konnte nicht gelesen werden.",
+                                 art="fehler")
+            return
+        if not text.strip(RANDZEICHEN):
+            log.info("Zwischenablage leer")
+            self.sprecher.sprich("Zwischenablage ist leer.", art="fehler")
+            return
+        try:
+            zwischenablage.clear()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Zwischenablage nicht leerbar: %s", fehler)
+        art, inhalt = markierung_erkennen(text)
+        inhalt, modell_sticky, modell_hinweis = self._modell_zeile_verarbeiten(art, inhalt)
+        log.info(
+            "Zwischenablage: %d Zeichen, Art %r, Inhalt %d Zeichen",
+            len(text), art or "ohne Markierung", len(inhalt),
+        )
+        block_angesagt = False
+        block_nummer = None
+        if art:
+            inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(art, inhalt)
+            if not weiter:
+                return
+        if art == "bild":
+            # #BILD# fuellt nie das Eingabefeld: die Markierung allein loest
+            # schon aus, kein Inhalt noetig. Keine Dublettenpruefung: ein
+            # Bildschirmabzug ohne Inhalt ist zwangslaeufig jedes Mal
+            # derselbe Text und laeuft immer sofort.
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung(block_nummer=block_nummer, quelle="Zwischenablage")
+            return
+        if art in ("run", "admin"):
+            # #run# und #admin# fuellen nie das Eingabefeld: sie laufen direkt
+            # im Terminal, ohne Claude Code, und ohne Dublettenpruefung -
+            # diese Befehle laufen immer sofort, auch wiederholt.
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._terminal_markierung(art, inhalt, block_nummer=block_nummer,
+                                       quelle="Zwischenablage")
+            return
+        if self._dublette_abgewiesen(art, inhalt):
+            return
+        if not inhalt:
+            # Nur die Markierung, kein Auftrag darunter: dann gilt der ganze
+            # Text als Auftrag, damit nichts stillschweigend verlorengeht.
+            inhalt = text.strip(RANDZEICHEN)
+            art = ""
+        ansage = (
+            "Code-Auftrag erkannt." if art == "code" else "Auftrag ohne Markierung."
+        )
+        self._absenden(vorspann=f"Aus Zwischenablage. {ansage}", art=art, inhalt=inhalt,
+                        block_angesagt=block_angesagt, block_nummer=block_nummer,
+                        modell_sticky=modell_sticky, modell_hinweis=modell_hinweis)
+
+    @slot_geschuetzt
+    def _ablage_auftrag(self, art: str, inhalt: str) -> None:
+        """Der Wächter hat einen markierten Auftrag gefunden. #run# und
+        #admin# laufen direkt im Terminal, #BILD# holt direkt den Screenshot -
+        alle drei ohne Eingabefeld, ohne Claude Code und ohne
+        Dublettenpruefung, sie laufen immer sofort. Nur #code# und Auftraege
+        ohne Markierung gehen an Claude Code und werden vorher durch die
+        Dublettensperre (`_dublette_abgewiesen`) geprueft, dann ueber
+        _absenden, mit Art und Inhalt direkt uebergeben statt ueber das
+        Eingabefeld neu geparst - sonst ginge die Markierung dabei verloren.
+        Die Zwischenablage ist zu diesem Zeitpunkt schon geleert (siehe
+        ablagewaechter.py)."""
+        inhalt, modell_sticky, modell_hinweis = self._modell_zeile_verarbeiten(art, inhalt)
+        inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(art, inhalt)
+        if not weiter:
+            return
+        if art == "bild":
+            # Keine Dublettenpruefung: siehe _aus_zwischenablage.
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung(block_nummer=block_nummer, quelle="Zwischenablage")
+            return
+        if art in ("run", "admin"):
+            # Keine Dublettenpruefung: siehe _aus_zwischenablage.
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._terminal_markierung(art, inhalt, block_nummer=block_nummer,
+                                       quelle="Zwischenablage")
+            return
+        if self._dublette_abgewiesen(art, inhalt):
+            return
+        self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
+                        block_angesagt=block_angesagt, block_nummer=block_nummer,
+                        modell_sticky=modell_sticky, modell_hinweis=modell_hinweis)
+
+    def _eingang_auftrag(self, auftrag) -> None:
+        """Duenner, ABSICHTLICH nicht mit @slot_geschuetzt versehener
+        Vorspann vor `_eingang_auftrag_geschuetzt`: prueft, ob das Terminal
+        (#run#/#admin#) oder der Screenshot-Weg (#BILD#) gerade belegt ist,
+        und wirft dann AuftragSpaeter. @slot_geschuetzt faengt JEDE Ausnahme
+        ab und verschluckt sie - stuende es hier, wuerde
+        core.eingangsordner.verarbeiten() die Ausnahme nie zu sehen bekommen
+        und die Datei faelschlich als erledigt gelten. Anders als
+        `_ablage_auftrag` darf ein Auftrag aus dem Eingangsordner nie
+        verloren gehen: `verarbeiten()` legt die Datei bei AuftragSpaeter
+        unverarbeitet zurueck, der naechste Blick des Waechters versucht sie
+        erneut, sobald die Ressource frei ist."""
+        art = auftrag.art
+        if art == "bild" and self._bild_faden is not None and self._bild_faden.isRunning():
+            raise AuftragSpaeter("Screenshot-Weg belegt")
+        if art in ("run", "admin") and self._terminal_faden is not None \
+                and self._terminal_faden.isRunning():
+            raise AuftragSpaeter("Terminal belegt")
+        self._eingang_auftrag_geschuetzt(auftrag)
+
+    @slot_geschuetzt
+    def _eingang_auftrag_geschuetzt(self, auftrag) -> None:
+        """Der eigentliche Eingangsordner-Auftrag, abgesichert durch
+        @slot_geschuetzt wie jeder andere Qt-Slot - die Belegt-Pruefung dafuer
+        steht in `_eingang_auftrag` davor (siehe dort). Sonst identisch zu
+        `_ablage_auftrag`: gleiche Blocknummern-, Dubletten- und
+        Projektpruefung; nur `vorspann` nennt zusaetzlich die Quelle.
+
+        Kommt der Auftrag von der Bruecke (core/bruecke.py, Vorhaben
+        "Bruecke" Stufe B3, `auftrag.quelle == "bruecke"`), wird zusaetzlich
+        seine `auftrag_nummer` mitgefuehrt - sie kommt am Ende bei
+        `_fertig`/`_terminal_fertig`/`_bild_fertig` wieder heraus und sorgt
+        dort fuer den Bericht-Upload - und die Blockansage nennt "Claude" als
+        Quelle, weil sie es dort tatsaechlich ist."""
+        art, inhalt = auftrag.art, auftrag.inhalt
+        von_bruecke = auftrag.quelle == QUELLE_BRUECKE
+        bruecke_nummer = auftrag.auftrag_nummer if von_bruecke else None
+        log.info(
+            "Eingangsordner: Auftrag erhalten (Quelle %s, Projekt %r, Art %s, %d Zeichen)",
+            auftrag.quelle, auftrag.projekt, art or "ohne Markierung", len(inhalt),
+        )
+        if von_bruecke:
+            log.info("Brücke: Auftrag gestartet (Nummer %s, Art %s)",
+                      bruecke_nummer, art or "ohne Markierung")
+        inhalt, modell_sticky, modell_hinweis = self._modell_zeile_verarbeiten(art, inhalt)
+        inhalt, weiter, block_angesagt, block_nummer = self._block_verarbeiten(
+            art, inhalt, herkunft="von Claude" if von_bruecke else "")
+        if not weiter:
+            # Unvollstaendiger Block, vormerkt als self._pending_block - F5/
+            # Escape braucht eine anwesende Person, die ein Eingangsordner-
+            # oder Bruecken-Auftrag nicht hat. Die Datei bliebe sonst fuer
+            # immer in laeuft/ liegen und wuerde bei jedem Neustart erneut
+            # als unvollstaendig vorgemerkt.
+            if auftrag.datei is not None:
+                verwerfen(auftrag.datei, "Block kam unvollständig an, braucht Eingabe vor Ort")
+            return
+        quelle_anzeige = "Brücke" if von_bruecke else "Eingang"
+        if art == "bild":
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._bild_markierung(bruecke_nummer=bruecke_nummer, eingang_datei=auftrag.datei,
+                                   block_nummer=block_nummer, quelle=quelle_anzeige)
+            return
+        if art in ("run", "admin"):
+            if not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            self._terminal_markierung(art, inhalt, bruecke_nummer=bruecke_nummer,
+                                       eingang_datei=auftrag.datei, block_nummer=block_nummer,
+                                       quelle=quelle_anzeige)
+            return
+        if self._dublette_abgewiesen(art, inhalt):
+            return
+        self._absenden(vorspann=f"Auftrag aus dem Eingangsordner ({auftrag.quelle}).",
+                        art=art, inhalt=inhalt, block_angesagt=block_angesagt,
+                        bruecke_nummer=bruecke_nummer, block_nummer=block_nummer,
+                        projekt_vorgegeben=auftrag.projekt, eingang_datei=auftrag.datei,
+                        modell_sticky=modell_sticky, modell_hinweis=modell_hinweis)
+
+    def _eingang_fremde_melden(self, projekte: dict) -> None:
+        """Rueckruf des Eingangswaechters (core/eingangsordner.py, Block 63):
+        `projekte` ist Projektname -> Anzahl der wartenden Auftragsdateien,
+        die nicht zum hier offenen Projekt passen. Die Kopfzeilenanzeige wird
+        bei jedem Blick aktualisiert; gesprochen wird nur einmal je neuer
+        Wartestellung und nur, solange gerade kein eigener Auftrag laeuft -
+        sonst wuerde die Ansage mitten in eine laufende Antwort platzen."""
+        if not hasattr(self, "ausgabekopf"):
+            # Eingangswaechter.starten() blickt sofort einmal nach (siehe
+            # core/eingangsordner.py) - zu diesem Zeitpunkt in _aufbauen()
+            # existiert die Kopfzeile noch nicht. Der naechste Blick
+            # (PRUEF_ABSTAND_MS) holt die Anzeige nach.
+            return
+        try:
+            self.ausgabekopf.eingang_fremde_zeigen(projekte)
+            # Block 82: derselbe periodische Blick des Eingangswaechters
+            # aktualisiert auch "Wartet: ..." - eigene (oder unspezifische)
+            # und fremde liegen gebliebene Auftragsdateien aendern sich sonst
+            # ohne eigenes Signal (siehe _wartet_kennungen).
+            self._statusleiste_aktualisieren()
+            namen = frozenset(projekte.keys())
+            if not namen:
+                self._eingang_fremde_angesagt = frozenset()
+                return
+            if namen == self._eingang_fremde_angesagt or self._auftrag_laeuft:
+                return
+            self._eingang_fremde_angesagt = namen
+            geordnet = sorted(namen)
+            ziel = geordnet[0] if len(geordnet) == 1 else \
+                ", ".join(geordnet[:-1]) + " und " + geordnet[-1]
+            self.sprecher.sprich(f"Es warten Aufträge für Projekt {ziel}.",
+                                  unterbrechen=False, art="hinweis")
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Fremde Projekte im Eingang nicht gemeldet: %s", fehler)
+        self._auto_projekt_pruefen()
+
+    def _naechstes_fremdes_projekt(self) -> Projekt | None:
+        """Liefert das Projekt des aeltesten wartenden Eingangs-/Bruecken-
+        Auftrags, der nicht zum hier offenen Projekt passt (core/
+        eingangsordner.py, naechste_fremde_projekt_datei) - None, wenn keiner
+        wartet, der Schalter "Automatisch Projekt wechseln" aus ist oder das
+        genannte Projekt unbekannt ist (dann nur einmalig angesagt). Block
+        80: gemeinsame Grundlage fuer den Leerlauf-Wechsel
+        (_auto_projekt_pruefen) UND die Pruefung beim Ende einer Kontingent-
+        Pause (_kontingent_fortsetzen) - beide muessen dieselbe
+        Eingangsreihenfolge befolgen, nicht nur der Leerlauf."""
+        if not einstellungen_lesen().get("auto_projektwechsel", True):
+            return None
+        ziel_roh = naechste_fremde_projekt_datei(self.projekt.name)
+        if ziel_roh is None:
+            self._auto_projekt_unbekannt_angesagt = None
+            return None
+        projekt = next(
+            (p for p in projekte_finden() if projekt_gleichwertig(p.name, ziel_roh)), None
+        )
+        if projekt is None:
+            if self._auto_projekt_unbekannt_angesagt != ziel_roh:
+                self._auto_projekt_unbekannt_angesagt = ziel_roh
+                log.warning("Eingang: Auftrag fuer unbekanntes Projekt wartet: %s", ziel_roh)
+                self.sprecher.sprich(
+                    f"Ein Auftrag für ein unbekanntes Projekt namens {ziel_roh} "
+                    "wartet im Eingang.", unterbrechen=False, art="hinweis")
+            return None
+        self._auto_projekt_unbekannt_angesagt = None
+        return projekt
+
+    def _auto_projekt_pruefen(self) -> None:
+        """Block 70, Teil C: wechselt im Leerlauf von selbst zu einem anderen
+        bekannten Projekt, sobald dort der aelteste wartende Auftrag aus
+        Eingang oder Bruecke wartet (_naechstes_fremdes_projekt) - wie F9,
+        nur ohne Roberts Zutun. Aufgerufen nach jedem Blick des
+        Eingangswaechters (_eingang_fremde_melden), auch dann, wenn gerade
+        kein eigener Auftrag lief. Kein Wechsel, solange ein eigener Auftrag
+        laeuft, die Warteschlange nicht leer ist, eine Kontingent-Pause
+        laeuft, eine Rueckfrage offen ist oder ein Wechsel schon im Gang ist
+        - sonst verschwaende das Fenster unter der Hand, waehrend noch etwas
+        darauf wartet."""
+        if (self._auftrag_laeuft or self._warteschlange or self._kontingent_info is not None
+                or self.frage_offen or self.wechselt):
+            return
+        projekt = self._naechstes_fremdes_projekt()
+        if projekt is None:
+            return
+        # Ueber den Ereignisumlauf entkoppelt, statt den Wechsel (der dieses
+        # Fenster schliesst) noch innerhalb des Waechter-Rueckrufs
+        # auszufuehren, aus dem diese Methode selbst aufgerufen wird.
+        QTimer.singleShot(0, lambda zielprojekt=projekt: self._auto_projekt_wechseln(zielprojekt))
+
+    def _auto_projekt_wechseln(self, projekt: Projekt) -> None:
+        """Fuehrt den in `_auto_projekt_pruefen` entschiedenen Wechsel aus -
+        derselbe Ablauf wie `_projekt_wechseln` (F9), nur ohne die
+        Projektwahl zu zeigen: `Start._oeffnen` oeffnet das Zielprojekt
+        direkt."""
+        log.info("Automatischer Projektwechsel zu %s", projekt.name)
+        self.sprecher.sprich(f"Wechsle zu Projekt {projekt.name}.", art="immer")
+        self.wechselt = True
+        if self in OFFENE_FENSTER:
+            OFFENE_FENSTER.remove(self)
+        try:
+            self.faden.beenden()
+            self.faden.wait(5000)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Faden beim automatischen Projektwechsel nicht beendet: %s", fehler)
+        self.start_fenster = Start(self.sprecher, Werkbank, automatisch=False)
+        self.start_fenster.projekt_oeffnen(projekt)
+        self.close()
+
+    # -- Bruecke (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) ----------------
+
+    def _bruecke_zustand_anwenden(self) -> None:
+        """Bringt Thread, Kachel und Kopfzeile auf den Stand des Schalters
+        "bruecke_aktiv" (einstellungen.json). Aufgerufen beim Start, nach
+        jedem Schliessen der Einstellungen (F12) und von
+        `_bruecke_umschalten` (Kachel/Umschalt+F8)."""
+        an = bool(einstellungen_lesen().get("bruecke_aktiv", False))
+        self.ausgabekopf.bruecke_zeigen(an)
+        text = "Brücke an" if an else "Brücke aus"
+        symbol = BRUECKE_SYMBOL_AN if an else BRUECKE_SYMBOL_AUS
+        self.kacheln.kachel_beschriften(BRUECKE_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(BRUECKE_KENNUNG,
+                                    BRUECKE_FARBE_AN if an else BRUECKE_FARBE_AUS)
+        if an:
+            self._bruecke_starten()
+        else:
+            self._bruecke_stoppen()
+
+    def _bruecke_starten(self) -> None:
+        if self.bruecke_faden is not None and self.bruecke_faden.isRunning():
+            return
+        self.bruecke_faden = BrueckenFaden(markierung_erkennen, self)
+        self.bruecke_faden.nicht_erreichbar.connect(self._bruecke_nicht_erreichbar)
+        self.bruecke_faden.start()
+        log.info("Brücke gestartet")
+
+    def _bruecke_stoppen(self) -> None:
+        if self.bruecke_faden is None:
+            return
+        self.bruecke_faden.anhalten()
+        self.bruecke_faden.wait(2000)
+        self.bruecke_faden = None
+        log.info("Brücke angehalten")
+
+    @slot_geschuetzt
+    def _bruecke_umschalten(self) -> None:
+        """Kachel "Brücke" / Umschalt+F8: schaltet den persistierten Schalter
+        um - dieselbe Einstellung wie die Kachel in F12 → Verhalten, nur ohne
+        den Umweg über das Einstellungsfenster."""
+        werte = einstellungen_lesen()
+        an = not bool(werte.get("bruecke_aktiv", False))
+        werte["bruecke_aktiv"] = an
+        einstellungen_schreiben(werte)
+        self._bruecke_zustand_anwenden()
+        self.sprecher.sprich(f"Brücke {'an' if an else 'aus'}.", art="immer")
+
+    @slot_geschuetzt
+    def _bruecke_nicht_erreichbar(self) -> None:
+        """Kommt vom BrueckenFaden, nachdem fünf Minuten lang kein
+        Abholversuch gelang (wissen/plan_bruecke.md, Stufe B3) - genau einmal
+        pro Ausfallphase, nicht bei jedem einzelnen Fehlschlag."""
+        self._status_zeigen("Brücke nicht erreichbar.")
+        self.sprecher.sprich("Brücke nicht erreichbar.", art="fehler")
+
+    def _bruecke_bericht_hochladen(self, auftrag_nummer, text: str) -> None:
+        """Laedt den Bericht/die Ausgabe eines Bruecken-Auftrags hoch, ohne
+        die Oberflaeche zu blockieren - eigener Thread pro Hochladung
+        (core/bruecke.py.BerichtFaden), wie beim Terminal- oder
+        Bild-Auftrag. Ein Fehlschlag bleibt still (nur Log), passend zu
+        "Netzfehler still" aus wissen/plan_bruecke.md."""
+        faden = BerichtFaden(auftrag_nummer, text, self)
+        faden.fertig_da.connect(functools.partial(self._bruecke_bericht_fertig, faden))
+        self._bruecke_berichte.append(faden)
+        faden.start()
+
+    @slot_geschuetzt
+    def _bruecke_bericht_fertig(self, faden, erfolg: bool) -> None:
+        if faden in self._bruecke_berichte:
+            self._bruecke_berichte.remove(faden)
+        if not erfolg:
+            log.info("Bruecken-Bericht nicht hochgeladen (Netzfehler, bleibt stumm)")
+
+    # -- Leitstand (core/leitstand.py, Block 72, wissen/plan_leitstand.md) ----
+
+    def _leitstand_zustand_anwenden(self) -> None:
+        """Bringt Kachel und Kopfzeile auf den Stand des Schalters
+        "leitstand_aktiv" (einstellungen.json). Aufgerufen beim Start und
+        nach jedem Schliessen der Einstellungen (F12), wie
+        `_bruecke_zustand_anwenden`."""
+        an = leitstand.aktiv()
+        self.ausgabekopf.leitstand_zeigen(an)
+        text = "Leitstand an" if an else "Leitstand aus"
+        symbol = LEITSTAND_SYMBOL_AN if an else LEITSTAND_SYMBOL_AUS
+        self.kacheln.kachel_beschriften(LEITSTAND_KENNUNG, text, text, symbol)
+        self.kacheln.kachel_faerben(LEITSTAND_KENNUNG,
+                                    LEITSTAND_FARBE_AN if an else LEITSTAND_FARBE_AUS)
+
+    @slot_geschuetzt
+    def _leitstand_umschalten(self) -> None:
+        """Kachel "Leitstand" / Umschalt+F9: schaltet den persistierten
+        Schalter um - dieselbe Einstellung wie F12 -> Leitstand, nur ohne den
+        Umweg ueber das Einstellungsfenster."""
+        werte = einstellungen_lesen()
+        an = not bool(werte.get("leitstand_aktiv", False))
+        werte["leitstand_aktiv"] = an
+        einstellungen_schreiben(werte)
+        self._leitstand_zustand_anwenden()
+        if an and leitstand.wirksamer_anbieter().api_schluessel is None:
+            self.sprecher.sprich("Leitstand an. Kein Gemini-Schlüssel hinterlegt.", art="fehler")
+        else:
+            self.sprecher.sprich(f"Leitstand {'an' if an else 'aus'}.", art="immer")
+
+    def _leitstand_nach_auftrag(self, bilanz: dict, block_nummer: int | None,
+                                 satz: str) -> None:
+        """Block 72/73: nach jedem abgeschlossenen #CODE#-Auftrag (aufgerufen
+        aus `_fertig`) eines Projekts mit wissen/nachtplan.md fragt Leitstand
+        den gewaehlten Anbieter (Gemini oder Anthropic, F12 -> Leitstand), ob
+        und wie es weitergeht. Prueft dafuer zuerst synchron die Grenzen
+        (Fehlschlaege, Aufträge pro Nacht, Aenderung ausserhalb des Projekts)
+        - erst danach laeuft der Anbieter-Aufruf selbst in
+        core.leitstand.EntscheidungsFaden, damit ein langsamer oder
+        haengender Netzaufruf das Fenster nie blockiert."""
+        try:
+            if not leitstand.aktiv():
+                return
+            plan_pfad = self.projekt.pfad / "wissen" / "nachtplan.md"
+            if not plan_pfad.is_file():
+                return
+            plan_mtime = plan_pfad.stat().st_mtime
+            zustand = leitstand.zustand_lesen()
+            if leitstand.ist_angehalten(zustand, self.projekt.name, plan_mtime):
+                return
+            leitstand.verlauf_anhaengen(zustand, self.projekt.name, block_nummer, satz)
+            if bilanz.get("abgebrochen"):
+                self._leitstand_anhalten(zustand, plan_mtime,
+                                          "Von Hand abgebrochen (Not-Aus).")
+                return
+            aussen = leitstand.aenderung_ausserhalb(
+                self.projekt.pfad, bilanz.get("geaendert", []))
+            if aussen:
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"Auftrag hat außerhalb des Projektordners geändert ({aussen}).")
+                return
+            if bilanz.get("fehler"):
+                zustand.fehlschlaege_in_folge += 1
+            else:
+                zustand.fehlschlaege_in_folge = 0
+            if zustand.fehlschlaege_in_folge >= leitstand.MAX_FEHLSCHLAEGE_IN_FOLGE:
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"{zustand.fehlschlaege_in_folge} Fehlschläge hintereinander.")
+                return
+            if zustand.anzahl_auftraege >= leitstand.max_auftraege_pro_nacht():
+                self._leitstand_anhalten(
+                    zustand, plan_mtime,
+                    f"Höchstzahl von {leitstand.max_auftraege_pro_nacht()} "
+                    "Aufträgen pro Nacht erreicht.")
+                return
+            aufloesung = leitstand.wirksamer_anbieter()
+            if aufloesung.zurueckgefallen:
+                self.sprecher.sprich("Kein Anthropic-Schlüssel hinterlegt.", art="fehler")
+            if aufloesung.api_schluessel is None:
+                self.sprecher.sprich("Kein Gemini-Schlüssel hinterlegt.", art="fehler")
+                self._leitstand_anhalten(zustand, plan_mtime,
+                                          "Kein Gemini-Schlüssel hinterlegt.")
+                return
+            try:
+                plan_text = plan_pfad.read_text(encoding="utf-8")
+            except OSError as fehler:
+                log.error("Leitstand: nachtplan.md nicht lesbar: %s", fehler)
+                self._leitstand_anhalten(zustand, plan_mtime, "nachtplan.md nicht lesbar.")
+                return
+            offen_pfad = self.projekt.pfad / "wissen" / "offen.md"
+            try:
+                offen_text = offen_pfad.read_text(encoding="utf-8") if offen_pfad.is_file() \
+                    else ""
+            except OSError:
+                offen_text = ""
+            leitstand.zustand_schreiben(zustand)
+            self._leitstand_plan_mtime = plan_mtime
+            self.leitstand_faden = leitstand.EntscheidungsFaden(
+                aufloesung.anbieter, aufloesung.api_schluessel, plan_text, offen_text,
+                self._letzter_bericht or satz, leitstand.zeitlimit_sekunden(), self)
+            self.leitstand_faden.fertig.connect(self._leitstand_entschieden)
+            self.leitstand_faden.start()
+            log.info("Leitstand: %s-Anfrage gestartet (Projekt %s)",
+                      aufloesung.anbieter, self.projekt.name)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Leitstand: Nachbearbeitung fehlgeschlagen: %s", fehler)
+
+    @slot_geschuetzt
+    def _leitstand_entschieden(self, ergebnis: dict) -> None:
+        """Kommt von core.leitstand.EntscheidungsFaden. `self._leitstand_plan_mtime`
+        wurde direkt vor dem Start des Fadens gesetzt (`_leitstand_nach_auftrag`)
+        und gehoert zu genau dieser Anfrage."""
+        plan_mtime = self._leitstand_plan_mtime
+        if plan_mtime is None:
+            return
+        zustand = leitstand.zustand_lesen()
+        if not ergebnis.get("ok"):
+            self._leitstand_anhalten(
+                zustand, plan_mtime, f"Anfrage gescheitert ({ergebnis.get('text', '')}).")
+            return
+        benutzter_anbieter = ergebnis.get("anbieter", leitstand.ANBIETER_GEMINI)
+        leitstand.nutzung_erfassen(
+            zustand, benutzter_anbieter,
+            ergebnis.get("eingabe_token", 0), ergebnis.get("ausgabe_token", 0))
+        entscheidung = ergebnis["entscheidung"]
+        schritt = ergebnis.get("schritt")
+        auftrag_text = ergebnis.get("auftrag", "")
+        grund = ergebnis.get("grund", "")
+        if entscheidung == "stopp":
+            self._leitstand_anhalten(zustand, plan_mtime, grund or "Stopp.")
+            return
+        verboten = leitstand.markierung_verboten(auftrag_text)
+        if verboten:
+            self._leitstand_anhalten(
+                zustand, plan_mtime,
+                f"{leitstand.anbieter_anzeigename(benutzter_anbieter)} schlug eine "
+                f"gesperrte Markierung vor ({verboten}).")
+            return
+        if entscheidung == "wiederholen":
+            anzahl = leitstand.wiederholung_erhoehen(zustand, self.projekt.name, schritt)
+            if anzahl > leitstand.max_wiederholungen_je_schritt():
+                self._leitstand_anhalten(
+                    zustand, plan_mtime, f"Schritt {schritt} zu oft wiederholt ({anzahl}).")
+                return
+            # Block 77, Punkt 2: "der Leitstand entscheidet wiederholen"
+            # zaehlt wie ein Fehlschlag des Eingang-Auftrags fuer die
+            # Modell-Hochstufung - der naechste von _fertig abgelegte Block
+            # laeuft wieder ueber eingang_datei und liest den Zaehler.
+            self._fehlschlaege_eingang_folge += 1
+        zustand.anzahl_auftraege += 1
+        leitstand.zustand_schreiben(zustand)
+        nummer = naechste_block_nummer(self.projekt.name)
+        block = leitstand.codeblock_bauen(self.projekt.name, nummer, auftrag_text)
+        ablegen(leitstand.QUELLE_LEITSTAND, block, projekt=self.projekt.name)
+        log.info("Leitstand: nächster Auftrag abgelegt (Projekt %s, Schritt %s, Block %d)",
+                  self.projekt.name, schritt, nummer)
+
+    def _leitstand_anhalten(self, zustand: "leitstand.Zustand", plan_mtime: float,
+                             grund: str) -> None:
+        """Haelt Leitstand fuer das aktuelle Projekt an: merkt den Zeitstempel
+        des Plans (eine neue nachtplan.md hebt das wieder auf), schreibt
+        wissen/nachtbericht.md aus dem bisherigen Verlauf und laedt ihn bei
+        aktiver Brücke hoch."""
+        leitstand.anhalten_merken(zustand, self.projekt.name, plan_mtime)
+        verlauf = leitstand.verlauf_abholen(zustand, self.projekt.name)
+        leitstand.verlauf_leeren(zustand, self.projekt.name)
+        leitstand.zustand_schreiben(zustand)
+        text = leitstand.nachtbericht_bauen(self.projekt.name, verlauf, grund, zustand.nutzung)
+        try:
+            (self.projekt.pfad / "wissen").mkdir(parents=True, exist_ok=True)
+            (self.projekt.pfad / "wissen" / "nachtbericht.md").write_text(
+                text, encoding="utf-8")
+        except OSError as fehler:
+            log.error("Leitstand: nachtbericht.md nicht schreibbar: %s", fehler)
+        if bool(einstellungen_lesen().get("bruecke_aktiv", False)):
+            faden = NachtberichtFaden(self.projekt.name, text, self)
+            faden.fertig_da.connect(functools.partial(self._leitstand_nachtbericht_fertig, faden))
+            self._nachtberichte.append(faden)
+            faden.start()
+        log.warning("Leitstand angehalten (Projekt %s): %s", self.projekt.name, grund)
+        self.sprecher.sprich(f"Leitstand angehalten: {kurzfassen(grund)}", art="fehler")
+
+    @slot_geschuetzt
+    def _leitstand_nachtbericht_fertig(self, faden, erfolg: bool) -> None:
+        if faden in self._nachtberichte:
+            self._nachtberichte.remove(faden)
+        if not erfolg:
+            log.info("Nachtbericht nicht hochgeladen (Netzfehler, bleibt stumm)")
+
+    # -- Dublettensperre ------------------------------------------------------
+    # Zehn Minuten - lang genug fuer ein verspaetetes zweites Einfuegen aus
+    # der Zwischenablage, kurz genug, dass ein am naechsten Tag bewusst
+    # wiederholter Auftrag nicht angemeckert wird.
+    DUBLETTE_FENSTER_SEKUNDEN = 600
+
+    def _text_glaetten(self, text: str) -> str:
+        return " ".join(text.split())
+
+    def _dublette_abgewiesen(self, art: str, text: str) -> bool:
+        """Die einzige Dublettensperre im ganzen Programm - aber nur fuer
+        Auftraege, die an Claude Code gehen (Art "code" oder ohne
+        Markierung). Waechter, F7 und das normale Absenden ueber das
+        Eingabefeld rufen sie deshalb nur fuer diese beiden Arten auf, bevor
+        irgendetwas ausgefuehrt oder in die Warteschlange gelegt wird. Bei
+        "run", "admin" und "bild" wird gar nicht erst hierher verzweigt:
+        diese Befehle laufen immer sofort, auch wenn derselbe Text kurz
+        zuvor schon kam - ein Bildschirmabzug ohne Inhalt ist zwangslaeufig
+        jedes Mal derselbe Text und darf nie blockieren.
+
+        Wahr, wenn `art`/`text` innerhalb von DUBLETTE_FENSTER_SEKUNDEN schon
+        einmal angenommen wurden - dann wird "Läuft bereits." (etwas
+        arbeitet noch) oder "Schon erledigt." (nichts arbeitet mehr)
+        gemeldet, gesprochen und im Ausgabefeld gezeigt, und der Aufrufer
+        muss abbrechen. Sonst merkt sich diese Methode den Auftrag sofort
+        selbst mit und gibt Falsch zurueck.
+
+        Leerzeichen und Zeilenumbrueche werden vor dem Vergleich geglaettet,
+        damit ein aus der Zwischenablage neu eingefuegter, inhaltlich
+        identischer Text trotzdem erkannt wird. Nur wenn weder eine Art noch
+        ein Text vorliegt, gibt es nichts zu vergleichen.
+
+        Der Schalter "dubletten_pruefung" (Einstellungen, Verhalten) schaltet
+        die ganze Sperre ab - fehlt er in einstellungen.json, gilt aus.
+
+        Zusaetzlich zur Zehn-Minuten-Regel (die unveraendert bleibt) wird
+        ohne jedes Zeitfenster auch gegen den Text des gerade laufenden
+        Auftrags und gegen alle in der Warteschlange wartenden Auftraege
+        verglichen: laeuft ein Auftrag laenger als zehn Minuten oder wartet
+        er entsprechend lange in der Warteschlange, faellt er sonst aus dem
+        Fenster der `_auftragsverlauf`-Pruefung und ein doppelt
+        abgeschickter Text wuerde trotzdem angehaengt und ein zweites Mal
+        abgearbeitet."""
+        if not einstellungen_lesen().get("dubletten_pruefung", False):
+            return False
+        geglaettet = self._text_glaetten(text)
+        if not art and not geglaettet:
+            return False
+
+        if geglaettet and self._auftrag_laeuft and self.letzter_auftrag and (
+                self._text_glaetten(self.letzter_auftrag) == geglaettet):
+            self._dublette_melden("Läuft bereits.", art, "laufender Auftrag")
+            return True
+        if geglaettet:
+            for wartender_text, _bilder, _bruecke_nummer, _block_nummer, _eingang_datei \
+                    in self._warteschlange:
+                if self._text_glaetten(wartender_text) == geglaettet:
+                    self._dublette_melden("Wartet schon.", art, "Warteschlange")
+                    return True
+
+        schluessel = (art, geglaettet)
+        jetzt = datetime.now()
+        for alte_art, alter_text, zeitpunkt in reversed(self._auftragsverlauf):
+            if (alte_art, alter_text) == schluessel:
+                if (jetzt - zeitpunkt).total_seconds() <= self.DUBLETTE_FENSTER_SEKUNDEN:
+                    satz = "Läuft bereits." if self._auftrag_laeuft else "Schon erledigt."
+                    self._dublette_melden(satz, art, "Verlauf")
+                    return True
+                break
+        self._auftragsverlauf.append((art, geglaettet, jetzt))
+        return False
+
+    def _dublette_melden(self, satz: str, art: str, quelle: str) -> None:
+        log.info("Dublette abgewiesen (%s, %s): %s", quelle, art or "ohne Markierung", satz)
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="fehler")
+
+    # -- Blocknummern ---------------------------------------------------------
+
+    def _modell_zeile_verarbeiten(self, art: str, inhalt: str) -> tuple[str, str | None, str]:
+        """Block 649/662: erkennt/entfernt die Zeile '#MODELL# name' direkt
+        nach der Markierung (oder ganz ohne Markierung, siehe unten), fuer
+        alle vier Wege (Waechter, F7, Eingabefeld, Eingangsordner) - vor
+        `_block_verarbeiten` aufgerufen, damit eine darauf folgende
+        "Block N"-Zeile (core/bloecke.py) trotzdem als erste Zeile erkannt
+        wird.
+
+        Rueckgabe: (Inhalt ohne die Zeile, CLI-Wert fuer einen Wechsel oder
+        None, Hinweistext bei unbekanntem Namen, sonst leer).
+
+        Ein Wechsel wird fuer '#CODE#' UND fuer einen Auftrag ganz ohne
+        Markierung vorgeschlagen - beide gehen an Claude Code
+        (markierung_erkennen: Art "" ist ein gewoehnlicher Auftrag, kein
+        Sonderfall). Block 662, Ursache des Fehlschlags bei Bruecken-
+        Auftraegen ohne "#CODE#": die fruehere Bedingung `if not art` gab den
+        Text bei Art "" sofort unveraendert zurueck, die Zeile wurde nie
+        erkannt. RUN und ADMIN laufen in CWB direkt im Terminal, BILD holt
+        nur einen Screenshot - keines der drei ruft Claude Code auf, darum
+        bleibt die Zeile dort nur entfernt (sie soll z.B. kein PowerShell-
+        Kommando verfaelschen), ohne dass ein Wechsel versucht wird. Ist der
+        aufgeloeste Name bereits das aktive Modell (`self.modell`), gilt das
+        ebenfalls als kein Wechsel."""
+        bereinigt, roh_name = modell_zeile_erkennen(inhalt)
+        if roh_name is None:
+            return bereinigt, None, ""
+        if art not in ("", "code"):
+            return bereinigt, None, ""
+        aufgeloest = modellname_aufloesen(roh_name, self.modelle)
+        if aufgeloest is None:
+            hinweis = f"Modell '{roh_name}' unbekannt, aktives Modell beibehalten"
+            log.warning(hinweis)
+            return bereinigt, None, hinweis
+        if aufgeloest == self.modell:
+            return bereinigt, None, ""
+        return bereinigt, aufgeloest, ""
+
+    def _block_verarbeiten(self, art: str, inhalt: str,
+                            bilder: list[Path] | None = None, *,
+                            herkunft: str = "") -> tuple[str, bool, bool, int | None]:
+        """Erkennt und entfernt eine Blocknummer am Anfang/Ende von `inhalt`
+        (core/bloecke.py, Block 56) und sagt Annahme, Luecke oder
+        Unvollstaendigkeit an. Wird fuer alle vier Wege (Waechter, F7,
+        Eingabefeld, Eingangsordner) und alle vier Markierungen aufgerufen,
+        jeweils bevor der Inhalt an Claude Code oder das Terminal geht.
+
+        Rueckgabe: (bereinigter Inhalt, ausfuehren, schon_angesagt, nummer).
+        `nummer` ist die erkannte Blocknummer (None ohne Blockzeile) - sie
+        wandert bei einem #CODE#-Auftrag bis in den Bericht (_fertig).
+
+        Ohne Blockzeile bleibt der Inhalt unveraendert, es wird nichts
+        gesagt, `schon_angesagt` ist Falsch - der Aufrufer sagt wie bisher
+        selbst "Auftrag erhalten." an.
+
+        Fehlt die Zeile "Ende Block N" (bei #BILD# gibt es dafuer keine
+        Pruefung), wird NICHT ausgefuehrt (`ausfuehren`=False), sondern als
+        `self._pending_block` vorgemerkt - F5 fuehrt ihn aus, Escape
+        verwirft ihn (siehe _f5, _escape).
+
+        `herkunft` (z.B. "von Claude") haengt sich nur an die
+        Annahme-Ansage - fuer Auftraege aus der Bruecke (core/bruecke.py,
+        Vorhaben "Bruecke" Stufe B3, `_eingang_auftrag_geschuetzt`), sonst
+        bleibt die Ansage wie bisher ohne Quellenangabe."""
+        nummer, bereinigt, vollstaendig = block_erkennen(art, inhalt)
+        if nummer is None:
+            return inhalt, True, False, None
+        luecke = block_zaehler_aktualisieren(self.projekt.name, nummer)
+        if luecke:
+            log.warning("Block-Luecke (Projekt %s, Block %d): %s",
+                        self.projekt.name, nummer, luecke)
+        if not vollstaendig:
+            self._pending_block = {
+                "art": art, "inhalt": bereinigt, "bilder": list(bilder or []),
+                "nummer": nummer,
+            }
+            satz = f"Achtung, Block {nummer} ist unvollständig angekommen."
+            if luecke:
+                satz += f" {luecke}"
+            log.warning("Block %d unvollstaendig angekommen (Art %s), vorgemerkt",
+                        nummer, art or "code")
+            self._verlauf_anhaengen(satz, "hinweis")
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="fehler")
+            return bereinigt, False, True, nummer
+        mitte = f" {herkunft}" if herkunft else ""
+        satz = f"Block {nummer}{mitte} erhalten."
+        if luecke:
+            satz += f" {luecke}"
+        log.info("Block %d erkannt und angenommen (Art %s)", nummer, art or "code")
+        self.sprecher.sprich(satz, art="auftrag")
+        return bereinigt, True, True, nummer
+
+    @slot_geschuetzt
+    def _absenden(self, vorspann: str = "", *, art: str | None = None,
+                  inhalt: str | None = None, block_angesagt: bool = False,
+                  bruecke_nummer: int | None = None,
+                  block_nummer: int | None = None,
+                  projekt_vorgegeben: str = "",
+                  eingang_datei: Path | None = None,
+                  modell_sticky: str | None = None,
+                  modell_hinweis: str = "") -> None:
+        """`vorspann` ist der Anfang der Annahme-Ansage, wenn der Aufrufer
+        schon einen eigenen Satz gebaut hat (Zwischenablage, Wächter,
+        Vormerkung) - der Projekt-Hinweis haengt sich dann daran an, statt
+        eine zweite Ansage kurz danach auszuloesen. Leer heisst: normaler
+        Weg, die Ansage entsteht ganz in dieser Methode und in
+        `_auftrag_starten`.
+
+        `projekt_vorgegeben` kommt vom Eingangsordner (core/eingangsordner.py,
+        `EingangsAuftrag.projekt`) - gesetzt, wenn die Datei ein Feld
+        "projekt" trug und darueber schon VOR dem Beanspruchen gegen
+        `passend_fuer_projekt()` geprueft wurde, also nur bei einem Fenster
+        mit passendem offenem Projekt ankommt. Dann gilt diese Zuordnung ohne
+        erneute Pruefung (Block 63): die Wort- und Dateiregel aus
+        core/zuordnung.py wuerde sonst faelschlich auf eine "Projekt: X"-Zeile
+        im Auftragstext selbst anspringen und ihn vormerken statt ausfuehren,
+        obwohl die Zuordnung laengst feststeht.
+
+        `art`/`inhalt` kommen vom Wächter und von F7 schon fertig zerlegt
+        herein - beide haben die Dublettensperre (`_dublette_abgewiesen`)
+        vorher selbst schon geprueft, deshalb wird hier nicht zweimal
+        geprueft und nicht zweimal gemerkt. So bekommt derselbe Auftrag
+        ueber jeden Weg dasselbe Paar aus Art und Text: fruehere Fassungen
+        schrieben den markierungsfreien Text zurueck ins Eingabefeld und
+        parsten ihn hier neu - dabei ging je nach Herkunft die Markierung
+        verloren, und zwei Wege desselben Auftrags sahen fuer die
+        Dublettensperre wie zwei verschiedene Auftraege aus. Bleiben beide
+        Parameter leer, wird wie gewohnt aus dem Eingabefeld gelesen und
+        dabei frisch auf Dubletten geprueft.
+
+        `block_angesagt` kommt vom Aufrufer, wenn er `_block_verarbeiten`
+        (core/bloecke.py, Block 56) schon selbst aufgerufen und dabei schon
+        "Block N erhalten." gesagt hat - dann bleibt das spaetere generische
+        "Auftrag erhalten." hier und in `_auftrag_starten` stumm. Ist `art`
+        leer, ruft diese Methode `_block_verarbeiten` selbst auf.
+
+        `modell_sticky`/`modell_hinweis` (Block 649) kommen vom Aufrufer,
+        wenn er `_modell_zeile_verarbeiten` schon selbst aufgerufen hat -
+        genau wie bei `block_angesagt` nur bei eigener Eingabe ins Feld
+        (`art is None`) selbst ermittelt."""
+        # Block 82: Kennung fuer "Läuft:"/"Wartet:" (core/fenster.py,
+        # _laeuft_kennung/_wartet_kennungen) - VOR der Umdeutung von `art`
+        # gleich unten berechnet, weil "art is None" nur in diesem Moment
+        # noch zuverlaessig "eigene Eingabe ins Feld" bedeutet.
+        if bruecke_nummer is not None:
+            quelle = "Brücke"
+        elif eingang_datei is not None:
+            quelle = "Eingang"
+        elif art is None:
+            quelle = "Eingabe"
+        else:
+            quelle = "Zwischenablage"
+        zeit = datetime.now()
+        if art is None:
+            roh = self.eingabe.toPlainText()
+            art, text = markierung_erkennen(roh)
+            text, modell_sticky, modell_hinweis = self._modell_zeile_verarbeiten(art, text)
+            text, weiter, block_angesagt, block_nummer = self._block_verarbeiten(
+                art, text, self.bilder)
+            if not weiter:
+                self.eingabe.clear()
+                return
+            if (text.strip() and not self._holt_vorgemerkten
+                    and art not in ("run", "admin", "bild")
+                    and self._dublette_abgewiesen(art, text)):
+                self.eingabe.clear()
+                return
+        else:
+            text = inhalt
+            roh = f"{MARKIERUNG_CODE}\n{text}" if art == "code" else text
+
+        if art == "bild":
+            # #BILD# braucht keinen Befehlstext: die Markierung allein loest
+            # schon aus, direkt der Screenshot-Ausloeser, ohne Claude Code.
+            self.eingabe.clear()
+            self._bild_markierung(block_nummer=block_nummer)
+            return
+        if art in ("run", "admin"):
+            # #run# und #admin# laufen nie ueber Claude Code: kein
+            # Modellaufruf, kein Tokenverbrauch, direkt im Terminal.
+            self.eingabe.clear()
+            self._terminal_markierung(art, text, block_nummer=block_nummer)
+            return
+        if not text:
+            self.sprecher.sprich(
+                "Nach der Markierung steht nichts." if art else "Nichts eingegeben.",
+                art="fehler",
+            )
+            return
+
+        # Block 77, Punkte 1 und 3: "Modell: …" und "Dringend: ja" gelten nur
+        # fuer Auftraege, die tatsaechlich an Claude Code gehen (#RUN#/
+        # #ADMIN#/#BILD# sind hier laengst per return verlassen, siehe oben).
+        text, modell_wunsch, dringend = kopf_metadaten_entfernen(text)
+        modell_grund: str | None = None
+        # Punkt 2: Hochstufung nach Fehlschlaegen - nur fuer Auftraege aus
+        # Eingang, Bruecke oder Leitstand (erkennbar an eingang_datei, siehe
+        # core/eingangsordner.py) und nur ohne ausdruecklichen Modellwunsch,
+        # der geht immer vor.
+        if (modell_wunsch is None and eingang_datei is not None
+                and self._fehlschlaege_eingang_folge >= HOCHSTUFUNG_AB_FEHLSCHLAEGEN
+                and not _modell_ist_opus(self.modell)):
+            modell_wunsch = "opus"
+            modell_grund = (
+                f"nach {self._fehlschlaege_eingang_folge} Fehlschlägen in Folge hochgestuft"
+            )
+
+        if not self._holt_vorgemerkten:
+            # Zwei Regeln halten einen Auftrag hier auf: er nennt Dateien, die
+            # es hier nicht gibt, wohl aber in einem anderen Projekt - oder er
+            # nennt den Namen eines anderen Projekts aus der Projektliste. In
+            # beiden Faellen wird er vorgemerkt und dort ausgefuehrt, sobald
+            # das Projekt geoeffnet wird. Bei ausdruecklich vorgegebenem
+            # Projekt (siehe Docstring) entfaellt das - sonst koennte eine
+            # "Projekt: X"-Kopfzeile im eigenen Auftragstext ihn faelschlich
+            # als fremd einstufen, obwohl er genau hier hingehoert.
+            fremd = None if projekt_vorgegeben else (
+                fremdes_projekt_erkennen(text, self.projekt)
+                or genanntes_projekt(text, self.projekt)
+            )
+            if fremd:
+                # Die Warnung haelt niemanden auf: sie merkt den Auftrag nur
+                # vor. F9 wechselt zum genannten Projekt, F5 fuehrt ihn hier
+                # aus - beides wird mit angesagt, sonst waere die Kachel fuer
+                # den blinden Nutzer nicht auffindbar.
+                satz = (f"Dieser Auftrag gehört vermutlich zu Projekt {fremd}, "
+                        f"geöffnet ist {self.projekt.name}. Mit F9 wechseln, "
+                        f"mit F5 trotzdem hier ausführen.")
+                auftrag_vormerken(fremd, roh)
+                self.eingabe.clear()
+                self._vormerkung_zeigen(True)
+                self._verlauf_anhaengen(satz, "hinweis")
+                self._status_zeigen(satz)
+                # Gesprochen nur der Kern ohne Tastenhinweise - der volle
+                # Wortlaut steht in Statuszeile und Ausgabefeld.
+                self.sprecher.sprich(
+                    f"Auftrag gehört vermutlich zu Projekt {fremd}, "
+                    f"hier nicht ausgeführt.", art="fehler")
+                return
+            # Ein neuer Auftrag hier hebt eine aeltere Vormerkung auf.
+            vormerkung_verwerfen()
+            self._vormerkung_zeigen(False)
+            # Laesst der Auftrag gar nicht erkennen, welches Projekt gemeint
+            # ist, wird das geoeffnete kurz angesagt - sonst faellt eine
+            # Verwechslung erst am Ergebnis auf.
+            if not hinweis_auf_projekt(text, self.projekt):
+                hinweis = f"Läuft in {self.projekt.name}."
+                vorspann = f"{vorspann} {hinweis}".strip() if vorspann else hinweis
+        bilder = list(self.bilder)
+        self.bilder.clear()
+        self.eingabe.clear()
+
+        if self._sparmodus_aktiv and not dringend:
+            # Block 77, Punkt 3: Sparmodus bei knappem Wochenkontingent -
+            # nur Auftraege mit "Dringend: ja" laufen, alle anderen sammeln
+            # sich hier statt in self._warteschlange und werden erst
+            # eingereiht, wenn die Warnung endet (siehe _sparmodus_setzen).
+            self._sparmodus_wartend.append(
+                (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
+                 modell_wunsch, modell_grund, quelle, zeit, modell_sticky, modell_hinweis))
+            # Block 82: "Wartet: ..." zaehlt auch Sparmodus-Zurueckstellungen
+            # mit - anders als die bestehende Kopfzeilen-Warteanzeige, die
+            # bewusst nur self._warteschlange zeigt (siehe _warteschlange_zeigen).
+            self._statusleiste_aktualisieren()
+            satz = "Wochenkontingent knapp, Auftrag wartet, bis das nicht mehr gilt."
+            if vorspann:
+                satz = f"{vorspann} {satz}"
+            log.info("Auftrag im Sparmodus zurueckgestellt: %s", text[:120])
+            self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
+            self._status_zeigen(satz)
+            if block_angesagt:
+                self.sprecher.sprich("Er wartet wegen des Sparmodus.", art="auftrag")
+            else:
+                self.sprecher.sprich(
+                    "Auftrag erhalten, er wartet wegen des Sparmodus.", art="auftrag")
+            return
+
+        if self._auftrag_laeuft or self._kontingent_info is not None:
+            # Es laeuft schon einer - oder die Sitzung wartet gerade auf ein
+            # erschoepftes Kontingent (core/sitzung.py, auftrag(),
+            # "kontingent"). Der neue geht nicht verloren und blockiert
+            # nichts, sondern reiht sich ein und laeuft los, sobald der
+            # vorherige fertig ist.
+            self._warteschlange.append(
+                (text, bilder, bruecke_nummer, block_nummer, eingang_datei,
+                 modell_wunsch, modell_grund, quelle, zeit, modell_sticky, modell_hinweis))
+            self._warteschlange_zeigen()
+            satz = f"Auftrag vorgemerkt, Platz {platzwort(len(self._warteschlange) + 1)}."
+            if vorspann:
+                satz = f"{vorspann} {satz}"
+            log.info("Auftrag in die Warteschlange auf Platz %d: %s",
+                     len(self._warteschlange) + 1, text[:120])
+            self._verlauf_anhaengen(f"{satz} {text}", "hinweis")
+            self._status_zeigen(satz)
+            # Auch ein wartender Auftrag wird einmal kurz bestaetigt, sonst
+            # bliebe das Abschicken voellig ohne hoerbare Antwort. War schon
+            # eine Blocknummer angesagt (_block_verarbeiten), wird die
+            # Annahme nicht ein zweites Mal gesprochen, nur das Warten.
+            if block_angesagt:
+                self.sprecher.sprich("Er wartet noch.", art="auftrag")
+            else:
+                self.sprecher.sprich("Auftrag erhalten, er wartet noch.", art="auftrag")
+            return
+
+        self._auftrag_starten(text, bilder, vorspann=vorspann, block_angesagt=block_angesagt,
+                               bruecke_nummer=bruecke_nummer, block_nummer=block_nummer,
+                               eingang_datei=eingang_datei, modell_wunsch=modell_wunsch,
+                               modell_grund=modell_grund, quelle=quelle, zeit=zeit,
+                               modell_sticky=modell_sticky, modell_hinweis=modell_hinweis)
+
+    def _auftrag_starten(self, text: str, bilder: list[Path], vorspann: str = "",
+                          ansagen: bool = True, block_angesagt: bool = False,
+                          bruecke_nummer: int | None = None,
+                          block_nummer: int | None = None,
+                          eingang_datei: Path | None = None,
+                          modell_wunsch: str | None = None,
+                          modell_grund: str | None = None,
+                          quelle: str = "Eingabe",
+                          zeit: datetime | None = None,
+                          modell_sticky: str | None = None,
+                          modell_hinweis: str = "") -> None:
+        """Uebergibt genau einen Auftrag an den Arbeitsfaden und stellt die
+        Anzeige darauf ein. Gerufen wird das von `_absenden` fuer den ersten
+        Auftrag und von `_naechsten_starten` fuer jeden aus der Warteschlange.
+
+        Gesprochen wird hier genau ein kurzer Satz: "Auftrag erhalten." Der
+        `vorspann` und der Verbindungshinweis stehen nur noch im Ausgabefeld
+        und in der Statuszeile - gesprochen wuerden sie sich mit der naechsten
+        Ansage ueberlagern. `ansagen=False` schweigt hier ganz, weil
+        `_naechsten_starten` den Auftrag aus der Warteschlange holt, dessen
+        Annahme beim Abschicken schon bestaetigt wurde.
+
+        `bruecke_nummer` ist nur bei einem #CODE#-Auftrag aus der Bruecke
+        gesetzt (core/bruecke.py, Vorhaben "Bruecke" Stufe B3) - gemerkt, bis
+        `_fertig()` den Bericht dorthin hochlaedt. `block_nummer` ist die
+        Blocknummer (core/bloecke.py, "Block N", None ohne Nummer) - gemerkt,
+        bis `_fertig()` sie in den Bericht schreibt.
+
+        `modell_wunsch` (Block 77, Punkte 1/2) ist ein CLI-Kurzname ("opus",
+        "sonnet", "haiku") - verbindet die Sitzung ueber den Arbeitsfaden fuer
+        GENAU diesen Auftrag mit diesem Modell und direkt danach wieder mit
+        der festen Voreinstellung (`self.modell`, seit Block 662 immer
+        Sonnet): core/faden.py verarbeitet "modell"- und "auftrag"-Eintraege
+        streng der Reihe nach, darum reicht es, Hin- und Rueckwechsel
+        unmittelbar vor bzw. nach `auftrag_geben` einzureihen. `modell_grund`
+        ist nur bei einer
+        Hochstufung nach Fehlschlaegen gesetzt (Punkt 2) - dann bleibt die
+        Ansage aus (Robert ist in dieser Lage oft nicht am Platz), nur der
+        Bericht bekommt den Vermerk; ohne Grund (ausdruecklicher Wunsch per
+        "Modell: …"-Zeile) wird die Umstellung angesagt.
+
+        `modell_sticky` (Block 649/662, "#MODELL# name" direkt nach der
+        Markierung oder ganz ohne Markierung) wird GENAUSO wie `modell_wunsch`
+        nur fuer diesen einen Auftrag gesetzt und danach zurueckgewechselt:
+        `self.modell` ist seit Block 662 immer die feste Voreinstellung
+        (core/modelle.py, VOREINSTELLUNG, Sonnet) und wird nirgends mehr
+        dauerhaft veraendert - weder durch F12 (das Feld entfaellt) noch durch
+        eine "#MODELL#"-Zeile. `modell_hinweis` (z.B. unbekannter Name) landet
+        unveraendert im Bericht, ohne dass etwas unternommen wird."""
+        self._auftrag_laeuft = True
+        self._bruecke_code_nummer = bruecke_nummer
+        self._aktueller_block_nummer = block_nummer
+        self._eingang_code_datei = eingang_datei
+        self._laufender_modell_wunsch = modell_wunsch
+        self._laufender_modell_grund = modell_grund
+        self._laufender_modell_hinweis = modell_hinweis
+        # Block 82: Kennung fuer "Läuft: ..." - siehe Docstring von
+        # self._laufender_block_nummer in __init__.
+        self._laufender_block_nummer = block_nummer
+        self._laufender_quelle = quelle
+        self._laufender_zeit = zeit or datetime.now()
+        self._statusleiste_aktualisieren()
+        # Wie bei einem Terminalbefehl faengt jeder Auftrag mit einem leeren
+        # Feld an - egal ob #code#, #run# oder #admin#, egal ob frisch
+        # abgeschickt oder aus der Warteschlange geholt. Bliebe die alte
+        # Ausgabe stehen, waere ueber die Sprachausgabe nicht zu
+        # unterscheiden, was zum neuen Auftrag gehoert und was vom vorigen
+        # uebrig ist.
+        self._ausgabe_leeren("Auftrag an Claude Code")
+        self._verlauf_anhaengen(text, "auftrag")
+        self.letzter_auftrag = text
+        self._aktuelle_bilder = list(bilder)
+        self.letzter_verbrauch = {}
+        # Die Statuszeile zeigt keine laufende Arbeit an, nur Ergebnisse.
+        self._status_zeigen("")
+        self._taetigkeit_zeigen("beginnt")
+        self._auftrags_beginn = datetime.now()
+        self.zeit_anzeige.setText("0 s")
+        self._auftrags_uhr.start()
+        self.balken.animation_starten()
+
+        faden = getattr(self, "faden", None)
+        # Block 77: ein Modellwunsch braucht den Arbeitsfaden, um die Sitzung
+        # umzuschalten - ohne ihn (siehe "faden is None" unten) entfaellt er,
+        # das ist der seltene Fall ganz am Anfang, bevor der erste Faden steht.
+        einmal_modell = modell_wunsch if (faden is not None and modell_wunsch) else None
+        if einmal_modell:
+            lang, _kurz = anzeige_name(einmal_modell)
+            if modell_grund:
+                satz_modell = f"Modell {lang}, {modell_grund}"
+            else:
+                ziel = f"für Block {block_nummer}." if block_nummer is not None \
+                    else "für diesen Auftrag."
+                satz_modell = f"Modell {lang} {ziel}"
+            # Die naechsten zwei Meldungen von _modell_verbunden (Hin- und
+            # Rueckwechsel) bleiben stumm, siehe dort - die Ansage uebernimmt
+            # hier direkt dieser eine Satz.
+            self._modell_eigenauftrag_rest += 2
+            faden.modell_setzen(einmal_modell)
+            log.info("Einmaliger Modellwechsel fuer diesen Auftrag: %s (%s)",
+                     einmal_modell, modell_grund or "ausdruecklicher Wunsch")
+            if modell_grund:
+                self._verlauf_anhaengen(satz_modell, "hinweis")
+            else:
+                self.sprecher.sprich(satz_modell, art="immer")
+                self._verlauf_anhaengen(satz_modell, "hinweis")
+        # Block 662: "#MODELL# name" direkt nach der Markierung oder ganz ohne
+        # Markierung - wie `einmal_modell` oben NUR fuer diesen einen Auftrag,
+        # mit Ruecksprung auf `self.modell` (Sonnet) danach, siehe Docstring.
+        einmal_sticky = modell_sticky if (faden is not None and modell_sticky) else None
+        if einmal_sticky:
+            lang, kurz = anzeige_name(einmal_sticky)
+            satz_sticky = f"Modell {kurz} für diesen Auftrag."
+            # Wie bei einmal_modell: Hin- und Rueckwechsel bleiben stumm,
+            # dieser Satz uebernimmt die Ansage.
+            self._modell_eigenauftrag_rest += 2
+            faden.modell_setzen(einmal_sticky)
+            log.info("Modellwechsel fuer diesen Auftrag (#MODELL#-Zeile): %s", einmal_sticky)
+            self.sprecher.sprich(satz_sticky, art="immer")
+            self._verlauf_anhaengen(satz_sticky, "hinweis")
+        if faden is None:
+            # Der Arbeitsfaden steht noch nicht. Der Auftrag wird gemerkt und
+            # in _wartende_absenden nachgereicht, sobald es ihn gibt.
+            self._wartende_auftraege.append((text, bilder))
+            self._taetigkeit_zeigen("wartet")
+            log.info("Auftrag vorgemerkt, Arbeitsfaden fehlt noch: %s", text[:120])
+            self._status_zeigen(
+                f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
+            if ansagen and not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            return
+        if faden.sitzung is None:
+            self._taetigkeit_zeigen("verbindet")
+            faden.auftrag_geben(text, bilder)
+            if einmal_modell or einmal_sticky:
+                faden.modell_setzen(self.modell)
+            self._status_zeigen(
+                f"{vorspann or 'Auftrag angenommen.'} Verbindung wird noch aufgebaut.")
+            if ansagen and not block_angesagt:
+                self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+            return
+        if ansagen and not block_angesagt:
+            self.sprecher.sprich("Auftrag erhalten.", art="auftrag")
+        faden.auftrag_geben(text, bilder)
+        if einmal_modell or einmal_sticky:
+            faden.modell_setzen(self.modell)
+
+    def _warteschlange_zeigen(self) -> None:
+        """Bringt die Zahl der wartenden Auftraege in die Kopfzeile."""
+        try:
+            self.ausgabekopf.warteschlange_zeigen(len(self._warteschlange))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Warteschlange nicht angezeigt: %s", fehler)
+        self._statusleiste_aktualisieren()
+
+    # -- Block 82: Leiste "Läuft"/"Wartet" ueber dem Ausgabefeld -------------
+
+    def _laeuft_kennung(self) -> str:
+        """Kennung des GERADE LAUFENDEN Auftrags (CODE, RUN, ADMIN oder BILD)
+        fuer "Läuft: ..." - "–", solange nichts laeuft. Eine Kontingent-Pause
+        (self._kontingent_info) zaehlt als "läuft": der Auftrag ist nicht
+        verloren, nur kurz angehalten (core/fenster.py, _kontingent_pause_behandeln)."""
+        if self._kontingent_info is not None:
+            info = self._kontingent_info
+            return auftrags_kennung(
+                info.get("block_nummer"), info.get("quelle") or "Eingabe",
+                info.get("zeit") or datetime.now(),
+            )
+        laeuft = (
+            self._auftrag_laeuft
+            or (self._terminal_faden is not None and self._terminal_faden.isRunning())
+            or (self._bild_faden is not None and self._bild_faden.isRunning())
+        )
+        if not laeuft:
+            return "–"
+        return auftrags_kennung(
+            self._laufender_block_nummer, self._laufender_quelle or "Eingabe",
+            self._laufender_zeit or datetime.now(),
+        )
+
+    def _wartet_kennungen(self) -> list[str]:
+        """Kennungen aller wartenden Auftraege in Reihenfolge fuer
+        "Wartet: ..." - aus drei Quellen, mit Beleg:
+
+        1. self._warteschlange - CODE-Auftraege aus Eingabefeld, Zwischenablage
+           (F7/Waechter), Eingangsordner oder Bruecke, aufgereiht in
+           `_absenden`, sobald schon ein Auftrag laeuft (siehe dort).
+        2. self._sparmodus_wartend - dieselben Quellen, aber vom Sparmodus
+           zurueckgestellt (F12 -> Verhalten, siehe _absenden).
+        3. core.eingangsordner.wartende_dateien() - #RUN#/#ADMIN#/#BILD#-
+           Auftraege aus dem Eingangsordner, die wegen belegtem Terminal/
+           Screenshot-Weg per AuftragSpaeter zurueckgestellt wurden (core/
+           eingangsordner.py, `verarbeiten`/`zuruecklegen`) UND frisch
+           angekommene, noch nicht beanspruchte Dateien - beide liegen
+           ununterscheidbar direkt im Eingangsordner. Dateien fuer ein
+           anderes als das hier offene Projekt bekommen den Projektnamen
+           davor (core/grundlagen.py, auftrags_kennung)."""
+        kennungen = []
+        for eintrag in (*self._warteschlange, *self._sparmodus_wartend):
+            _text, _bilder, _bruecke_nummer, block_nummer, _eingang_datei, \
+                _modell_wunsch, _modell_grund, quelle, zeit, _modell_sticky, \
+                _modell_hinweis = eintrag
+            kennungen.append(auftrags_kennung(block_nummer, quelle, zeit))
+        try:
+            for pfad in wartende_dateien():
+                try:
+                    auftrag = auftrag_lesen(pfad, markierung_erkennen)
+                except EingangsFehler:
+                    continue
+                block_nummer, _rest, _vollstaendig = block_erkennen(auftrag.art, auftrag.inhalt)
+                zeit = datetime.fromtimestamp(pfad.stat().st_mtime)
+                quelle = "Brücke" if auftrag.quelle == QUELLE_BRUECKE else "Eingang"
+                projekt = auftrag.projekt if (
+                    auftrag.projekt and not projekt_gleichwertig(auftrag.projekt, self.projekt.name)
+                ) else None
+                kennungen.append(auftrags_kennung(block_nummer, quelle, zeit, projekt))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Eingangsordner-Dateien nicht in 'Wartet' uebernommen: %s", fehler)
+        return kennungen
+
+    def _statusleiste_satz(self) -> str:
+        """Der gesprochene Satz fuer F2 ('Wo stehen wir') - derselbe Inhalt
+        wie die Leiste, nur als Satz."""
+        wartet = self._wartet_kennungen()
+        wartet_satz = ", ".join(wartet) if wartet else "keiner"
+        return f"Läuft: {self._laeuft_kennung()}. Wartet: {wartet_satz}."
+
+    def _statusleiste_aktualisieren(self) -> None:
+        """Zeichnet die Leiste ueber dem Ausgabefeld neu - aufgerufen bei
+        jeder Aenderung: Auftragsstart/-ende (CODE/RUN/ADMIN/BILD),
+        Warteschlangen-Aenderung (_warteschlange_zeigen) und beim
+        periodischen Blick des Eingangswaechters (_eingang_fremde_melden)."""
+        try:
+            self.laeuft_anzeige.setText(f"Läuft: {self._laeuft_kennung()}")
+            wartet = self._wartet_kennungen()
+            wartet_text = ", ".join(wartet) if wartet else "–"
+            self.wartet_anzeige.setText(f"Wartet: {wartet_text}")
+            satz = self._statusleiste_satz()
+            self.laeuft_anzeige.setToolTip(satz)
+            self.wartet_anzeige.setToolTip(satz)
+            self.laeuft_anzeige.setAccessibleDescription(satz)
+            self.wartet_anzeige.setAccessibleDescription(satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Statusleiste nicht aktualisiert: %s", fehler)
+
+    def _kontingent_stufe_setzen(self, feld: QLabel, stufe: str) -> None:
+        if str(feld.property("kontingentstufe") or "") != stufe:
+            feld.setProperty("kontingentstufe", stufe)
+            feld.style().unpolish(feld)
+            feld.style().polish(feld)
+
+    def _kontingent_zeigen(self, stufe: str, text: str, woche_anzeige: str,
+                            sitzung_anzeige: str | None) -> None:
+        """Zeichnet die beiden Kontingent-Felder in der Statusleiste neu -
+        hierher aus core/kopfzeile.py verlegt (Block 36/37 -> 82). Gerufen von
+        _kontingent_anzeige_aktualisieren() mit dem Ergebnis von
+        Sitzung.kontingent_zustand(). Ohne bekannte Prozentzahl steht ein
+        ruhiger Platzhalter ("Sitzung: –") statt einer erfundenen Zahl oder
+        eines verborgenen Feldes - so springt die Leiste nicht, wenn die erste
+        RateLimitEvent-Meldung eintrifft."""
+        try:
+            stufe = stufe or "normal"
+            satz = text or "Woche: unter Warnschwelle."
+
+            self.kontingent_anzeige.setText(woche_anzeige or "Woche: unter Warnschwelle")
+            self.kontingent_anzeige.setToolTip(satz)
+            self.kontingent_anzeige.setAccessibleDescription(satz)
+            self._kontingent_stufe_setzen(self.kontingent_anzeige, stufe)
+
+            self.kontingent_sitzung_anzeige.setText(sitzung_anzeige or "Sitzung: –")
+            self.kontingent_sitzung_anzeige.setToolTip(satz)
+            self.kontingent_sitzung_anzeige.setAccessibleDescription(satz)
+            self._kontingent_stufe_setzen(
+                self.kontingent_sitzung_anzeige, stufe if sitzung_anzeige else "normal"
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kontingent-Anzeige nicht gesetzt: %s", fehler)
+
+    # -- Block 82 (Punkt 3): Platzhalter fuer den Waechter-Farbknopf ---------
+
+    def _waechter_platzhalter_geometrie(self) -> dict | None:
+        """Globale Bildschirmkoordinaten und Groesse des Platzhalters ganz
+        links in der Statusleiste - die Grundlage, auf die sich der
+        eigenstaendige Waechter-Prozess (core/waechter_anzeige.py) per
+        Fenstergeometrie legt. None, solange dieses Fenster minimiert, nicht
+        sichtbar oder der Platzhalter noch nicht ausgemessen ist (vor dem
+        ersten Layout) - der Waechter blendet sich dann aus (ausser bei
+        Haengt/Abgestuerzt, siehe dort)."""
+        platzhalter = getattr(self, "waechter_platzhalter", None)
+        if platzhalter is None or self.isMinimized() or not self.isVisible():
+            return None
+        if platzhalter.width() <= 0 or platzhalter.height() <= 0:
+            return None
+        ecke = platzhalter.mapToGlobal(QPoint(0, 0))
+        return {
+            "x": ecke.x(), "y": ecke.y(),
+            "breite": platzhalter.width(), "hoehe": platzhalter.height(),
+        }
+
+    def _naechsten_starten(self) -> None:
+        """Holt den naechsten Auftrag aus der Warteschlange, sobald der
+        vorherige beendet ist. Ist sie leer, geschieht nichts."""
+        self._warteschlange_zeigen()
+        if not self._warteschlange:
+            return
+        text, bilder, bruecke_nummer, block_nummer, eingang_datei, modell_wunsch, \
+            modell_grund, quelle, zeit, modell_sticky, modell_hinweis = self._warteschlange.pop(0)
+        self._warteschlange_zeigen()
+        log.info("Nächster Auftrag aus der Warteschlange: %s", text[:120])
+        rest = len(self._warteschlange)
+        satz = "Nächster Auftrag aus der Warteschlange."
+        if rest:
+            satz += f" Danach warten noch {rest}." if rest > 1 else " Danach wartet noch einer."
+        # Ohne Unterbrechen: der Ergebnissatz des vorherigen Auftrags darf
+        # nicht abgeschnitten werden.
+        self.sprecher.sprich(satz, unterbrechen=False, art="meldung")
+        self._auftrag_starten(text, bilder, ansagen=False, bruecke_nummer=bruecke_nummer,
+                               block_nummer=block_nummer, eingang_datei=eingang_datei,
+                               modell_wunsch=modell_wunsch, modell_grund=modell_grund,
+                               quelle=quelle, zeit=zeit,
+                               modell_sticky=modell_sticky, modell_hinweis=modell_hinweis)
+
+    @slot_geschuetzt
+    def _warteschlange_leeren(self) -> None:
+        """F4: verwirft alle wartenden Auftraege. Der gerade laufende bleibt -
+        den beendet der Not-Aus (F8)."""
+        anzahl = len(self._warteschlange)
+        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
+                _modell_grund, _quelle, _zeit, _modell_sticky, _modell_hinweis \
+                in self._warteschlange:
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, "Warteschlange geleert")
+        self._warteschlange.clear()
+        self._warteschlange_zeigen()
+        if anzahl == 0:
+            satz = "Warteschlange ist schon leer."
+        elif anzahl == 1:
+            satz = "Warteschlange geleert, ein Auftrag verworfen."
+        else:
+            satz = f"Warteschlange geleert, {anzahl} Aufträge verworfen."
+        log.info("Warteschlange geleert: %d Auftraege verworfen", anzahl)
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz)
+
+    @slot_geschuetzt
+    def _warteschlange_verwalten(self) -> None:
+        """Umschalt+F4: oeffnet die Warteschlange als Liste, damit ein
+        einzelner wartender Auftrag entfernt werden kann - ohne wie F4 alle
+        auf einmal zu verwerfen. Robert reiht z.B. versehentlich einen
+        zweiten Auftrag ein, waehrend ein anderer laeuft, und will nur
+        diesen einen wieder herausnehmen."""
+        if not self._warteschlange:
+            satz = "Warteschlange ist leer."
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="fehler")
+            return
+        vorher = len(self._warteschlange)
+        dialog = WarteschlangenFenster(self._warteschlange, self)
+        dialog.exec()
+        self._warteschlange_zeigen()
+        entfernt = vorher - len(self._warteschlange)
+        if entfernt <= 0:
+            return
+        satz = ("Ein Auftrag aus der Warteschlange entfernt." if entfernt == 1
+                else f"{entfernt} Aufträge aus der Warteschlange entfernt.")
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz)
+
+    def _vormerkung_zeigen(self, sichtbar: bool) -> None:
+        """Blendet die Kachel "Trotzdem hier ausführen" ein oder aus. Sie steht
+        nur da, solange ein Auftrag vorgemerkt ist - sonst zeigte sie auf
+        nichts."""
+        try:
+            self.kacheln.kachel_zeigen(TROTZDEM_KENNUNG, sichtbar)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Kachel für die Vormerkung nicht umgeschaltet: %s", fehler)
+
+    @slot_geschuetzt
+    def _f5(self) -> None:
+        """F5 hat drei Bedeutungen, je nach Lage: liegt ein unvollstaendig
+        angekommener Block vor (core/bloecke.py), fuehrt F5 ihn trotzdem
+        aus. Sonst, haelt die Projektwarnung gerade einen Auftrag zurueck,
+        fuehrt F5 ihn hier aus. Sonst springt sie wie gewohnt ins
+        Eingabefeld."""
+        if self._pending_block is not None:
+            self._block_trotzdem_ausfuehren()
+            return
+        if vormerkung_offen():
+            self._trotzdem_hier()
+            return
+        self._springe(self.eingabe, "Eingabefeld")
+
+    @slot_geschuetzt
+    def _block_trotzdem_ausfuehren(self) -> None:
+        """F5 bei einem unvollstaendig angekommenen Block: er laeuft doch,
+        obwohl die Zeile "Ende Block N" fehlte."""
+        info, self._pending_block = self._pending_block, None
+        if info is None:
+            return
+        satz = f"Block {info['nummer']} läuft trotzdem."
+        log.info("Unvollstaendiger Block %d wird trotzdem ausgefuehrt (Art %s)",
+                 info["nummer"], info["art"] or "code")
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="auftrag")
+        art, inhalt = info["art"], info["inhalt"]
+        if art == "bild":
+            self._bild_markierung(block_nummer=info["nummer"])
+        elif art in ("run", "admin"):
+            self._terminal_markierung(art, inhalt, block_nummer=info["nummer"])
+        else:
+            self.bilder = list(info["bilder"])
+            self._absenden(vorspann="Auftrag angenommen.", art=art, inhalt=inhalt,
+                            block_angesagt=True)
+
+    @slot_geschuetzt
+    def _block_verwerfen(self) -> None:
+        """Escape bei einem unvollstaendig angekommenen Block: verwerfen,
+        statt ihn auszufuehren."""
+        info, self._pending_block = self._pending_block, None
+        if info is None:
+            return
+        satz = f"Block {info['nummer']} verworfen."
+        log.info("Unvollstaendiger Block %d verworfen (Art %s)",
+                 info["nummer"], info["art"] or "code")
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.sprecher.sprich(satz, art="hinweis")
+
+    @slot_geschuetzt
+    def _trotzdem_hier(self) -> None:
+        """F5 nach einer Projektwarnung: der vorgemerkte Auftrag läuft doch im
+        geöffneten Projekt. Die Vormerkung ist damit verbraucht, ein
+        Projektwechsel holt ihn nicht mehr nach."""
+        roh = vormerkung_einloesen()
+        self._vormerkung_zeigen(False)
+        if not roh:
+            satz = "Es ist kein Auftrag vorgemerkt."
+            self._status_zeigen(satz)
+            self.sprecher.sprich(satz, art="meldung")
+            return
+        satz = f"Auftrag läuft trotzdem in {self.projekt.name}."
+        log.info("%s %s", satz, roh[:120])
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.eingabe.setPlainText(roh)
+        # Wie beim Nachholen im richtigen Projekt: die Zuordnungspruefung wird
+        # uebergangen, sonst hielte dieselbe Warnung den Auftrag sofort wieder
+        # auf.
+        self._holt_vorgemerkten = True
+        try:
+            self._absenden(vorspann=satz)
+        finally:
+            self._holt_vorgemerkten = False
+
+    @slot_geschuetzt
+    def _vorgemerkten_holen(self) -> None:
+        """Ein Auftrag, der in einem anderen Projekt abgeschickt wurde, aber
+        hierher gehoert, laeuft beim Oeffnen dieses Projekts von allein."""
+        roh = vormerkung_abholen(self.projekt.name)
+        self._vormerkung_zeigen(False)
+        if not roh:
+            return
+        satz = "Vorgemerkter Auftrag wird jetzt ausgeführt."
+        log.info("%s %s", satz, roh[:120])
+        self._verlauf_anhaengen(satz, "hinweis")
+        self._status_zeigen(satz)
+        self.eingabe.setPlainText(roh)
+        self._holt_vorgemerkten = True
+        try:
+            self._absenden(vorspann=satz)
+        finally:
+            self._holt_vorgemerkten = False
+
+    def _wartende_absenden(self) -> None:
+        """Reicht Auftraege nach, die vor dem Arbeitsfaden abgeschickt wurden."""
+        if not self._wartende_auftraege:
+            return
+        wartend, self._wartende_auftraege = self._wartende_auftraege, []
+        for text, bilder in wartend:
+            log.info("Vorgemerkten Auftrag nachgereicht: %s", text[:120])
+            self.faden.auftrag_geben(text, bilder)
+
+    def _not_aus(self) -> None:
+        """F8: bricht den laufenden Auftrag ab. Wartende Auftraege werden
+        dabei mit verworfen - sonst liefe nach dem Not-Aus der naechste von
+        allein los, was niemand erwartet, der eben alles gestoppt hat.
+        Schaltet zusaetzlich die Bruecke aus, falls sie an war
+        (wissen/plan_bruecke.md, Stufe B3). Bricht ausserdem einen laufenden
+        #run#/#admin#-Terminalbefehl hart ab (Block 106) - frueher rief diese
+        Methode nur self.faden.not_aus() (die Claude-Code-Sitzung), ein
+        haengender Terminalbefehl lief dabei unbeeinflusst weiter."""
+        if self._terminal_faden is not None and self._terminal_faden.isRunning():
+            self._terminal_faden.not_aus()
+            log.info("Not-Aus: laufender Terminalbefehl abgebrochen")
+        verworfen = len(self._warteschlange)
+        for _text, _bilder, _bruecke_nummer, _block_nummer, eingang_datei, _modell_wunsch, \
+                _modell_grund, _quelle, _zeit, _modell_sticky, _modell_hinweis \
+                in self._warteschlange:
+            if eingang_datei is not None:
+                verwerfen(eingang_datei, "Not-Aus")
+        self._warteschlange.clear()
+        self._warteschlange_zeigen()
+        kontingent_verworfen = self._kontingent_info is not None
+        if kontingent_verworfen and self._kontingent_info.get("eingang_datei") is not None:
+            verwerfen(self._kontingent_info["eingang_datei"], "Not-Aus")
+        self._kontingent_uhr.stop()
+        self._kontingent_info = None
+        satz = "Not-Aus."
+        if verworfen == 1:
+            satz += " Ein wartender Auftrag verworfen."
+        elif verworfen > 1:
+            satz += f" {verworfen} wartende Aufträge verworfen."
+        if kontingent_verworfen:
+            satz += " Kontingent-Pause beendet, wartender Auftrag verworfen."
+        werte = einstellungen_lesen()
+        if bool(werte.get("bruecke_aktiv", False)):
+            werte["bruecke_aktiv"] = False
+            einstellungen_schreiben(werte)
+            self._bruecke_zustand_anwenden()
+            satz += " Brücke aus."
+            log.info("Not-Aus: Brücke zusätzlich ausgeschaltet")
+        if bool(werte.get("leitstand_aktiv", False)):
+            werte["leitstand_aktiv"] = False
+            einstellungen_schreiben(werte)
+            self._leitstand_zustand_anwenden()
+            satz += " Leitstand aus."
+            log.info("Not-Aus: Leitstand zusätzlich ausgeschaltet")
+        log.info("Not-Aus, wartende Auftraege verworfen: %d", verworfen)
+        # "Abgebrochen." kommt gleich ueber _fertig - diese Zwischenmeldung
+        # bleibt still, sonst spricht CWB zweimal fuer denselben Abbruch.
+        self.sprecher.sprich(satz)
+        self.faden.not_aus()
+
+    def _zuruecknehmen(self) -> None:
+        if not self.faden.sitzung:
+            return
+        urteil = self.faden.sitzung.rueckgaengig()
+        self._status_zeigen(urteil.ansage())
+        self.sprecher.sprich(urteil.ansage())
+
+    def _bild_waehlen(self) -> None:
+        muster = "Bilder (" + " ".join(f"*{e}" for e in BILD_ENDUNGEN) + ")"
+        pfade, _ = QFileDialog.getOpenFileNames(self, "Bild anhängen", "", muster)
+        for pfad in pfade:
+            self.bilder.append(Path(pfad))
+        if pfade:
+            anzahl = len(self.bilder)
+            self.sprecher.sprich(
+                "Ein Bild angehängt." if anzahl == 1 else f"{anzahl} Bilder angehängt."
+            )
+
+    def _projekt_wechseln(self) -> None:
+        """Faden sauber beenden, Projektwahl öffnen, dieses Fenster schließen."""
+        self.wechselt = True
+        if self in OFFENE_FENSTER:
+            OFFENE_FENSTER.remove(self)
+        self.sprecher.sprich("Projekt wechseln.")
+        try:
+            self.faden.beenden()
+            self.faden.wait(5000)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Faden beim Projektwechsel nicht beendet: %s", fehler)
+        self.start_fenster = Start(self.sprecher, Werkbank, automatisch=False)
+        self.start_fenster.resize(1200, 850)
+        self.start_fenster.show()
+        self.close()
+
+    def _neustart(self) -> None:
+        """Beendet den laufenden Python-Prozess und startet ihn neu - wie ein
+        Neuladen einer Seite. Anders als der Projektwechsel (F9) verwirft das
+        auch jeden internen Zustand, der nicht in Dateien gesichert ist."""
+        self.sprecher.sprich("Kompletter Neustart.")
+        self.wechselt = True
+        if self in OFFENE_FENSTER:
+            OFFENE_FENSTER.remove(self)
+        try:
+            self.faden.beenden()
+            self.faden.wait(5000)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Faden beim Neustart nicht beendet: %s", fehler)
+        try:
+            # os.execv wartet unter Windows intern auf das Prozessende des
+            # neuen Prozesses, bevor der alte sich beendet - das alte Fenster
+            # friert dabei ein, statt zu verschwinden. Daher ein eigener,
+            # entkoppelter Prozess statt eines echten Prozess-Austauschs.
+            subprocess.Popen(self._neustart_befehl(), cwd=str(CWB_WURZEL))
+        except OSError as fehler:
+            log.error("Neustart gescheitert: %s", fehler)
+            self.sprecher.sprich("Neustart gescheitert.", art="fehler")
+            return
+        self.close()
+        QApplication.instance().quit()
+
+    def _neustart_befehl(self) -> list[str]:
+        """Baut die Kommandozeile fuer den Neustart-Unterprozess.
+
+        Im gepackten Zustand (starter.py, setzt `sys.frozen`) hat starter.py
+        beim eigenen Start `sys.argv[0]` auf `core/fenster.py` umgeschrieben,
+        damit runpy die Datei als __main__ ausfuehrt. Ein Neustart ueber
+        `sys.argv` wuerde deshalb core/fenster.py direkt aufrufen und ohne
+        den von starter.py gesetzten Suchpfad zum Ordner `pakete` sofort an
+        einem fehlenden PySide6-Import scheitern - das Fenster verschwindet,
+        ohne dass je ein neues erscheint. Deshalb im gepackten Zustand immer
+        ueber starter.py neu starten, im Skript-Start (kein sys.frozen)
+        bleibt der bisherige Weg ueber sys.argv unveraendert."""
+        if getattr(sys, "frozen", False):
+            einstieg = CWB_WURZEL / "starter.py"
+            return [sys.executable, str(einstieg)] + sys.argv[1:]
+        return [sys.executable] + sys.argv
+
+    def _bild_aus_ablage(self) -> bool:
+        ablage = QGuiApplication.clipboard().image()
+        if ablage.isNull():
+            return False
+        ziel = CWB_WURZEL / ".ablage"
+        try:
+            ziel.mkdir(parents=True, exist_ok=True)
+            datei = ziel / f"ablage_{len(self.bilder) + 1}.png"
+            ablage.save(str(datei), "PNG")
+        except OSError as fehler:
+            log.error("Bild aus Zwischenablage nicht speicherbar: %s", fehler)
+            return False
+        self.bilder.append(datei)
+        self.sprecher.sprich("Bild aus Zwischenablage angehängt.")
+        return True
+
+    def eventFilter(self, gegenstand, ereignis) -> bool:
+        """Haelt Strg+Mausrad von den Textfeldern fern: Qt wuerde damit zoomen
+        und die Schriftgroesse aus stil.qss ueberschreiben."""
+        art = ereignis.type()
+        if art == QEvent.Wheel and (ereignis.modifiers() & Qt.ControlModifier):
+            return True
+        return super().eventFilter(gegenstand, ereignis)
+
+    def keyPressEvent(self, ereignis) -> None:
+        if ereignis.matches(QKeySequence.Paste) and self._bild_aus_ablage():
+            return
+        super().keyPressEvent(ereignis)
+
+    def changeEvent(self, ereignis) -> None:
+        super().changeEvent(ereignis)
+        # Zurueck im Vordergrund: ein waehrenddessen fertig gewordener Bericht
+        # wird jetzt nachgelegt, ohne fremdes Kopiergut zu ueberschreiben.
+        if ereignis.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._bericht_nachlegen()
+        # Ein neues Stilblatt bringt eine neue Schriftgroesse mit: die eine
+        # Zeile wird dann neu ausgemessen und der Text passend gekuerzt. Neu
+        # gemessen wird nur bei echtem Schriftwechsel - sonst wuerde jede
+        # Groessenaenderung des Fensters (ueber stil_verzoegert) hier immer
+        # wieder unnoetig die Kopfzeilen-Maße anfassen.
+        if ereignis.type() in (QEvent.StyleChange, QEvent.FontChange) and hasattr(
+            self, "ausgabekopf"
+        ):
+            schrift = self.font()
+            schluessel = (schrift.family(), round(schrift.pointSizeF(), 1))
+            if schluessel != self._kopf_schrift_merker:
+                self._kopf_schrift_merker = schluessel
+                # Setzt nur feste Masse an den Kopfzeilen-Widgets selbst
+                # (core/kopfzeile.py, masse_festlegen). Ruehrt die
+                # Fenstergroesse nicht mehr an - das war die Quelle der
+                # resizeEvent-Kaskaden (Korrektur loeste selbst ein neues
+                # resizeEvent aus, das die Skalierung erneut anstiess).
+                self.ausgabekopf.masse_festlegen()
+            self.ausgabekopf.status_zeichnen()
+
+    def resizeEvent(self, ereignis) -> None:
+        super().resizeEvent(ereignis)
+        # Wiedereintritts-Sperre: setStyleSheet() (in stil_anwenden) loest an
+        # jedem Widget - auch hier - ein StyleChange-Ereignis aus, das ueber
+        # Qt auch ein resizeEvent nach sich ziehen kann. Das ist keine echte
+        # Groessenaenderung durch den Nutzer, sondern ein Nachbeben der
+        # eigenen Skalierung - hier wird es nicht weiterverarbeitet, sonst
+        # startete stil_verzoegert seinen Zeitgeber immer wieder neu.
+        if stil_wird_angewandt():
+            return
+        log.info(
+            "resizeEvent %s: %dx%d (vorher %dx%d)",
+            datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            self.width(),
+            self.height(),
+            ereignis.oldSize().width(),
+            ereignis.oldSize().height(),
+        )
+        stil_verzoegert(self.width(), self.height())
+        # Die Meldung in der Kopfzeile bleibt einzeilig, also muss die Kuerzung
+        # zur neuen Breite passen. Beim allerersten Ereignis steht sie noch nicht.
+        if hasattr(self, "ausgabekopf"):
+            self.ausgabekopf.status_zeichnen()
+
+    def _hintergrundfaeden_beenden(self) -> None:
+        """Block 424: stoppt BildFaden, TerminalFaden und den Leitstand-Faden,
+        bevor das Fenster selbst zerstoert wird.
+
+        Alle drei haengen per Qt-Elternschaft an `self` (siehe `eltern`-
+        Parameter bei ihrer Erzeugung) und wurden bislang beim Schliessen
+        nicht beruecksichtigt: lief einer noch (z.B. ein #RUN#-Gradle-Build
+        waehrend Strg+F4), zerstoerte Qt ihn zusammen mit dem Fenster, obwohl
+        `isRunning()` noch wahr war - Qt beantwortet das nicht mit einer
+        Ausnahme, sondern mit qFatal() und einem harten Prozessabbruch
+        (Absturz vom 08.10.2026, 16:58 Uhr: Gradle lief noch, Strg+F4 kam
+        dazwischen). `not_aus()` nutzt denselben Abbruchweg wie F8, der den
+        Prozessbaum sofort beendet, darum reicht hier ein kurzes Zeitlimit."""
+        faden = self._terminal_faden
+        if faden is not None and faden.isRunning():
+            faden.not_aus()
+            if not faden.wait(8000):
+                log.error(
+                    "Terminalbefehl liess sich beim Beenden nicht rechtzeitig abbrechen"
+                )
+
+        bild = self._bild_faden
+        if bild is not None and bild.isRunning():
+            if not bild.wait(BILD_ZEITLIMIT_S * 1000 + 5000):
+                log.error(
+                    "Bild-Auftrag liess sich beim Beenden nicht rechtzeitig abwarten"
+                )
+
+        entscheidung = self.leitstand_faden
+        if entscheidung is not None and entscheidung.isRunning():
+            if not entscheidung.wait(leitstand.zeitlimit_sekunden() * 1000 + 5000):
+                log.error(
+                    "Leitstand-Entscheidung liess sich beim Beenden nicht rechtzeitig "
+                    "abwarten"
+                )
+
+        # BerichtFaden/NachtberichtFaden (core/bruecke.py) stehen schon in
+        # einer eigenen Liste statt nur an einer lokalen Variable - trotzdem
+        # haengen sie per Qt-Elternschaft an `self` und muessen vor dem
+        # Zerstoeren fertig sein. Jeder Hochladeversuch ist durch
+        # bruecke.ZEITLIMIT_SEKUNDEN auf zwei kurze Anfragen begrenzt.
+        for faden in list(self._bruecke_berichte) + list(self._nachtberichte):
+            if faden.isRunning() and not faden.wait(20000):
+                log.error("Bruecken-Hochladung liess sich beim Beenden nicht abwarten")
+
+    def closeEvent(self, ereignis) -> None:
+        if self in OFFENE_FENSTER:
+            OFFENE_FENSTER.remove(self)
+        # Nicht die Maximiert-Geometrie merken, sondern die normale - sonst
+        # ließe sich nach dem nächsten Start keine kleinere Größe mehr sehen.
+        fenster_geometrie_merken(self.normalGeometry())
+        try:
+            waechter = getattr(self, "ablage_waechter", None)
+            if waechter is not None:
+                waechter.anhalten()
+            eingang_waechter = getattr(self, "eingang_waechter", None)
+            if eingang_waechter is not None:
+                eingang_waechter.anhalten()
+            self._bruecke_stoppen()
+            pausetaste = getattr(self, "_pausetaste", None)
+            if pausetaste is not None:
+                pausetaste.abmelden()
+            self._hintergrundfaeden_beenden()
+            self.faden.beenden()
+            self.faden.wait(5000)
+            if not self.wechselt:
+                self.sprecher.beenden()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Beenden gescheitert: %s", fehler)
+        super().closeEvent(ereignis)
+
+
+# ---------------------------------------------------------------------------
+# Programmstart
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Herzschlag fuer den Waechter-Prozess (core/waechter_anzeige.py)
+# ---------------------------------------------------------------------------
+# Der Waechter kennt CWB nur ueber STATUS_DATEI - ein eigener, unabhaengiger
+# Prozess, der genau deshalb auch anzeigt, wenn dieser Prozess haengt oder
+# abstuerzt. Der QTimer unten (main()) laeuft im GUI-Faden und schreibt die
+# Datei jede Sekunde neu; haengt der GUI-Faden, bleibt sie automatisch stehen
+# - das ist das Signal fuer den Waechter. "Arbeitet" gilt, sobald IRGENDEIN
+# offenes Fenster (OFFENE_FENSTER, mehrere Projekte moeglich) einen Auftrag
+# laufen hat (Werkbank._auftrag_aktiv, oben). Block 82 (Punkt 3): zusaetzlich
+# die globalen Bildschirmkoordinaten/Groesse des Waechter-Platzhalters in der
+# Statusleiste (Werkbank._waechter_platzhalter_geometrie) sowie "minimiert" -
+# der Waechter legt sich darauf und blendet sich bei minimiertem CWB aus
+# (ausser bei Haengt/Abgestuerzt). Bevorzugt die Geometrie desselben Fensters,
+# das gerade arbeitet; sonst das erste sichtbare, nicht minimierte Fenster.
+
+def _herzschlag_schreiben() -> None:
+    zustand = "bereit"
+    auftrag = ""
+    aktives_fenster = None
+    for fenster in list(OFFENE_FENSTER):
+        try:
+            if fenster._auftrag_aktiv():
+                zustand = "arbeitet"
+                auftrag = fenster._auftrag_kurz()
+                aktives_fenster = fenster
+                break
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Herzschlag: Fensterabfrage gescheitert: %s", fehler)
+
+    geometrie = None
+    minimiert = True
+    kandidaten = [aktives_fenster] if aktives_fenster is not None else list(OFFENE_FENSTER)
+    for fenster in kandidaten:
+        if fenster is None:
+            continue
+        try:
+            platz = fenster._waechter_platzhalter_geometrie()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Herzschlag: Platzhaltergeometrie gescheitert: %s", fehler)
+            continue
+        if platz is not None:
+            geometrie = platz
+            minimiert = False
+            break
+        if not fenster.isMinimized():
+            minimiert = False
+
+    try:
+        STATUS_DATEI.parent.mkdir(parents=True, exist_ok=True)
+        daten = {
+            "zeit": time.time(), "pid": os.getpid(), "zustand": zustand, "auftrag": auftrag,
+            "minimiert": minimiert,
+        }
+        if geometrie is not None:
+            daten.update(geometrie)
+        inhalt = json.dumps(daten, ensure_ascii=False)
+        temp = STATUS_DATEI.with_suffix(".tmp")
+        temp.write_text(inhalt, encoding="utf-8")
+        os.replace(temp, STATUS_DATEI)
+    except OSError as fehler:
+        log.error("Herzschlag nicht schreibbar: %s", fehler)
+
+
+def _herzschlag_beenden() -> None:
+    """An atexit gehaengt: haelt ein regulaeres Programmende fest, damit
+    core/waechter_anzeige.py es nicht faelschlich als Absturz meldet. atexit
+    laeuft bei einem echten Absturz/Kill nicht - genau der Unterschied, den
+    der Waechter braucht."""
+    try:
+        STATUS_DATEI.write_text(
+            json.dumps({"zeit": time.time(), "pid": os.getpid(), "zustand": "beendet"}),
+            encoding="utf-8",
+        )
+    except OSError as fehler:
+        log.error("Herzschlag (Ende) nicht schreibbar: %s", fehler)
+
+
+def _waechter_befehl() -> list[str]:
+    """Wie Werkbank._neustart_befehl: im gepackten Zustand (sys.frozen) ueber
+    starter.py, sonst fehlt der von starter.py gesetzte Suchpfad zum Ordner
+    'pakete' (PySide6 usw.) und der Waechter stuerzte sofort beim Import ab."""
+    if getattr(sys, "frozen", False):
+        einstieg = CWB_WURZEL / "starter.py"
+        return [sys.executable, str(einstieg), "--waechter-anzeige"]
+    return [sys.executable, str(Path(sys.argv[0]).resolve()), "--waechter-anzeige"]
+
+
+def _waechter_starten() -> None:
+    """Stoesst core/waechter_anzeige.py als eigenen, konsolenlosen Prozess an
+    - ueber denselben Startweg wie CWB selbst (_waechter_befehl). Scheitert
+    das, laeuft CWB trotzdem normal weiter, nur ohne Zustandsanzeige."""
+    try:
+        subprocess.Popen(
+            _waechter_befehl(),
+            cwd=str(CWB_WURZEL),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        log.info("Waechter-Anzeige gestartet")
+    except OSError as fehler:
+        log.error("Waechter-Anzeige nicht startbar: %s", fehler)
+
+
+def _waechter_anzeige_starten_und_beenden() -> None:
+    """Zweig fuer den Schalter --waechter-anzeige (siehe main()): dieser
+    Prozess wird zum Waechter selbst statt ein Hauptfenster aufzubauen - wie
+    _admin_worker_starten_und_beenden fuer --admin-worker."""
+    try:
+        from . import waechter_anzeige
+    except ImportError:
+        import waechter_anzeige
+    waechter_anzeige.main()
+
+
+def _admin_worker_starten_und_beenden() -> None:
+    """Nimmt CWB als erhoehten Worker-Prozess: gestartet mit --admin-worker
+    und --admin-schluessel, ohne jede Oberflaeche. Kehrt erst zurueck, wenn
+    sich der Worker von selbst beendet (siehe admin_worker_schleife)."""
+    schluessel = ""
+    if "--admin-schluessel" in sys.argv:
+        index = sys.argv.index("--admin-schluessel")
+        if index + 1 < len(sys.argv):
+            schluessel = sys.argv[index + 1]
+    admin_worker_schleife(schluessel)
+
+
+_ABSTURZ_HANDHABUNG = None
+_EINZELINSTANZ_MUTEX = None
+
+
+def _faulthandler_einrichten() -> None:
+    """Block 424: haelt cwb_absturz.log offen und schaltet Pythons eigenen
+    Absturz-Melder ein. logging erreicht einen harten Abbruch (Segfault,
+    qFatal(), abort()) nie - dafuer braucht es den C-Stapel, den nur
+    faulthandler mitschreibt. Die Datei muss fuer die gesamte Laufzeit offen
+    bleiben, darum das globale `_ABSTURZ_HANDHABUNG` statt einer lokalen
+    Variable, die der Speicherbereiniger sonst wieder schliessen wuerde."""
+    global _ABSTURZ_HANDHABUNG
+    try:
+        _ABSTURZ_HANDHABUNG = open(ABSTURZ_DATEI, "a", encoding="utf-8")
+        faulthandler.enable(file=_ABSTURZ_HANDHABUNG, all_threads=True)
+    except OSError as fehler:
+        log.error("faulthandler nicht einrichtbar: %s", fehler)
+
+
+def _einzelinstanz_sperre_linux() -> bool:
+    """Linux-Gegenstueck zum Named Mutex: eine flock-Sperre auf einer Datei
+    im Laufzeitordner. Auch sie gibt das Betriebssystem frei, sobald der
+    Prozess endet. Beim Neustart (Werkbank._neustart) laeuft die alte
+    Instanz noch kurz weiter - darum bis zu fuenf Sekunden Geduld."""
+    global _EINZELINSTANZ_MUTEX
+    import fcntl
+    import tempfile
+    ordner = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
+    try:
+        datei = open(ordner / f"cwb_hauptfenster_{os.getuid()}.lock", "a+")
+    except OSError as fehler:
+        log.error("Einzelinstanz-Sperrdatei nicht anlegbar: %s", fehler)
+        return True
+    ablauf = time.monotonic() + 5.0
+    while True:
+        try:
+            fcntl.flock(datei, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.monotonic() > ablauf:
+                datei.close()
+                return False
+            time.sleep(0.1)
+    _EINZELINSTANZ_MUTEX = datei
+    return True
+
+
+def _einzelinstanz_sicherstellen() -> bool:
+    """Block 424: legt einen systemweiten Named Mutex an, einmal pro
+    Windows-Anmeldesitzung.
+
+    Verhindert ein zweites Hauptfenster: am 08.10.2026 blockierte eine
+    bereits laufende CWB-Instanz mit ihrem systemweiten Pause-Hotkey
+    (core/pausetaste.py) jede weitere - Windows vergibt einen Hotkey nur
+    einmal, jeder weitere Versuch scheitert mit Fehlercode 1409 - und am
+    Ende liefen acht pythonw.exe-Prozesse gleichzeitig, weil nichts das
+    verhinderte. Ein Mutex statt einer Sperrdatei, weil Windows ihn
+    automatisch freigibt, sobald der haltende Prozess endet oder abstuerzt;
+    eine Sperrdatei bliebe nach einem Absturz liegen und muesste erst als
+    veraltet erkannt werden.
+
+    Gilt nur fuer das Hauptfenster, nicht fuer den Admin-Worker oder die
+    Waechter-Anzeige - die sind als Begleitprozesse gedacht und haben
+    eigene, einfachere Abstimmungen (ADMIN_SPERR_DATEI, STATUS_DATEI).
+
+    Gibt True zurueck, wenn dies die einzige Instanz ist (und haelt den
+    Mutex fuer die Lebenszeit des Prozesses offen); False, wenn schon eine
+    andere laeuft."""
+    global _EINZELINSTANZ_MUTEX
+    if sys.platform != "win32":
+        return _einzelinstanz_sperre_linux()
+    ERROR_ALREADY_EXISTS = 183
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetLastError(0)
+    griff = kernel32.CreateMutexW(None, False, "CWB_Hauptfenster_Einzelinstanz")
+    if not griff:
+        log.error("Einzelinstanz-Mutex nicht anlegbar (Fehler %s)", kernel32.GetLastError())
+        return True  # lieber ein zweites Fenster als eines, das nie startet
+    _EINZELINSTANZ_MUTEX = griff
+    return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+
+
+def _laeuft_bereits_ansagen() -> None:
+    """Kurzer gesprochener Hinweis ohne QApplication/Sprecher - die zweite
+    Instanz beendet sich, bevor sie Qt oder den vollen Sprachweg aufbaut.
+    Direkt ueber SAPI (wie core/sprache.py im Netzausfall), weil das ohne
+    Ereignisschleife funktioniert."""
+    log.warning("Zweite CWB-Instanz erkannt, beendet sich ohne eigenes Fenster")
+    text = "CWB läuft schon. Dieses Fenster beendet sich wieder."
+    try:
+        if sys.platform != "win32":
+            import shutil
+            for programm in (["espeak-ng", "-v", "de", "--"], ["espeak", "-v", "de", "--"],
+                             ["spd-say", "-l", "de", "-w"]):
+                if shutil.which(programm[0]):
+                    subprocess.run([*programm, text], timeout=15)
+                    break
+            return
+        import win32com.client
+        stimme = win32com.client.Dispatch("SAPI.SpVoice")
+        stimme.Speak(text)
+    except Exception as fehler:  # noqa: BLE001
+        log.error("Ansage der zweiten Instanz fehlgeschlagen: %s", fehler)
+
+
+def main() -> None:
+    # Muss vor allem anderen stehen: ab hier landet jeder Absturz im Log
+    # statt auf dem unsichtbaren stderr von pythonw. sys.excepthook faengt
+    # nur den Hauptfaden - threading.excepthook ist der eigene Zustaendige
+    # fuer alle ueber threading.Thread gestarteten Hintergrundfaeden und war
+    # bisher nicht gesetzt, Python schrieb dort mit seiner eigenen Vorgabe
+    # weiterhin auf das unsichtbare stderr.
+    _faulthandler_einrichten()
+    sys.excepthook = unbehandelte_ausnahme
+    threading.excepthook = unbehandelte_ausnahme_im_faden
+    # Meldungen, die Qt selbst erzeugt (qWarning/qCritical/qFatal aus der
+    # C++-Seite, z.B. bei einem Zugriff auf ein Widget aus dem falschen
+    # Faden) gingen bisher nach stderr - unter pythonw.exe ins Nichts. Ein
+    # qFatal() ruft diesen Handler noch vor dem harten Abbruch auf, darum
+    # bekommt auch ein sonst spurloser Absturz jetzt eine Zeile im Log.
+    qInstallMessageHandler(qt_meldung_behandeln)
+
+    # Steht bei jedem Start im Log, damit bei einem Fehlerbericht klar ist,
+    # welche Fassung lief.
+    log.info("CWB startet, Version %s", VERSION)
+
+    # Der erhoehte Admin-Worker ist derselbe Prozess, nur mit anderem
+    # Kommandozeilenschalter neu gestartet (siehe
+    # AdminWorkerVerwaltung._sicherstellen in core/terminal.py) - er braucht
+    # keine Oberflaeche und darf gar nicht erst ein QApplication aufbauen.
+    if "--admin-worker" in sys.argv:
+        _admin_worker_starten_und_beenden()
+        return
+
+    # Der Waechter (core/waechter_anzeige.py) ist derselbe Einstiegspunkt,
+    # nur mit anderem Kommandozeilenschalter neu gestartet (_waechter_befehl
+    # unten) - genau wie der Admin-Worker braucht er keine Werkbank-
+    # Oberflaeche und darf gar nicht erst eine aufbauen.
+    if "--waechter-anzeige" in sys.argv:
+        _waechter_anzeige_starten_und_beenden()
+        return
+
+    # Block 424: ein zweites Hauptfenster blockierte bisher stillschweigend
+    # die systemweiten Hotkeys (Pause, Strg+Umschalt+B) der ersten Instanz,
+    # statt sich zu erkennen zu geben.
+    if not _einzelinstanz_sicherstellen():
+        _laeuft_bereits_ansagen()
+        return
+
+    ADMIN_WORKER.sperre_schreiben()
+    atexit.register(ADMIN_WORKER.sperre_entfernen)
+
+    anwendung = QApplication(sys.argv)
+    stil_laden(anwendung)
+
+    sprecher = Sprecher()
+
+    # Frisch installierte Fassung mit leerem Datenordner: gibt es auf diesem
+    # Rechner eine aeltere Datenhaltung, wird sie genau einmal kopiert - vor
+    # der Ersteinrichtung, damit uebernommene Einstellungen sie ersparen.
+    uebernahme = erstuebernahme(EINSTELLUNGEN_DATEI)
+    if uebernahme is not None:
+        sprecher.sprich(uebernahme.ansage(), art="immer")
+
+    # Beim allerersten Start ist noch kein Projektordner gemerkt. Ohne ihn
+    # bliebe die Projektwahl leer, deshalb wird vorher gefragt.
+    if not pfade_vollstaendig():
+        log.info("Kein Projektordner eingestellt, Ersteinrichtung wird gezeigt")
+        Ersteinrichtung(sprecher).exec()
+
+    fenster = Start(sprecher, Werkbank)
+    fenster.resize(1200, 850)
+    fenster.show()
+
+    threading.Thread(
+        target=sprecher.vorwaermen,
+        args=(FESTE_SAETZE,),
+        daemon=True,
+    ).start()
+
+    # Herzschlag fuer den Waechter: ab sofort jede Sekunde, damit die Datei
+    # von Anfang an frisch ist, statt die ersten Sekunden als "kein
+    # Herzschlag" zu zeigen. atexit sorgt beim regulaeren Ende dafuer, dass
+    # der Waechter das von einem Absturz unterscheiden kann (siehe
+    # _herzschlag_beenden) - bei einem echten Absturz laeuft atexit nicht.
+    _herzschlag_schreiben()
+    herzschlag_uhr = QTimer(anwendung)
+    herzschlag_uhr.setInterval(1000)
+    herzschlag_uhr.timeout.connect(_herzschlag_schreiben)
+    herzschlag_uhr.start()
+    atexit.register(_herzschlag_beenden)
+    _waechter_starten()
+
+    sys.exit(anwendung.exec())
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("CWB abgestürzt: %s", fehler)
+        print(f"CWB abgestürzt: {fehler}")

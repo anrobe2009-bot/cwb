@@ -1,0 +1,17 @@
+/* CWB - Waechter-Anzeige (core/waechter_anzeige.py)
+   Block 82: kleiner angedockter Farbknopf statt freischwebendem Wortfenster
+   - Farbe ist der einzige Kanal, Robert erkennt grosse Farbflaechen, keine
+   Buchstaben (siehe CLAUDE.md/Gedaechtnis zu seiner Restsehkraft). Groesse
+   und Stelle bestimmt CWB ueber den Platzhalter in der Statusleiste
+   (core/fenster.py, _waechter_platzhalter_geometrie); hier nur die Farbe,
+   grob getrennt und kraeftig statt fein abgestuft. */
+
+#waechterKnopf {
+    border: 2px solid #000000;
+    border-radius: 50%;
+}
+
+#waechterKnopf[zustand="arbeitet"] { background-color: #1aa34a; }  /* Gruen */
+#waechterKnopf[zustand="bereit"]   { background-color: #2563eb; }  /* Blau  */
+#waechterKnopf[zustand="haengt"]      { background-color: #d62f2f; }  /* Rot */
+#waechterKnopf[zustand="abgestuerzt"] { background-color: #d62f2f; }  /* Rot */

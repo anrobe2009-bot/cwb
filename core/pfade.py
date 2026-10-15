@@ -1,0 +1,486 @@
+"""
+CWB - Code Workbench
+Pfade: wo die Projekte liegen, wo die Skills liegen.
+
+Reines Python ohne Oberflaeche. Dadurch koennen sicherheit.py und wissen.py
+hier lesen, ohne Qt zu laden, und grundlagen.py holt sich von hier die
+Einstellungsdatei.
+
+Nichts ist fest auf einen Rechner eingetragen. Der Code der beiden fest
+eingebauten Werkzeuge liegt in index/ und memory_hub/ (INDEX_ORDNER); ihre
+Daten - Gedaechtnis und Vektordatenbank - liegen ausserhalb des
+Programmordners unter %LOCALAPPDATA%\\CWB (core/datenordner.py,
+HUB_DATENBANK, INDEX_DATEN), damit sie jeden Programmwechsel ueberleben.
+Projektordner und Skill-Ordner werden beim ersten Start gefragt
+(core/ersteinrichtung.py) und in einstellungen.json unter dem Schluessel
+"pfade" gemerkt:
+
+    "pfade": {
+      "projektwurzel": "D:/Arbeit",
+      "skills":        "C:/Users/Name/.claude/skills"
+    }
+
+Fehlt ein Schluessel ganz, gilt der Vorschlag.
+"""
+
+import json
+import logging
+import sys
+import tempfile
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+try:
+    from . import datenordner as _datenordner
+except ImportError:
+    import datenordner as _datenordner
+
+CWB_WURZEL = Path(__file__).resolve().parent.parent
+EINSTELLUNGEN_DATEI = CWB_WURZEL / "einstellungen.json"
+LOG_DATEI = CWB_WURZEL / "cwb_fehler.log"
+# Block 424: faulthandler (core/fenster.py main()) schreibt hier den
+# C-Stapel eines harten Abbruchs hinein, den logging nie erreicht - etwa
+# ein Qt-qFatal() oder ein Segfault. Eigene Datei statt cwb_fehler.log,
+# weil faulthandler ohne Formatierung roh in das offene Handle schreibt.
+ABSTURZ_DATEI = CWB_WURZEL / "cwb_absturz.log"
+
+# Einzige Stelle, an der die Versionsnummer steht - Fenstertitel, Einstellungen,
+# Hilfe (F1) und der Start-Logeintrag lesen sie von hier. Wie sie kuenftig
+# steigt, steht in CLAUDE.md unter "Versionsnummer".
+VERSION = "1.6.4"
+
+# Das Log waechst sonst unbegrenzt. Ist die Datei voll, wandert sie nach
+# cwb_fehler.log.1, die aelteren rutschen nach; alles jenseits der dritten
+# Sicherung faellt weg.
+LOG_GROESSE = 500 * 1024
+LOG_SICHERUNGEN = 3
+LOG_FORM = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+
+class _SicheresRotierendesLog(RotatingFileHandler):
+    """Wie RotatingFileHandler, aber eine fehlgeschlagene Drehung darf nie
+    dazu fuehren, dass jeder weitere Eintrag stillschweigend verlorengeht.
+
+    Am 12.09.2026 gegen 11:29 Uhr blieb die Logdatei kurz vor der Groessen-
+    grenze stehen: die naechste Zeile stiess die Drehung an, die scheiterte
+    vermutlich, weil ein anderer Prozess cwb_fehler.log gleichzeitig offen
+    hielt (RotatingFileHandler.rotate() nutzt os.rename, das Windows bei
+    einem fremden Zugriff auf Quelle oder Ziel mit PermissionError ablehnt).
+    Die Standardklasse faengt so einen Fehler zwar ab (handleError schreibt
+    nur nach stderr, in einer Fenster-Anwendung ohne Konsole also ins
+    Nichts), verwirft dabei aber genau den Log-Satz, der die Drehung
+    ausgeloest hat - und weil die Datei dadurch weiter ueber der Grenze
+    bleibt, versucht jeder folgende Aufruf dieselbe Drehung erneut, scheitert
+    erneut und verwirft wieder seinen Satz: das Log blieb seither leer.
+    Hier wird die Drehung stattdessen in einem eigenen try/except versucht;
+    schlaegt sie fehl, wird das genutzte Handle sichergestellt und der Satz
+    trotzdem geschrieben - die Datei waechst dann eben ueber die Grenze
+    hinaus, bis sich die Drehung wieder ausfuehren laesst, statt dass CWB
+    blind wird."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if self.shouldRollover(record):
+                try:
+                    self.doRollover()
+                except OSError as fehler:
+                    print(
+                        f"CWB: Log-Drehung fehlgeschlagen, schreibe ohne Drehung weiter: "
+                        f"{fehler}",
+                        file=sys.stderr,
+                    )
+                    if self.stream is None and not self.delay:
+                        self.stream = self._open()
+            logging.FileHandler.emit(self, record)
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
+def log_einrichten() -> None:
+    """Haengt den rotierenden Schreiber einmalig an den Wurzel-Logger.
+
+    Jedes Modul ruft das beim Laden auf; der zweite und jeder weitere Aufruf
+    tut nichts. Nur so bekommen alle Module dieselbe Rotation - `basicConfig`
+    wirkte immer nur beim zuerst geladenen Modul."""
+    wurzel = logging.getLogger()
+    for vorhanden in wurzel.handlers:
+        if getattr(vorhanden, "_cwb_log", False):
+            return
+    schreiber = _SicheresRotierendesLog(
+        str(LOG_DATEI),
+        maxBytes=LOG_GROESSE,
+        backupCount=LOG_SICHERUNGEN,
+        encoding="utf-8",
+    )
+    schreiber.setFormatter(logging.Formatter(LOG_FORM))
+    schreiber._cwb_log = True
+    wurzel.addHandler(schreiber)
+    wurzel.setLevel(logging.INFO)
+
+
+log_einrichten()
+log = logging.getLogger("cwb.pfade")
+
+PFADE_SCHLUESSEL = "pfade"
+PROJEKTWURZEL = "projektwurzel"
+SKILLS = "skills"
+ZUSATZPROJEKTE_SCHLUESSEL = "zusatzprojekte"
+FREIGABEN_SCHLUESSEL = "freigaben"
+
+
+# ---------------------------------------------------------------------------
+# Einstellungsdatei. Sie liegt hier und nicht in grundlagen.py, damit auch
+# Module ohne Oberflaeche sie lesen koennen.
+# ---------------------------------------------------------------------------
+
+def einstellungen_lesen() -> dict:
+    """Liest einstellungen.json. Fehlt sie oder ist sie kaputt: leer."""
+    try:
+        werte = json.loads(EINSTELLUNGEN_DATEI.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as fehler:
+        log.info("einstellungen.json nicht lesbar: %s", fehler)
+        return {}
+    return werte if isinstance(werte, dict) else {}
+
+
+def einstellungen_schreiben(werte: dict) -> None:
+    """Schreibt einstellungen.json. Scheitert das, läuft CWB trotzdem weiter."""
+    try:
+        EINSTELLUNGEN_DATEI.write_text(
+            json.dumps(werte, ensure_ascii=False, indent=2) + chr(10),
+            encoding="utf-8",
+        )
+    except OSError as fehler:
+        log.error("einstellungen.json nicht schreibbar: %s", fehler)
+
+
+# ---------------------------------------------------------------------------
+# Lesen und Merken einzelner Pfade
+# ---------------------------------------------------------------------------
+
+def pfade_lesen() -> dict:
+    """Der Abschnitt "pfade" aus den Einstellungen, immer als Wörterbuch."""
+    werte = einstellungen_lesen().get(PFADE_SCHLUESSEL)
+    return werte if isinstance(werte, dict) else {}
+
+
+def _pfad_gemerkt(schluessel: str) -> str | None:
+    """Der gemerkte Text zu einem Schlüssel. `None`, wenn nie etwas gesetzt
+    wurde; ein leerer Text heisst ausdrücklich "gibt es hier nicht"."""
+    wert = pfade_lesen().get(schluessel)
+    return wert.strip() if isinstance(wert, str) else None
+
+
+def pfad_merken(schluessel: str, pfad: Path | str | None) -> None:
+    """Schreibt einen Pfad in einstellungen.json. `None` merkt sich als
+    leerer Text, also als bewusstes "nicht vorhanden"."""
+    werte = einstellungen_lesen()
+    abschnitt = werte.get(PFADE_SCHLUESSEL)
+    if not isinstance(abschnitt, dict):
+        abschnitt = {}
+    abschnitt[schluessel] = "" if pfad is None else str(Path(pfad))
+    werte[PFADE_SCHLUESSEL] = abschnitt
+    einstellungen_schreiben(werte)
+    log.info("Pfad gemerkt: %s = %s", schluessel, abschnitt[schluessel] or "(leer)")
+
+
+# -- Projektwurzel ----------------------------------------------------------
+
+def projektwurzel_vorschlag() -> Path:
+    """Der Ordner über dem CWB-Ordner. Dort liegen die Projekte üblicherweise
+    nebeneinander, CWB selbst ist eines davon."""
+    return CWB_WURZEL.parent
+
+
+def projektwurzel() -> Path | None:
+    """Der eingestellte Projektordner, sonst `None`. Ohne ihn kann CWB keine
+    Projektliste aufbauen - dann wird beim Start danach gefragt."""
+    gemerkt = _pfad_gemerkt(PROJEKTWURZEL)
+    if gemerkt:
+        return Path(gemerkt)
+    return None
+
+
+def projektwurzel_merken(pfad: Path | str) -> None:
+    pfad_merken(PROJEKTWURZEL, pfad)
+
+
+# -- Skill-Ordner -----------------------------------------------------------
+
+def skill_ordner_vorschlag() -> Path:
+    """Der übliche Ort von Claude Code: `.claude/skills` im Benutzerordner."""
+    return Path.home() / ".claude" / "skills"
+
+
+def skill_ordner() -> Path:
+    """Der eingestellte Skill-Ordner, sonst der Vorschlag. Gibt es ihn nicht,
+    bleibt die Skill-Liste leer - gebrochen wird nichts."""
+    gemerkt = _pfad_gemerkt(SKILLS)
+    if gemerkt:
+        return Path(gemerkt)
+    return skill_ordner_vorschlag()
+
+
+def skill_ordner_merken(pfad: Path | str) -> None:
+    pfad_merken(SKILLS, pfad)
+
+
+# -- Datenordner ----------------------------------------------------------------
+# Laufzeitdaten, die einen Programmwechsel ueberleben muessen, liegen unter
+# %LOCALAPPDATA%\CWB (core/datenordner.py) - nicht im Programmordner. Beim
+# Laden werden alte Bestaende aus dem Programmordner einmalig hinuebergeholt.
+
+_datenordner.daten_umziehen()
+DATENORDNER = _datenordner.datenordner()
+
+
+# -- Memory Hub ---------------------------------------------------------------
+# Festes Werkzeug, braucht keine Einstellung und keinen Vorschlag. Der Code
+# liegt in memory_hub/ (HUB_ORDNER), die Datenbank im Datenordner. `memory.db`
+# legt core/wissen.py bzw. memory_hub/memory_db.py selbst an, wenn sie fehlt
+# (siehe dort, CREATE TABLE IF NOT EXISTS) - ein frischer CWB-Start ohne
+# Datei ist der Normalfall bei einer verschenkten Kopie. Seit Block 61 bietet
+# core/sitzung.py die Werkzeuge (memory_hub/sdk_werkzeuge.py) direkt beim
+# Verbinden ueber das Agent SDK an, kein externer MCP-Prozess mehr noetig.
+
+HUB_ORDNER = CWB_WURZEL / "memory_hub"
+HUB_DATENBANK = _datenordner.hub_datenbank()
+
+
+# -- Code-Index ---------------------------------------------------------------
+# Festes Werkzeug, braucht ebenfalls keine Einstellung und keinen Vorschlag.
+# INDEX_ORDNER ist der Code (cli.py, indexer.py, mcp_server.py), INDEX_DATEN
+# die Vektordatenbank samt Manifesten im Datenordner.
+
+INDEX_ORDNER = CWB_WURZEL / "index"
+INDEX_DATEN = _datenordner.index_datenordner()
+
+
+# -- Landkarte ------------------------------------------------------------------
+# core/landkarte.py erzeugt pro Projekt wissen/landkarte.md (welche Datei
+# wofuer). Das Manifest zur Aenderungserkennung - dieselbe Methode wie beim
+# Code-Index, Datei-Stat statt Inhalts-Hash - liegt hier im Datenordner,
+# nicht im Projekt selbst.
+
+LANDKARTE_DATEN = DATENORDNER / "landkarte"
+
+
+# -- Eingangsordner -----------------------------------------------------------
+# Aufträge, die nicht über die Zwischenablage hereinkommen, sondern als Datei
+# abgelegt werden (Zeitschaltung, später die Brücke zu claude.ai im Browser -
+# siehe wissen/plan_bruecke.md). core/eingangsordner.py legt die drei
+# Unterordner selbst an.
+
+EINGANG_ORDNER = DATENORDNER / "eingang"
+
+
+# -- Bruecke -------------------------------------------------------------------
+# Vorhaben "Bruecke" Stufe B3 (siehe wissen/plan_bruecke.md, core/bruecke.py):
+# Zugangsdaten fuer den Connector-Dienst aus dem Projekt max-friends. Liegt
+# im Datenordner statt im Programmordner, weil die Datei das PC-Token
+# enthaelt und nie in Git landen darf; core/bruecke.py loggt ihren Inhalt nie.
+
+BRUECKE_ZUGANG_DATEI = DATENORDNER / "bruecke_zugang.txt"
+
+
+# -- Herzschlag / Waechter-Anzeige ---------------------------------------------
+# core/fenster.py schreibt hier jede Sekunde den Arbeitszustand (Zeitstempel,
+# PID, "arbeitet"/"bereit"/"beendet", kurze Auftragsbezeichnung) sowie, seit
+# Block 82, die globalen Bildschirmkoordinaten/Groesse des Waechter-
+# Platzhalters in der Statusleiste und ob CWB minimiert ist; der
+# eigenstaendige Prozess core/waechter_anzeige.py liest das und legt einen
+# kleinen, immer oben liegenden Farbknopf genau darauf - bleibt die Datei
+# stehen, haengt oder ist CWB abgestuerzt, genau das ist das Signal. Liegt im
+# Datenordner, nicht im Programmordner, aus demselben Grund wie Gedaechtnis
+# und Code-Index: muss jeden Programmwechsel ueberleben.
+
+STATUS_DATEI = DATENORDNER / "status.json"
+WAECHTER_SPERR_DATEI = DATENORDNER / "waechter.pid"
+
+
+# -- Leitstand -----------------------------------------------------------------
+# Block 72 (siehe wissen/plan_leitstand.md, core/leitstand.py): nachts oder wenn
+# Robert nicht da ist, uebernimmt Gemini die Rolle der KI im Chat, die nicht
+# selbststaendig auf Berichte reagieren darf. Der Schluessel liegt wie beim
+# PC-Token der Bruecke im Datenordner, nie in Git, nie geloggt. Der
+# Zustand (Zaehler der Nacht, Wiederholungen je Schritt, Haltepunkte) liegt
+# in einer eigenen Datei statt in einstellungen.json, weil es Laufzeitstand
+# ist, keine Einstellung.
+
+LEITSTAND_ZUGANG_DATEI = DATENORDNER / "leitstand_zugang.txt"
+LEITSTAND_ZUSTAND_DATEI = DATENORDNER / "leitstand_zustand.json"
+
+
+# -- Zusatzprojekte ----------------------------------------------------------
+# Projekte ausserhalb der Projektwurzel: von Hand eingetragen im Reiter
+# "Projekte" der Einstellungen, mit frei waehlbarem Anzeigenamen. Sie stehen
+# nicht unter "pfade", sondern als eigene Liste in einstellungen.json:
+#
+#   "zusatzprojekte": [
+#     {"name": "Lisa", "pfad": "E:/Sonstiges/lisa"}
+#   ]
+#
+# Optional ein Feld "aliase" (Liste von Zeichenketten), z.B.
+#
+#   {"name": "Max und frriends", "pfad": "C:/MAX-Friends",
+#    "aliase": ["max-friends", "Max & Friends"]}
+#
+# core/eingangsordner.py (Block 70, Teil C, projekt_gleichwertig) nutzt das,
+# um einen abweichend geschriebenen Projektnamen im Feld "projekt" einer
+# Eingangsordner-/Bruecken-Datei trotzdem dem richtigen Projekt zuzuordnen -
+# ohne Alias zaehlt dort nur Gross-/Kleinschreibung, Bindestrich und
+# Leerzeichen als unscharf.
+
+def zusatzprojekte_lesen() -> list[dict]:
+    """Die gepflegte Projektliste. Ungueltige Eintraege (ohne Name oder
+    Pfad) werden stillschweigend uebergangen. Das Feld "aliase" bleibt leer,
+    wenn es fehlt oder keine Liste ist - dann zaehlt fuer diesen Eintrag nur
+    der unscharfe Abgleich ohne Aliase."""
+    liste = einstellungen_lesen().get(ZUSATZPROJEKTE_SCHLUESSEL)
+    if not isinstance(liste, list):
+        return []
+    ergebnis = []
+    for eintrag in liste:
+        if not isinstance(eintrag, dict):
+            continue
+        name = str(eintrag.get("name", "")).strip()
+        pfad = str(eintrag.get("pfad", "")).strip()
+        if not (name and pfad):
+            continue
+        roh_aliase = eintrag.get("aliase")
+        aliase = [str(a).strip() for a in roh_aliase if str(a).strip()] \
+            if isinstance(roh_aliase, list) else []
+        gepflegt = {"name": name, "pfad": pfad}
+        if aliase:
+            gepflegt["aliase"] = aliase
+        ergebnis.append(gepflegt)
+    return ergebnis
+
+
+def zusatzprojekte_schreiben(liste: list[dict]) -> None:
+    werte = einstellungen_lesen()
+    werte[ZUSATZPROJEKTE_SCHLUESSEL] = liste
+    einstellungen_schreiben(werte)
+
+
+def zusatzprojekt_hinzufuegen(name: str, pfad: Path | str) -> None:
+    """Nimmt ein Projekt in die gepflegte Liste auf. Steht der Name schon
+    dort, wird der alte Eintrag ersetzt."""
+    name = name.strip()
+    pfad = str(Path(pfad))
+    liste = [e for e in zusatzprojekte_lesen() if e["name"] != name]
+    liste.append({"name": name, "pfad": pfad})
+    zusatzprojekte_schreiben(liste)
+    log.info("Zusatzprojekt gemerkt: %s = %s", name, pfad)
+
+
+def zusatzprojekt_entfernen(name: str) -> None:
+    liste = [e for e in zusatzprojekte_lesen() if e["name"] != name]
+    zusatzprojekte_schreiben(liste)
+    log.info("Zusatzprojekt entfernt: %s", name)
+
+
+# -- Freigaben ----------------------------------------------------------------
+# Ordner ausserhalb des Projekts, in denen core/sicherheit.py (Ordnergrenze)
+# ohne Rueckfrage liest und schreibt. Gepflegt im Reiter "Freigaben" der
+# Einstellungen, mit Ordnerdialog hinzugefuegt und wieder entfernbar. Die
+# Sperrliste fuer Zugangsdaten und die verbotenen Befehle gelten in jeder
+# Freigabe unveraendert weiter (core/sicherheit.py).
+#
+#   "freigaben": [
+#     {"name": "Skill-Ordner", "pfad": "C:/Users/Name/.claude/skills"}
+#   ]
+#
+# Fehlt der Schluessel ganz - beim allerersten Aufruf - wird er mit den drei
+# bisher fest eingebauten Ausnahmen gefuellt und gleich gesichert. Ist er
+# vorhanden, auch als leere Liste, gilt er unveraendert: nur so lassen sich
+# die Voreintraege dauerhaft entfernen.
+
+def freigaben_vorgaben() -> list[dict]:
+    """Die bisher fest eingebauten Ausnahmen, als Voreintraege der Liste."""
+    return [
+        {"name": "Skill-Ordner", "pfad": str(Path.home() / ".claude" / "skills")},
+        {"name": "Claude-Temp-Ordner", "pfad": str(Path(tempfile.gettempdir()) / "claude")},
+        {"name": "cwb-werkzeuge", "pfad": str(Path.home() / ".cwb-werkzeuge")},
+    ]
+
+
+def freigaben_lesen() -> list[dict]:
+    """Die gepflegte Freigabenliste. Fehlt der Schluessel ganz, wird er mit
+    den Voreintraegen gefuellt; ungueltige Eintraege (ohne Pfad) werden
+    stillschweigend uebergangen."""
+    werte = einstellungen_lesen()
+    liste = werte.get(FREIGABEN_SCHLUESSEL)
+    if liste is None:
+        vorgaben = freigaben_vorgaben()
+        freigaben_schreiben(vorgaben)
+        return vorgaben
+    if not isinstance(liste, list):
+        return []
+    ergebnis = []
+    for eintrag in liste:
+        if not isinstance(eintrag, dict):
+            continue
+        name = str(eintrag.get("name", "")).strip()
+        pfad = str(eintrag.get("pfad", "")).strip()
+        if pfad:
+            ergebnis.append({"name": name or Path(pfad).name or pfad, "pfad": pfad})
+    return ergebnis
+
+
+
+def freigaben_schreiben(liste: list[dict]) -> None:
+    werte = einstellungen_lesen()
+    werte[FREIGABEN_SCHLUESSEL] = liste
+    einstellungen_schreiben(werte)
+
+
+def _freigabe_vereinheitlicht(pfad: str) -> str:
+    """Vergleichsform eines Freigabepfads, robust gegen Gross-/Kleinschreibung
+    und Schreibweise. Loest sich der Pfad nicht auf, bleibt der Text stehen."""
+    try:
+        return str(Path(pfad).resolve()).lower()
+    except (OSError, ValueError):
+        return str(pfad).strip().lower()
+
+
+def freigabe_hinzufuegen(pfad: Path | str) -> None:
+    """Nimmt einen Ordner in die Freigabenliste auf. Liegt er schon drin,
+    wird der alte Eintrag ersetzt."""
+    pfad = str(Path(pfad))
+    ziel = _freigabe_vereinheitlicht(pfad)
+    liste = [e for e in freigaben_lesen() if _freigabe_vereinheitlicht(e["pfad"]) != ziel]
+    liste.append({"name": Path(pfad).name or pfad, "pfad": pfad})
+    freigaben_schreiben(liste)
+    log.info("Freigabe hinzugefügt: %s", pfad)
+
+
+def freigabe_entfernen(pfad: Path | str) -> None:
+    ziel = _freigabe_vereinheitlicht(str(pfad))
+    liste = [e for e in freigaben_lesen() if _freigabe_vereinheitlicht(e["pfad"]) != ziel]
+    freigaben_schreiben(liste)
+    log.info("Freigabe entfernt: %s", pfad)
+
+
+# -- Zustand ----------------------------------------------------------------
+
+def pfade_vollstaendig() -> bool:
+    """Wahr, sobald ein vorhandener Projektordner eingestellt ist. Nur er
+    wird gebraucht; Skills und Memory Hub dürfen fehlen."""
+    wurzel = projektwurzel()
+    if wurzel is None:
+        return False
+    if not wurzel.is_dir():
+        log.warning("Eingestellte Projektwurzel gibt es nicht: %s", wurzel)
+        return False
+    return True
+
+
+if __name__ == "__main__":
+    print("Einstellungsdatei :", EINSTELLUNGEN_DATEI)
+    print("Projektwurzel     :", projektwurzel() or f"(nicht gesetzt, Vorschlag: {projektwurzel_vorschlag()})")
+    print("Skill-Ordner      :", skill_ordner())
+    print("Datenordner       :", DATENORDNER)
+    print("Memory Hub        :", HUB_DATENBANK if HUB_DATENBANK.is_file() else "(noch keine Eintraege)")
+    print("Code-Index        :", INDEX_DATEN if INDEX_DATEN.is_dir() else "(fehlt)")
+    print("Vollständig       :", pfade_vollstaendig())

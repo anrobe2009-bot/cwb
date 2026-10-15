@@ -1,0 +1,71 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.log
+*.log.*
+
+# Erzeugte Daten - nie Teil der Bilanz oder des Berichts
+.stimmen/
+.toene/
+.ablage/
+.cwb/
+
+# Code-Index und Memory Hub: ihre Daten liegen seit dem Umzug unter
+# %LOCALAPPDATA%\CWB (core/datenordner.py). Im Programmordner bleiben nur
+# Logs und die als *.umgezogen markierten Reste des Umzugs - beides gehoert
+# niemandem sonst und darf nie mitgepackt werden.
+index/chroma_db/
+index/manifeste/
+index/.sperre
+index/*.log
+index/*.log.*
+memory_hub/memory.db*
+memory_hub/*.log
+*.umgezogen
+
+# Persoenliche Einstellungen: enthaelt die Pfade dieses Rechners,
+# das zuletzt geoeffnete Projekt und den Tokenverbrauch.
+# Wird beim ersten Start neu angelegt (core/ersteinrichtung.py).
+einstellungen.json
+
+# Projektgedaechtnis: Tagebuch, offene Punkte und Archiv beschreiben
+# die eigene Arbeit und gehoeren niemandem sonst.
+wissen/tagebuch.md
+wissen/offen.md
+wissen/archiv/
+
+# Auftragsprotokolle: enthalten den Wortlaut jedes Auftrags.
+.cwb/protokoll/
+
+# Sicherungskopien und Testaufnahmen
+*.bak
+*.orig
+*.rej
+.probe_*.png
+
+# Gesicherte alte Historie - gehoert nicht ins neue Repository.
+.git_alt/
+
+# Betriebssystem und Editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+wissen/bilder/
+wissen/
+CWB_ANWEISUNG_FUER_KI.md
+*.sicherung*
+*_sicherung.json
+*.vor_block*
