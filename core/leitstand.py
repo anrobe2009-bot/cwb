@@ -1,7 +1,7 @@
 """
 CWB - Code Workbench
 Leitstand (Block 72/73, siehe wissen/plan_leitstand.md): nachts oder wenn
-Robert nicht da ist, uebernimmt dieses Modul die Rolle der KI im Chat, die
+der Nutzer nicht da ist, uebernimmt dieses Modul die Rolle der KI im Chat, die
 nicht selbststaendig auf Berichte reagieren darf - Chat und Claude Code
 bleiben unveraendert im Max-Abo.
 
@@ -120,7 +120,7 @@ VERBOTENE_MARKIERUNGEN = ("#RUN#", "#ADMIN#", "#BILD#")
 # Der Anbieter bekommt nie mehr als das hier - kein Code, keine Einkaufs-,
 # Gesundheits- oder Profildaten (wissen/plan_leitstand.md).
 _PROMPT = """Du bist der Leitstand eines Entwicklungswerkzeugs (CWB). \
-Robert ist gerade nicht da; ein anderes KI-Programm (Claude Code) hat nachts \
+Der Nutzer ist gerade nicht da; ein anderes KI-Programm (Claude Code) hat nachts \
 einen Schritt eines Nachtplans bearbeitet. Entscheide anhand des Nachtplans, \
 der offenen Punkte und des Berichts des gerade beendeten Schritts, wie es \
 weitergeht.
@@ -133,7 +133,7 @@ Auftragstext fuer Claude Code, auf Deutsch, ohne jede #CODE#/#RUN#/#ADMIN#/\
 
 Waehle "stopp", wenn der Plan erledigt ist, ein im Plan genannter Haltepunkt \
 erreicht ist, eine im Plan genannte Grenze ueberschritten wuerde, oder der \
-Bericht einen Fehler zeigt, den du ohne Rueckfrage an Robert nicht sinnvoll \
+Bericht einen Fehler zeigt, den du ohne Rueckfrage an den Nutzer nicht sinnvoll \
 beheben kannst. Waehle "wiederholen" nur, wenn der letzte Schritt sichtbar \
 fehlgeschlagen ist und ein erneuter Versuch mit angepasstem Auftrag \
 aussichtsreich ist.

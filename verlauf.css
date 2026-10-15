@@ -6,9 +6,9 @@
    steht, liegen die Farben in dieser Datei; fenster.py laedt sie nur.
 
    Drei Bedeutungen, drei Farben:
-     auftrag  - was Robert selbst geschrieben hat          (ruhiges Blau)
+     auftrag  - was der Nutzer selbst geschrieben hat          (ruhiges Blau)
      antwort  - die normale Antwort                        (helles Grau)
-     frage    - Rueckfrage an Robert, und Fehlermeldungen  (kraeftiges Rot)
+     frage    - Rueckfrage an den Nutzer, und Fehlermeldungen  (kraeftiges Rot)
 
    Die Unterscheidung liegt nie allein in der Farbe: jede Art traegt ein
    Vorsatzzeichen und ein Wort im Klartext, das der Screenreader mitliest. */

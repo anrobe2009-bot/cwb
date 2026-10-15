@@ -148,7 +148,7 @@ class AbsendenEndeZuEndeTest(unittest.TestCase):
         self.assertEqual(len(traeger._sparmodus_wartend), 1)
 
     def test_luecke_und_erhalten_kommen_als_eine_einzige_ansage(self):
-        """Block 103: Robert hoert bei der Auftragsannahme zwei sich
+        """Block 103: der Nutzer hoert bei der Auftragsannahme zwei sich
         ueberlagernde Stimmen, insbesondere wenn eine Block-Luecken-Warnung
         ("Bloecke X bis Y fehlen") neben "Block N erhalten" steht. Dieser
         Test stellt genau das nach: Block 5 kommt normal an, danach Block 10

@@ -4,7 +4,7 @@ Unit-Test fuer Werkbank._pausetaste_zustand_anwenden (core/fenster.py, Fehler
 1409): ist der Schalter "pause_screenshot" aus (Standard), darf
 PausenTaste.registrieren() gar nicht erst aufgerufen werden, sonst haelt CWB
 die beiden Hotkeys und das eigenstaendige Werkzeug "Pausetaste"
-(C:\\Users\\Entwickler\\.cwb-werkzeuge\\pausetaste) bekommt sie nicht mehr.
+(%USERPROFILE%\\.cwb-werkzeuge\\pausetaste) bekommt sie nicht mehr.
 
 Baut keine echte Werkbank (QMainWindow) und keine echten Win32-Hotkeys auf -
 PausenTaste wird durch ein Mock ersetzt, Werkbank._pausetaste_zustand_anwenden

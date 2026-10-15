@@ -276,7 +276,7 @@ EINGANG_ORDNER = DATENORDNER / "eingang"
 
 # -- Bruecke -------------------------------------------------------------------
 # Vorhaben "Bruecke" Stufe B3 (siehe wissen/plan_bruecke.md, core/bruecke.py):
-# Zugangsdaten fuer den Connector-Dienst aus dem Projekt max-friends. Liegt
+# Zugangsdaten fuer den Connector-Dienst aus dem Projekt mein-projekt. Liegt
 # im Datenordner statt im Programmordner, weil die Datei das PC-Token
 # enthaelt und nie in Git landen darf; core/bruecke.py loggt ihren Inhalt nie.
 
@@ -300,7 +300,7 @@ WAECHTER_SPERR_DATEI = DATENORDNER / "waechter.pid"
 
 # -- Leitstand -----------------------------------------------------------------
 # Block 72 (siehe wissen/plan_leitstand.md, core/leitstand.py): nachts oder wenn
-# Robert nicht da ist, uebernimmt Gemini die Rolle der KI im Chat, die nicht
+# der Nutzer nicht da ist, uebernimmt Gemini die Rolle der KI im Chat, die nicht
 # selbststaendig auf Berichte reagieren darf. Der Schluessel liegt wie beim
 # PC-Token der Bruecke im Datenordner, nie in Git, nie geloggt. Der
 # Zustand (Zaehler der Nacht, Wiederholungen je Schritt, Haltepunkte) liegt
@@ -322,8 +322,8 @@ LEITSTAND_ZUSTAND_DATEI = DATENORDNER / "leitstand_zustand.json"
 #
 # Optional ein Feld "aliase" (Liste von Zeichenketten), z.B.
 #
-#   {"name": "Max und frriends", "pfad": "C:/MAX-Friends",
-#    "aliase": ["max-friends", "Max & Friends"]}
+#   {"name": "Mein und Projekt", "pfad": "C:/Projekte/MeinProjekt",
+#    "aliase": ["mein-projekt", "Mein & Projekt"]}
 #
 # core/eingangsordner.py (Block 70, Teil C, projekt_gleichwertig) nutzt das,
 # um einen abweichend geschriebenen Projektnamen im Feld "projekt" einer

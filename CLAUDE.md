@@ -70,7 +70,7 @@ Format `Hauptversion.Nebenversion.Fehlerbehebung`, z. B. `1.2.3`:
 
 ## Dateien in index/
 
-Code-Index: lokale semantische Codesuche über alle Projekte, die Robert je
+Code-Index: lokale semantische Codesuche über alle Projekte, die der Nutzer je
 in CWB öffnet — kein API-Schlüssel, rechnet mit `all-MiniLM-L6-v2`. Keine
 feste Projektliste: jeder Ordner, den CWB öffnet, wird zu einem Eintrag.
 

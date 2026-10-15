@@ -391,7 +391,7 @@ def _in_vordergrund(hwnd) -> bool:
 # Nachrichten, auf deren Bearbeitung durch das Zielfenster sie warten - ganz
 # ohne eigenes Zeitlimit, anders als SendMessageTimeoutW bei _titel_von.
 # Pumpt das Zielfenster keine Nachrichten mehr (etwa eine Anwendung mitten in
-# einem rechenintensiven Build, Belegfall: HAUSGEMACHT), blockieren sie
+# einem rechenintensiven Build, Belegfall: BEISPIELPROJEKT), blockieren sie
 # unbegrenzt. Belegt per Nachbau: ein Testfenster ohne GetMessage-Schleife
 # liess _in_vordergrund() beliebig lange haengen. Da einfuegen() synchron aus
 # einem Qt-Slot heraus laeuft (core/fenster.py, _terminal_fertig), haengte

@@ -1,22 +1,22 @@
 """
 CWB - Code Workbench
 Android-Screenshot vom verbundenen Geraet holen. `adb exec-out screencap -p`
-liefert die rohen PNG-Bytes - das laeuft bei Robert seit Stunden
+liefert die rohen PNG-Bytes - das laeuft beim Nutzer seit Stunden
 zuverlaessig und ist in jeder Variante gleich (_screenshot_holen).
 
-Zwei Wege, das fertige Bild danach zu Robert zu bringen:
+Zwei Wege, das fertige Bild danach zum Nutzer zu bringen:
 
 VARIANTE A - fester Platz im Downloads-Ordner (Standard). Die Datei landet
 immer unter demselben Namen im Downloads-Ordner des Nutzers und wird jedes
 Mal ueberschrieben - der Datei-Dialog jedes Chat-Programms schaut dort
-ohnehin zuerst nach, Robert muss nie suchen. Kein Zwischenablage-Zugriff,
+ohnehin zuerst nach, der Nutzer muss nie suchen. Kein Zwischenablage-Zugriff,
 also auch keine Blockade moeglich.
 
 VARIANTE B - Zwischenablage, mit angehaltenem Waechter. Legt nicht die
 Bilddaten selbst ab, sondern einen DATEIVERWEIS (CF_HDROP) auf die Datei im
 Downloads-Ordner - genau das, was der Windows-Explorer beim Kopieren einer
 Datei per Strg+C in die Zwischenablage legt. Das war der entscheidende
-Unterschied: Robert hat eine PNG-Datei im Explorer kopiert und per Strg+V
+Unterschied: der Nutzer hat eine PNG-Datei im Explorer kopiert und per Strg+V
 sofort im Chatfenster einfuegen koennen, waehrend dasselbe Chatfenster
 Bilddaten (CF_BITMAP/CF_DIB) aus einem frueheren Anlauf dieses Skripts nicht
 annahm. Die Datei muss dafuer dauerhaft auf der Platte liegen, nicht nur
@@ -61,7 +61,7 @@ offenen Projektordner, in dem diese Datei nicht liegt) ueber das
 Startskript mit absolutem Pfad in .cwb-werkzeuge, unabhaengig vom offenen
 Projekt:
 
-    #run# python C:\\Users\\Entwickler\\.cwb-werkzeuge\\android_screenshot.py
+    #run# python %USERPROFILE%\\.cwb-werkzeuge\\android_screenshot.py
 
 Fuer die Zwischenablage-Variante zusaetzlich "--zwischenablage" anhaengen.
 
@@ -140,7 +140,7 @@ def _screenshot_holen() -> bytes:
 
 def _png_masse(png_daten: bytes) -> tuple[int, int]:
     """Liest Breite und Hoehe direkt aus dem IHDR-Chunk am Dateianfang -
-    ohne Bildbibliothek, nur fuer die Meldung an Robert."""
+    ohne Bildbibliothek, nur fuer die Meldung an den Nutzer."""
     try:
         breite, hoehe = struct.unpack(">II", png_daten[16:24])
         return breite, hoehe
@@ -196,7 +196,7 @@ def _downloads_ordner() -> Path:
 
 def _in_downloads_ablegen(png_daten: bytes) -> Path:
     """Schreibt die PNG-Bytes unter immer demselben Namen in den
-    Downloads-Ordner - vorhandene Datei wird ueberschrieben, Robert muss
+    Downloads-Ordner - vorhandene Datei wird ueberschrieben, der Nutzer muss
     nie suchen."""
     ziel = _downloads_ordner() / DOWNLOADS_DATEINAME
     ziel.write_bytes(png_daten)

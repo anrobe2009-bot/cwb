@@ -997,7 +997,7 @@ class Werkbank(QMainWindow):
             # #RUN#/#ADMIN# werden beim Wiederaufnehmen nie automatisch
             # erneut angestossen (core/eingangsordner.py, wieder_aufnehmen) -
             # sie koennten schon gewirkt oder ein eigenes Programm gestartet
-            # haben. Die Datei liegt jetzt in abgelehnt/, Robert entscheidet,
+            # haben. Die Datei liegt jetzt in abgelehnt/, der Nutzer entscheidet,
             # ob er sie erneut schickt.
             satz = (f"{befehle_verworfen} Befehle aus dem letzten Mal wurden NICHT "
                      "automatisch wiederholt, bitte bei Bedarf erneut senden."
@@ -1868,7 +1868,7 @@ class Werkbank(QMainWindow):
         Tasten wirkungslos; geprueft wird das bei jedem Tastendruck neu,
         damit ein Umschalten sofort wirkt. Seit Block 657 Standard AUS: das
         eigenstaendige Werkzeug "Pausetaste"
-        (C:\\Users\\Entwickler\\.cwb-werkzeuge\\pausetaste) uebernimmt die
+        (%USERPROFILE%\\.cwb-werkzeuge\\pausetaste) uebernimmt die
         Taste, dieser Weg hier funktionierte nur einmal pro CWB-Lauf
         zuverlaessig."""
         if not einstellungen_lesen().get("pause_screenshot", False):
@@ -2196,7 +2196,7 @@ class Werkbank(QMainWindow):
         # lief. Der tatsaechlich fertige Auftrag blieb dadurch in laeuft/
         # liegen und wurde beim naechsten Neustart von wieder_aufnehmen()
         # erneut angestossen, obwohl Claude Code ihn schon erledigt hatte
-        # ("schon erledigt" - Robert, 07.10.2026). Darum jetzt abgesichert:
+        # ("schon erledigt" - Nutzer, 07.10.2026). Darum jetzt abgesichert:
         # ein Fehler hier darf den Abschluss nicht mehr verhindern.
         try:
             self.balken.animation_stoppen()
@@ -2408,7 +2408,7 @@ class Werkbank(QMainWindow):
         if entscheidung["wochenlimit"]:
             # Vermutlich das Wochenlimit, nicht das Fuenf-Stunden-Fenster:
             # kein automatischer Fortsetzungsversuch, die Warteschlange
-            # bleibt angehalten, bis Robert selbst eingreift.
+            # bleibt angehalten, bis der Nutzer selbst eingreift.
             # Block 70, Nachbesserung: abschliessen() steht hier ganz vorn,
             # VOR Anzeige, Ansage und Berichtsbau - ein Fehler dort darf
             # nicht mehr verhindern, dass die Datei aus laeuft/ kommt.
@@ -3008,7 +3008,7 @@ class Werkbank(QMainWindow):
         """Block 70, Teil C: wechselt im Leerlauf von selbst zu einem anderen
         bekannten Projekt, sobald dort der aelteste wartende Auftrag aus
         Eingang oder Bruecke wartet (_naechstes_fremdes_projekt) - wie F9,
-        nur ohne Roberts Zutun. Aufgerufen nach jedem Blick des
+        nur ohne Zutun des Nutzers. Aufgerufen nach jedem Blick des
         Eingangswaechters (_eingang_fremde_melden), auch dann, wenn gerade
         kein eigener Auftrag lief. Kein Wechsel, solange ein eigener Auftrag
         laeuft, die Warteschlange nicht leer ist, eine Kontingent-Pause
@@ -3736,7 +3736,7 @@ class Werkbank(QMainWindow):
         unmittelbar vor bzw. nach `auftrag_geben` einzureihen. `modell_grund`
         ist nur bei einer
         Hochstufung nach Fehlschlaegen gesetzt (Punkt 2) - dann bleibt die
-        Ansage aus (Robert ist in dieser Lage oft nicht am Platz), nur der
+        Ansage aus (der Nutzer ist in dieser Lage oft nicht am Platz), nur der
         Bericht bekommt den Vermerk; ohne Grund (ausdruecklicher Wunsch per
         "Modell: …"-Zeile) wird die Umstellung angesagt.
 
@@ -4048,7 +4048,7 @@ class Werkbank(QMainWindow):
     def _warteschlange_verwalten(self) -> None:
         """Umschalt+F4: oeffnet die Warteschlange als Liste, damit ein
         einzelner wartender Auftrag entfernt werden kann - ohne wie F4 alle
-        auf einmal zu verwerfen. Robert reiht z.B. versehentlich einen
+        auf einmal zu verwerfen. Der Nutzer reiht z.B. versehentlich einen
         zweiten Auftrag ein, waehrend ein anderer laeuft, und will nur
         diesen einen wieder herausnehmen."""
         if not self._warteschlange:

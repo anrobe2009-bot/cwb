@@ -275,60 +275,60 @@ class ProjektzuordnungTest(EingangsordnerTestBasis):
     def test_ohne_projektfeld_passt_ueberall(self):
         pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "text": "x"})
         self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "CWB"))
-        self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "hausgemacht"))
+        self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "beispielprojekt"))
 
     def test_passendes_projekt_gross_klein_egal(self):
         pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "cwb", "text": "x"})
         self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "CWB"))
 
     def test_fremdes_projekt_passt_nicht(self):
-        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "hausgemacht", "text": "x"})
+        pfad = self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "beispielprojekt", "text": "x"})
         self.assertFalse(eingangsordner.passend_fuer_projekt(pfad, "CWB"))
 
     def test_bindestrich_und_leerzeichen_unscharf(self):
         pfad = self._datei_anlegen(
-            "a.json", {"quelle": "lokal", "projekt": "Max Friends", "text": "x"}
+            "a.json", {"quelle": "lokal", "projekt": "Mein Projekt", "text": "x"}
         )
-        self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "max-friends"))
+        self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "mein-projekt"))
 
     def test_alias_aus_zusatzprojekten(self):
-        # Block 70, Teil C: "max-friends" ist nur ueber den eingetragenen
-        # Alias mit "Max und frriends" gleichwertig - ohne ihn wuerden die
+        # Block 70, Teil C: "mein-projekt" ist nur ueber den eingetragenen
+        # Alias mit "Mein und Projekt" gleichwertig - ohne ihn wuerden die
         # unterschiedlichen Woerter/Tippfehler keine Uebereinstimmung ergeben.
         pfad = self._datei_anlegen(
-            "a.json", {"quelle": "bruecke", "projekt": "max-friends", "text": "x"}
+            "a.json", {"quelle": "bruecke", "projekt": "mein-projekt", "text": "x"}
         )
         with mock.patch.object(
             eingangsordner, "zusatzprojekte_lesen",
-            return_value=[{"name": "Max und frriends", "pfad": "C:/MAX-Friends",
-                           "aliase": ["max-friends", "Max & Friends"]}],
+            return_value=[{"name": "Mein und Projekt", "pfad": "C:/Projekte/MeinProjekt",
+                           "aliase": ["mein-projekt", "Mein & Projekt"]}],
         ):
-            self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "Max und frriends"))
+            self.assertTrue(eingangsordner.passend_fuer_projekt(pfad, "Mein und Projekt"))
 
 
 class ProjektGleichwertigTest(unittest.TestCase):
 
     def test_gross_klein_bindestrich_leerzeichen(self):
         self.assertTrue(eingangsordner.projekt_gleichwertig("CWB", "cwb"))
-        self.assertTrue(eingangsordner.projekt_gleichwertig("Max Friends", "max-friends"))
+        self.assertTrue(eingangsordner.projekt_gleichwertig("Mein Projekt", "mein-projekt"))
 
     def test_ohne_alias_keine_uebereinstimmung(self):
         with mock.patch.object(eingangsordner, "zusatzprojekte_lesen", return_value=[]):
             self.assertFalse(
-                eingangsordner.projekt_gleichwertig("max-friends", "Max und frriends")
+                eingangsordner.projekt_gleichwertig("mein-projekt", "Mein und Projekt")
             )
 
     def test_mit_alias_uebereinstimmung(self):
         with mock.patch.object(
             eingangsordner, "zusatzprojekte_lesen",
-            return_value=[{"name": "Max und frriends", "pfad": "C:/MAX-Friends",
-                           "aliase": ["max-friends", "Max & Friends"]}],
+            return_value=[{"name": "Mein und Projekt", "pfad": "C:/Projekte/MeinProjekt",
+                           "aliase": ["mein-projekt", "Mein & Projekt"]}],
         ):
             self.assertTrue(
-                eingangsordner.projekt_gleichwertig("max-friends", "Max und frriends")
+                eingangsordner.projekt_gleichwertig("mein-projekt", "Mein und Projekt")
             )
             self.assertTrue(
-                eingangsordner.projekt_gleichwertig("Max & Friends", "Max und frriends")
+                eingangsordner.projekt_gleichwertig("Mein & Projekt", "Mein und Projekt")
             )
 
     def test_leere_namen_sind_nicht_gleichwertig(self):
@@ -347,11 +347,11 @@ class NaechsteFremdeProjektDateiTest(EingangsordnerTestBasis):
         self.assertIsNone(eingangsordner.naechste_fremde_projekt_datei("CWB"))
 
     def test_aelteste_fremde_datei_gewinnt(self):
-        self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht", "text": "x"})
+        self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "beispielprojekt", "text": "x"})
         os.utime(self._ordner / "a.json", (1000, 1000))
         self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "schreiber", "text": "x"})
         os.utime(self._ordner / "b.json", (2000, 2000))
-        self.assertEqual(eingangsordner.naechste_fremde_projekt_datei("CWB"), "hausgemacht")
+        self.assertEqual(eingangsordner.naechste_fremde_projekt_datei("CWB"), "beispielprojekt")
 
 
 class VerarbeitenTest(EingangsordnerTestBasis):
@@ -544,7 +544,7 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self.assertTrue((eingangsordner.laeuft_ordner() / "a.json").exists())
 
     def test_fremdes_projekt_bleibt_unangetastet(self):
-        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "hausgemacht",
+        self._in_laeuft_anlegen("a.json", {"quelle": "bruecke", "projekt": "beispielprojekt",
                                             "text": "x"})
         empfangen = []
         anzahl, verworfen, uebersprungen = eingangsordner.wieder_aufnehmen(
@@ -593,7 +593,7 @@ class WiederAufnehmenTest(EingangsordnerTestBasis):
         self.assertTrue((eingangsordner.abgelehnt_ordner() / "a.json").exists())
 
     def test_run_wird_nicht_automatisch_wiederholt(self):
-        """Der eigentliche Auslöser des Fehlers (Robert, 06.10.2026): ein
+        """Der eigentliche Auslöser des Fehlers (Nutzer, 06.10.2026): ein
         #RUN#-Befehl, der beim letzten Mal nicht fertig wurde, darf beim
         naechsten CWB-Start nicht blind erneut laufen - er koennte schon
         gewirkt oder ein eigenes Programm gestartet haben."""
@@ -683,7 +683,7 @@ class FremdeProjekteTest(EingangsordnerTestBasis):
     Kopfzeilen- und Ansage-Hinweis in core/fenster.py (Block 63)."""
 
     def test_ohne_dateien_ist_leer(self):
-        self.assertEqual(eingangsordner.fremde_projekte("max-friends"), {})
+        self.assertEqual(eingangsordner.fremde_projekte("mein-projekt"), {})
 
     def test_eigenes_projekt_zaehlt_nicht_mit(self):
         self._datei_anlegen("a.json", {"quelle": "lokal", "projekt": "CWB", "text": "x"})
@@ -696,14 +696,14 @@ class FremdeProjekteTest(EingangsordnerTestBasis):
     def test_fremde_dateien_werden_je_projekt_gezaehlt(self):
         self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
         self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
-        self._datei_anlegen("c.json", {"quelle": "bruecke", "projekt": "hausgemacht", "text": "x"})
-        ergebnis = eingangsordner.fremde_projekte("max-friends")
-        self.assertEqual(ergebnis, {"CWB": 2, "hausgemacht": 1})
+        self._datei_anlegen("c.json", {"quelle": "bruecke", "projekt": "beispielprojekt", "text": "x"})
+        ergebnis = eingangsordner.fremde_projekte("mein-projekt")
+        self.assertEqual(ergebnis, {"CWB": 2, "beispielprojekt": 1})
 
     def test_gross_klein_schreibung_zaehlt_zusammen(self):
         self._datei_anlegen("a.json", {"quelle": "bruecke", "projekt": "CWB", "text": "x"})
         self._datei_anlegen("b.json", {"quelle": "bruecke", "projekt": "cwb", "text": "x"})
-        ergebnis = eingangsordner.fremde_projekte("max-friends")
+        ergebnis = eingangsordner.fremde_projekte("mein-projekt")
         self.assertEqual(ergebnis, {"CWB": 2})
 
 
@@ -712,7 +712,7 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
     eingangsordner.py, Eingangswaechter._nachsehen) - fuer jede wartende
     Datei, aelteste zuerst, wird ohne passendes Projekt uebersprungen, sonst
     verarbeitet. Reproduziert den gemeldeten Fehler: drei Auftraege fuer
-    Projekt CWB vor einem fuer max-friends, geoeffnet ist max-friends."""
+    Projekt CWB vor einem fuer mein-projekt, geoeffnet ist mein-projekt."""
 
     def _blick(self, projekt_name: str, ausfuehren) -> None:
         for pfad in eingangsordner.wartende_dateien():
@@ -722,7 +722,7 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
 
     def test_passender_auftrag_laeuft_trotz_aelterer_fremder_auftraege(self):
         namen = ["a.json", "b.json", "c.json", "d.json"]
-        projekte = ["CWB", "CWB", "CWB", "max-friends"]
+        projekte = ["CWB", "CWB", "CWB", "mein-projekt"]
         for index, (name, projekt) in enumerate(zip(namen, projekte)):
             pfad = self._datei_anlegen(
                 name, {"quelle": "bruecke", "projekt": projekt, "text": f"#CODE#\nAuftrag {name}"}
@@ -730,7 +730,7 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
             os.utime(pfad, (1000 + index, 1000 + index))
 
         empfangen = []
-        self._blick("max-friends", lambda auftrag: empfangen.append(auftrag.datei.name))
+        self._blick("mein-projekt", lambda auftrag: empfangen.append(auftrag.datei.name))
 
         # Nur der passende (juengste) Auftrag lief - die drei fuer CWB
         # blockieren ihn nicht und bleiben unangetastet liegen.
@@ -754,7 +754,7 @@ class GemischteWarteschlangeTest(EingangsordnerTestBasis):
 
         # Oeffnet zunaechst ein fremdes Projekt: nichts laeuft, nichts wird
         # beansprucht - die Reihenfolge der beiden wartenden Dateien bleibt.
-        self._blick("max-friends", lambda auftrag: None)
+        self._blick("mein-projekt", lambda auftrag: None)
         self.assertEqual(
             [p.name for p in eingangsordner.wartende_dateien()], ["a.json", "b.json"]
         )

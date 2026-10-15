@@ -1,5 +1,5 @@
 ﻿=== CWB PID 29680 um 2026-10-07_10-06-29 ===
-Process 29680: pythonw  "C:\Users\Entwickler\Desktop\start\CWB\core\fenster.py"
+Process 29680: pythonw  "C:\Pfad\zu\CWB\core\fenster.py"
 Python v3.13.14 (C:\Program Files\Python313\pythonw.exe)
 
 Thread 29304 (idle): "MainThread"

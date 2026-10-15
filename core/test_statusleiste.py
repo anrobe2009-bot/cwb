@@ -200,13 +200,13 @@ class WartetKennungenTest(unittest.TestCase):
     def test_fremdes_projekt_bekommt_praefix(self):
         fake = FakeWerkbank(projekt_name="CWB")
         pfad = types.SimpleNamespace(stat=lambda: types.SimpleNamespace(st_mtime=0))
-        auftrag = types.SimpleNamespace(quelle="lokal", projekt="hausgemacht", art="code",
+        auftrag = types.SimpleNamespace(quelle="lokal", projekt="beispielprojekt", art="code",
                                          inhalt="Block 37\nx")
         with patch.object(fenster, "wartende_dateien", return_value=[pfad]), \
              patch.object(fenster, "auftrag_lesen", return_value=auftrag), \
              patch.object(fenster, "block_erkennen", return_value=(37, "x", True)), \
              patch.object(fenster, "projekt_gleichwertig", return_value=False):
-            self.assertEqual(fake._wartet_kennungen(), ["hausgemacht 37"])
+            self.assertEqual(fake._wartet_kennungen(), ["beispielprojekt 37"])
 
     def test_eigenes_projekt_bekommt_keinen_praefix(self):
         fake = FakeWerkbank(projekt_name="CWB")

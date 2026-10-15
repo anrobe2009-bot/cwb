@@ -412,7 +412,7 @@ def auftrags_kennung(block_nummer: int | None, quelle: str, zeit: datetime,
                       projekt: str | None = None) -> str:
     """Baut die Kurzkennung eines Auftrags: die Blocknummer aus der zweiten
     Zeile ("Block N" bzw. "# Block N" bei #RUN#/#ADMIN#, core/bloecke.py),
-    weil der Chat sie Robert nennt - ohne Blocknummer (z.B. eine eigene
+    weil der Chat sie dem Nutzer nennt - ohne Blocknummer (z.B. eine eigene
     Eingabe ins Feld ohne "Block N"-Zeile) `quelle` ("Eingabe",
     "Zwischenablage", "Eingang" oder "Brücke") und Uhrzeit, z.B.
     "Eingabe 16:58". `projekt` steht nur davor, wenn der Auftrag zu einem
@@ -547,7 +547,7 @@ def qt_meldung_behandeln(typ, kontext, nachricht: str) -> None:
     used with threads started with QThread") - ohne eigenen Handler gehen sie
     nach stderr, das unter pythonw.exe ins Nichts fuehrt. Gerade ein
     qFatal() ruft diesen Handler noch VOR dem harten Abbruch auf - genau der
-    stille Absturz ohne jeden Traceback, den Robert nicht lesen kann, bekommt
+    stille Absturz ohne jeden Traceback, den der Nutzer nicht lesen kann, bekommt
     dadurch wenigstens eine Zeile im Log. Wird in main() als
     qInstallMessageHandler gesetzt."""
     log.log(_QT_SCHWEREGRAD.get(typ, logging.WARNING), "Qt-Meldung: %s", nachricht)

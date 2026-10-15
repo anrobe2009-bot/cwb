@@ -91,7 +91,7 @@ ERZEUGTE_ORDNER = {".stimmen", ".toene", ".ablage", ".cwb", "__pycache__"}
 #   mit_unterordnern=True   der Ordner samt allem darunter (Windows, Programme)
 #   mit_unterordnern=False  nur der Ordner selbst und die Dateien direkt darin;
 #                           seine Unterordner bleiben erlaubt.
-# Der Ordner ueber dem CWB-Programmordner (bei Robert C:\Users\...\Desktop\start)
+# Der Ordner ueber dem CWB-Programmordner (z.B. ein gemeinsamer Ordner fuer alle Projekte)
 # ist von der zweiten Art: dort liegen die Projekte nebeneinander, die erlaubt
 # bleiben muessen - gesperrt sind nur seine eigenen Dateien und sein eigenes
 # Git-Repository (.git), denn der Ordner ist selbst ein Repository. Nichts ist

@@ -82,7 +82,7 @@ SKIP_DIRS = {
 }
 
 # JSON-Unterordner, die erfahrungsgemaess Daten statt Code enthalten (z.B.
-# Rezept- und Fibel-Dateien in hausgemacht) - nur *innerhalb* des Projekts
+# Rezept- und Fibel-Dateien in beispielprojekt) - nur *innerhalb* des Projekts
 # geprueft (siehe should_index, projekt_wurzel), damit ein Konfigurations-JSON
 # im Projektwurzelordner selbst (z.B. package.json) weiter indiziert wird.
 DATEN_ORDNER_AUSSCHLUSS = {"assets", "raw", "data"}
@@ -366,7 +366,7 @@ def index_aktualisieren(project_path: str, log_fn: Optional[Callable] = None,
 
     Schreibt niemals gleichzeitig mit einem zweiten Lauf (siehe
     _schreibsperre) - ein abgebrochener Schreibvorgang beschaedigt sonst die
-    HNSW-Segmente der Sammlung dauerhaft, das hat hausgemacht schon einmal
+    HNSW-Segmente der Sammlung dauerhaft, das hat beispielprojekt schon einmal
     getroffen."""
     p = Path(project_path)
     if not p.is_dir():

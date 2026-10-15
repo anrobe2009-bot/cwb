@@ -187,7 +187,7 @@ def _ohne_dopplungen(basis: str, neu: str) -> str:
 # Eine py-spy-Aufzeichnung (haenger/haenger_2026-10-07_15-30-28.txt) zeigte
 # den Arbeitsfaden genau dort stehen; 45s spaeter verzeichnete die Windows-
 # Ereignisanzeige einen nativen Absturz von pythonw.exe in pyarrow\arrow.dll
-# (0xc0000005) - dieselbe Signatur mehrfach zeitgleich mit Roberts Abstuerzen
+# (0xc0000005) - dieselbe Signatur mehrfach zeitgleich mit den Abstuerzen des Nutzers
 # vom 06./07.10. Ein nativer Absturz in einer fremden DLL geht an jedem
 # Python-Fehlernetz (try/except, Qt-Handler) vorbei und beendet den ganzen
 # CWB-Prozess, nicht nur die Suche.

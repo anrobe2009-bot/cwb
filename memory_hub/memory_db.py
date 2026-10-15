@@ -28,7 +28,7 @@ def base_dir():
 
 
 # Die Datenbank liegt unter %LOCALAPPDATA%\CWB, nicht im Programmordner -
-# damit Roberts Gedaechtnis jeden Programmwechsel ueberlebt. Den Ort kennt
+# damit das Gedaechtnis des Nutzers jeden Programmwechsel ueberlebt. Den Ort kennt
 # core/datenordner.py; das Modul ist bewusst frei von Qt und Log-Einrichtung,
 # damit dieser MCP-Server es aus jeder Claude-Code-Sitzung laden kann. Alte
 # Bestaende aus dem Programmordner holt daten_umziehen() einmalig herueber.

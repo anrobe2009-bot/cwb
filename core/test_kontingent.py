@@ -319,17 +319,17 @@ class NaechstesFremdesProjektTest(unittest.TestCase):
 
     def test_bekanntes_fremdes_projekt_wird_aufgeloest(self):
         fake = self._fake()
-        hausgemacht = types.SimpleNamespace(name="hausgemacht")
+        beispielprojekt = types.SimpleNamespace(name="beispielprojekt")
         with patch.object(fenster, "einstellungen_lesen",
                            return_value={"auto_projektwechsel": True}), \
              patch.object(fenster, "naechste_fremde_projekt_datei",
-                           return_value="hausgemacht"), \
+                           return_value="beispielprojekt"), \
              patch.object(fenster, "projekte_finden",
-                           return_value=[fake.projekt, hausgemacht]), \
+                           return_value=[fake.projekt, beispielprojekt]), \
              patch.object(fenster, "projekt_gleichwertig",
                            side_effect=lambda a, b: a == b):
             ergebnis = fenster.Werkbank._naechstes_fremdes_projekt(fake)
-        self.assertIs(ergebnis, hausgemacht)
+        self.assertIs(ergebnis, beispielprojekt)
 
     def test_unbekanntes_fremdes_projekt_ergibt_none_und_wird_einmalig_angesagt(self):
         fake = self._fake()
@@ -353,7 +353,7 @@ class KontingentFortsetzenTest(unittest.TestCase):
     Fortsetzen muss dieselbe Eingangsreihenfolge-Pruefung laufen wie im
     Leerlauf, sonst wird nach jeder Kontingent-Pause immer das zuletzt
     aktive Projekt bevorzugt (der eigentliche, gemessene Fehler vom
-    01.10.2026, Projekt CWB Block 77 vs. hausgemacht Block 76)."""
+    01.10.2026, Projekt CWB Block 77 vs. beispielprojekt Block 76)."""
 
     def _fake(self, eingang_datei):
         fake = types.SimpleNamespace(
@@ -370,13 +370,13 @@ class KontingentFortsetzenTest(unittest.TestCase):
         return fake
 
     def test_aelterer_fremder_auftrag_fuehrt_zum_wechsel_statt_fortsetzen(self):
-        fake = self._fake(eingang_datei=Path("eingang/laeuft/34_hausgemacht.json"))
-        hausgemacht = types.SimpleNamespace(name="hausgemacht")
-        fake._naechstes_fremdes_projekt = MagicMock(return_value=hausgemacht)
+        fake = self._fake(eingang_datei=Path("eingang/laeuft/34_beispielprojekt.json"))
+        beispielprojekt = types.SimpleNamespace(name="beispielprojekt")
+        fake._naechstes_fremdes_projekt = MagicMock(return_value=beispielprojekt)
         with patch.object(fenster.QTimer, "singleShot",
                            side_effect=lambda ms, callback: callback()):
             fenster.Werkbank._kontingent_fortsetzen(fake)
-        fake._auto_projekt_wechseln.assert_called_once_with(hausgemacht)
+        fake._auto_projekt_wechseln.assert_called_once_with(beispielprojekt)
         fake._auftrag_starten.assert_not_called()
         self.assertIsNone(fake._kontingent_info)
 

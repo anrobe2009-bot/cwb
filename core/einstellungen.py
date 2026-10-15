@@ -1087,7 +1087,7 @@ class EinstellungenFenster(QDialog):
             "Steht dieser Schalter an, wechselt CWB im Leerlauf von selbst zu "
             "einem anderen bekannten Projekt, sobald dort ein Auftrag aus dem "
             "Eingangsordner oder der Brücke wartet - wie F9, nur ohne "
-            "Roberts Zutun (Block 70, Teil C). Kein Wechsel, solange ein "
+            "Zutun des Nutzers (Block 70, Teil C). Kein Wechsel, solange ein "
             "eigener Auftrag läuft, die Warteschlange nicht leer ist oder "
             "eine Kontingent-Pause läuft. Ab Werk an.",
             bool(werte.get("auto_projektwechsel", True)),
@@ -1122,7 +1122,7 @@ class EinstellungenFenster(QDialog):
 
     def _gruppe_leitstand(self) -> Gruppe:
         """Block 72/73 (siehe wissen/plan_leitstand.md, core/leitstand.py):
-        nachts oder wenn Robert nicht da ist, fragt Leitstand nach jedem
+        nachts oder wenn der Nutzer nicht da ist, fragt Leitstand nach jedem
         abgeschlossenen #CODE#-Auftrag eines Projekts mit wissen/nachtplan.md
         einen waehlbaren Anbieter (Gemini oder Anthropic) um die naechste
         Entscheidung. Ab Werk aus, Anbieter ab Werk Gemini."""
@@ -1313,7 +1313,7 @@ class EinstellungenFenster(QDialog):
         """Reine Anzeige, welche der beiden Screenshot-Tasten dieser
         laufende CWB-Prozess tatsaechlich bekommen hat (core/pausetaste.py) -
         haelt eine Taste schon ein anderes Programm oder ein vergessenes
-        altes CWB-Fenster, steht das hier, statt dass Robert es erst beim
+        altes CWB-Fenster, steht das hier, statt dass der Nutzer es erst beim
         erfolglosen Druecken merkt. Ist der Schalter aus, wird gar nicht
         erst angemeldet (core/fenster.py, `_pausetaste_zustand_anwenden`) -
         das hier als "belegt" zu melden waere irrefuehrend."""

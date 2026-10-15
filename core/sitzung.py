@@ -540,7 +540,7 @@ def _sparmodus_erforderlich(limit_woche: dict | None, schwelle_prozent: int) -> 
     (Feld "utilization") die in F12 -> Verhalten eingestellte Schwelle
     erreicht oder ueberschreitet. Ersetzt die fruehere reine Statuspruefung
     (status=="allowed_warning", SDK-intern unveraenderlich) durch einen von
-    Robert einstellbaren Prozentwert; ohne bekannte Prozentzahl nie aktiv."""
+    vom Nutzer einstellbaren Prozentwert; ohne bekannte Prozentzahl nie aktiv."""
     prozent = _kontingent_prozent(limit_woche)
     return prozent is not None and prozent >= schwelle_prozent
 
@@ -1271,7 +1271,7 @@ class Sitzung:
         """Stoesst das Nachindizieren des offenen Projekts an, ohne die
         Sitzung zu blockieren: erst geaenderte Dateien, bei einem unbekannten
         Projekt (kein Manifest) automatisch alles - das kann bei einem neuen
-        oder grossen Projekt Minuten dauern, Robert nimmt das bewusst in Kauf.
+        oder grossen Projekt Minuten dauern, der Nutzer nimmt das bewusst in Kauf.
         Ein veralteter Index zeigt sonst auf Codestellen, die es nicht mehr
         gibt. Laeuft als eigener Prozess im Hintergrund weiter; eine kurze
         Ansage markiert Start und Ende. Gibt es das Werkzeug nicht oder
@@ -1303,7 +1303,7 @@ class Sitzung:
         Ohne Zeitlimit wuerde ein haengender Index-Prozess (z.B. ein Modell-
         Download ohne Antwort) fuer immer in communicate() stehenbleiben: die
         Start-Ansage waere gesagt, aber nie ein Ergebnis oder ein Fehler -
-        Robert wartet dann auf etwas, das nie kommt. Jeder Ausgang meldet
+        der Nutzer wartet dann auf etwas, das nie kommt. Jeder Ausgang meldet
         sich deshalb entweder per `_melde` (hoerbar) oder wenigstens per Log."""
         try:
             ausgabe, fehlerausgabe = prozess.communicate(timeout=CODE_INDEX_ZEITLIMIT)

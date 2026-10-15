@@ -19,8 +19,8 @@ Datenbank), aus dem wiederherstellen() ihn zurueckholt. Angeheftete
 Eintraege werden nie angefasst. Im Zweifel: behalten.
 
 Nutzung:
-  python aufraeumen.py hausgemacht                   Bericht, nichts aendern
-  python aufraeumen.py hausgemacht --loeschen 1160,1216 --erledigt 1199
+  python aufraeumen.py beispielprojekt                   Bericht, nichts aendern
+  python aufraeumen.py beispielprojekt --loeschen 1160,1216 --erledigt 1199
   python aufraeumen.py --wiederherstellen 1160
 """
 
@@ -39,7 +39,7 @@ log = logging.getLogger("cwb.aufraeumen")
 
 PAPIERKORB = os.path.join(os.path.dirname(db.DB_PATH), "aufraeum_papierkorb.jsonl")
 
-# Sicherheitsstufen: "hoch" darf auf Zuruf weg, "mittel" soll Robert hoeren
+# Sicherheitsstufen: "hoch" darf auf Zuruf weg, "mittel" soll der Nutzer hoeren
 # und bestaetigen, "niedrig" ist nur ein Hinweis ohne Vorschlag.
 HOCH, MITTEL, NIEDRIG = "hoch", "mittel", "niedrig"
 
@@ -81,7 +81,7 @@ STOPP = {
     "diese", "diesem", "diesen", "dieser", "dieses", "dort", "durch", "eine",
     "einem", "einen", "einer", "eines", "eintrag", "erst", "etwa", "haben",
     "hier", "ihre", "ihren", "immer", "jetzt", "kann", "kein", "keine", "mehr",
-    "nach", "nicht", "noch", "nur", "oder", "ohne", "robert", "roberts", "schon",
+    "nach", "nicht", "noch", "nur", "oder", "ohne", "schon",
     "sein", "seine", "seit", "sich", "sind", "sowie", "statt", "steht", "stehen",
     "tagebuch", "ueber", "über", "unter", "weil", "weiterhin", "wenn", "werden",
     "wird", "wurde", "wurden", "zwei", "drei", "vier", "beide", "beiden",

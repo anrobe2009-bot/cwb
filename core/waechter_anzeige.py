@@ -9,7 +9,7 @@ einen Herzschlag nach STATUS_DATEI (core/pfade.py): Zeitstempel, PID, Zustand
 die globalen Bildschirmkoordinaten/Groesse des Waechter-Platzhalters in der
 Statusleiste ueber dem Ausgabefeld und ob CWB gerade minimiert ist. Dieser
 Prozess liest die Datei einmal pro Sekunde und legt einen kleinen, rahmenlosen,
-immer oben liegenden Farbknopf passgenau auf diesen Platzhalter - Robert
+immer oben liegenden Farbknopf passgenau auf diesen Platzhalter - der Nutzer
 erkennt nur noch grosse Farbflaechen, keine Buchstaben, darum traegt allein
 die Farbe die Information; Name/Zustand stehen als Tooltip und
 Barrierefreiheitsname dahinter, fuer Screenreader und sehende Mitnutzer:
@@ -57,7 +57,7 @@ except ImportError:
 
 log = logging.getLogger("cwb.waechter_anzeige")
 
-# Siehe Moduldoku oben: die beiden Schwellen aus Roberts Auftrag.
+# Siehe Moduldoku oben: die beiden Schwellen aus dem Auftrag des Nutzers.
 HERZSCHLAG_FRISCH_SEKUNDEN = 5
 HERZSCHLAG_HAENGT_SEKUNDEN = 15
 PRUEF_INTERVALL_MS = 1000
@@ -233,7 +233,7 @@ class WaechterKnopf(QWidget):
 
     def _haenger_aufzeichnen(self) -> None:
         """Loest die vorhandene py-spy-Aufzeichnung einmal pro Haenger aus -
-        ohne dass Robert dafuer Strg+Alt+H druecken muss."""
+        ohne dass der Nutzer dafuer Strg+Alt+H druecken muss."""
         if self._haenger_ausgeloest:
             return
         self._haenger_ausgeloest = True

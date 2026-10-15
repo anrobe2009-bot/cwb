@@ -178,7 +178,7 @@ class BlockZaehlerTest(unittest.TestCase):
 
     def test_projekte_getrennt(self):
         bloecke.block_zaehler_aktualisieren("CWB", 20)
-        satz = bloecke.block_zaehler_aktualisieren("hausgemacht", 1)
+        satz = bloecke.block_zaehler_aktualisieren("beispielprojekt", 1)
         self.assertEqual(satz, "")
 
     def test_anderer_kalendertag_ohne_warnung(self):

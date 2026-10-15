@@ -2,7 +2,7 @@
 CWB - Code Workbench
 Brücke zu claude.ai im Browser (Vorhaben "Brücke", Stufe B3, siehe
 wissen/plan_bruecke.md). B1 (Eingangsordner, core/eingangsordner.py) und B2
-(Server-Dienst im Projekt max-friends, Ordner bruecke/) sind fertig.
+(Server-Dienst im Projekt mein-projekt, Ordner bruecke/) sind fertig.
 
 Dieses Modul fragt den Connector-Dienst ausgehend ab (GET .../abholen) und
 legt jeden abgeholten Auftrag über core.eingangsordner.ablegen() in denselben
@@ -59,7 +59,7 @@ ABFRAGE_ABSTAND_MS = 5000
 # (wissen/plan_bruecke.md, Stufe B3).
 AUSFALL_SCHWELLE_SEKUNDEN = 300
 
-# Muss zum Server passen (C:\Max und frriends\bruecke\server.py,
+# Muss zum Server passen (bruecke\server.py im Projekt mein-projekt,
 # QUITTUNG_SCHWELLE_SEKUNDEN): liefert er einen Auftrag erneut aus, wenn
 # innerhalb dieser Zeit keine Quittung ankam - nur zur Begruendung der
 # Logzeilen hier, keine eigene Fristpruefung auf dieser Seite.
@@ -177,7 +177,7 @@ def nachtbericht_hochladen(zugang: Zugangsdaten, projekt: str, text: str) -> Non
     wissen/nachtbericht.md geschrieben hat, damit die KI im Chat ihn morgens
     holen kann, ohne CWB dafuer erst zu oeffnen. Anders als
     `bericht_hochladen` haengt dieser Bericht an keinem Brücken-Auftrag,
-    darum ein eigener Endpunkt. Der Connector-Dienst (Projekt max-friends)
+    darum ein eigener Endpunkt. Der Connector-Dienst (Projekt mein-projekt)
     muss ihn dafuer kennen - wirft BrueckenFehler wie jede andere Anfrage,
     wenn er es (noch) nicht tut; der Aufrufer behandelt das als
     best-effort und loggt nur."""

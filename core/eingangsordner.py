@@ -317,14 +317,14 @@ def ablegen(quelle: str, text: str, projekt: str = "",
 def admin_gesperrt(art: str, quelle: str) -> bool:
     """#ADMIN# ist über den Eingangsordner immer gesperrt, außer die Quelle
     ist ausdrücklich "lokal" - alles andere (Zeitschaltung, Brücke) könnte
-    ohne Roberts unmittelbare Gegenwart auslösen."""
+    ohne unmittelbare Gegenwart des Nutzers auslösen."""
     return art == "admin" and quelle != QUELLE_LOKAL
 
 
 def _projekt_normalisiert(name: str) -> str:
     """Vergleichsform eines Projektnamens fuer den unscharfen Abgleich
     (Block 70, Teil C): klein geschrieben, ohne Leerzeichen, Bindestrich,
-    Unterstrich oder Et-Zeichen - "max-friends" und "Max & Friends" werden
+    Unterstrich oder Et-Zeichen - "mein-projekt" und "Mein & Projekt" werden
     so gleich."""
     return re.sub(r"[\s\-_&]+", "", (name or "").lower())
 
@@ -355,7 +355,7 @@ def projekt_gleichwertig(a: str, b: str) -> bool:
     """Block 70, Teil C: wahr, wenn `a` und `b` denselben Projektnamen
     meinen - ohne Ruecksicht auf Gross-/Kleinschreibung, Bindestrich und
     Leerzeichen, und zusaetzlich ueber die Aliase der Zusatzprojekte (z.B.
-    "max-friends" fuer "Max und frriends", wenn dort als Alias eingetragen).
+    "mein-projekt" fuer "Mein und Projekt", wenn dort als Alias eingetragen).
     Zwei leere Namen gelten NICHT als gleich - das waere kein Treffer,
     sondern schlicht nichts zu vergleichen."""
     na, nb = _projekt_normalisiert(a), _projekt_normalisiert(b)
@@ -551,7 +551,7 @@ def verwerfen(datei: Path, grund: str) -> None:
     wird (F4 Warteschlange leeren, F8 Not-Aus, einzelnes Entfernen in der
     Warteschlangenverwaltung), statt ihn als erledigt zu melden. Ohne diesen
     Aufruf würde `wieder_aufnehmen()` die Datei beim nächsten Start erneut
-    anstoßen, obwohl Robert sie gerade bewusst verworfen hat."""
+    anstoßen, obwohl der Nutzer sie gerade bewusst verworfen hat."""
     if not datei.exists():
         return
     _verschieben(datei, abgelehnt_ordner(), grund)
