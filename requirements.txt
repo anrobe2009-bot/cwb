@@ -1,0 +1,28 @@
+# CWB — Code Workbench
+# Installation:  pip install -r requirements.txt
+
+# Oberfläche
+PySide6>=6.6
+
+# Anbindung an Claude Code
+claude-agent-sdk>=0.1
+
+# Sprachausgabe über Edge-TTS (Standardweg, braucht Internet)
+edge-tts>=6.1
+
+# Sprachausgabe über SAPI, die Windows-Bordstimme (Rückfall ohne Internet)
+pywin32>=306; sys_platform == "win32"
+
+# Töne laufen über winsound, das zur Python-Standardbibliothek unter Windows
+# gehört und nicht installiert werden muss.
+
+# Bruecke zu claude.ai im Browser (core/bruecke.py) und Leitstand
+# (core/leitstand.py, REST-Aufrufe an Gemini und/oder Anthropic, keine
+# eigene SDK-Abhaengigkeit)
+requests>=2.31
+
+# Code-Index (index/): lokale semantische Codesuche, kein API-Schlüssel nötig
+chromadb>=0.4.24
+sentence-transformers>=3.0.0
+transformers>=4.41,<5
+torch

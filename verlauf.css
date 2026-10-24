@@ -1,0 +1,81 @@
+/* FILE: CWB/verlauf.css
+   Farben der Textarten im Ausgabefeld.
+
+   Qt stylt einzelne Textabschnitte nicht ueber stil.qss, sondern ueber das
+   Stilblatt des Textdokuments. Damit auch hier keine Gestaltung im Python
+   steht, liegen die Farben in dieser Datei; fenster.py laedt sie nur.
+
+   Drei Bedeutungen, drei Farben:
+     auftrag  - was der Nutzer selbst geschrieben hat          (ruhiges Blau)
+     antwort  - die normale Antwort                        (helles Grau)
+     frage    - Rueckfrage an den Nutzer, und Fehlermeldungen  (kraeftiges Rot)
+
+   Die Unterscheidung liegt nie allein in der Farbe: jede Art traegt ein
+   Vorsatzzeichen und ein Wort im Klartext, das der Screenreader mitliest. */
+
+.auftrag {
+    color: #8fc4ff;
+    font-weight: bold;
+}
+
+.antwort {
+    color: #e9edf3;
+}
+
+.frage, .fehler {
+    color: #ff8a6b;
+    background-color: #2a1512;
+    font-weight: bold;
+}
+
+/* Beilaeufiges: Abschlussmeldung, Freigabe, Ablehnung. Bewusst leise, damit
+   es die drei Hauptfarben nicht verwaessert. */
+.hinweis {
+    color: #98a3b4;
+}
+
+/* Befehlszeilen des Orchestrators (→ Aufruf, ← Ergebnis): still, gedaempftes
+   Blaugruen, damit sie weder mit Frage noch mit Antwort noch mit Hinweis
+   verwechselt werden. Das Vorzeichen traegt die Unterscheidung zusaetzlich. */
+.befehl {
+    color: #8fb5b0;
+    font-style: italic;
+}
+
+/* Terminalausgabe von #run# und #admin#: laeuft direkt im Terminal, nie
+   ueber Claude Code. Eigene Farbe und eigene Schrift, damit sie sich nie mit
+   einer Antwort verwechseln laesst - das Vorsatzwort "TERMINAL" traegt die
+   Unterscheidung zusaetzlich fuer den Screenreader. */
+.terminal {
+    color: #7ee2a8;
+    background-color: #10241a;
+    font-family: Consolas, "Cascadia Mono", monospace;
+}
+
+/* Werkzeugaufrufe waehrend des Auftrags: eine Zeile je Aufruf, still
+   mitgefuehrt (nicht gesprochen). Die Farben sind dieselben wie die des
+   Aktivitaetsbalkens fuer denselben Zustand (siehe stil.qss, #balken), damit
+   Zeile im Verlauf und Balken oben immer zusammenpassen. */
+.liest {
+    color: #4dd964;
+}
+
+.sucht {
+    color: #b5e61d;
+}
+
+.schreibt {
+    color: #ffcc33;
+}
+
+.fuehrt_aus {
+    color: #ff8a1f;
+}
+
+.netz {
+    color: #00d0ff;
+}
+
+.denkt {
+    color: #00c2b2;
+}

@@ -1,0 +1,2028 @@
+"""
+CWB - Code Workbench
+Baustein 2: Anbindung an Claude Code ueber das Agent-SDK.
+
+Liefert:
+- durchgehende Sitzung statt Einzelfragen
+- Ereignisse fuer Balken, Ton und Statuszeile
+- Berechtigungspruefung ueber sicherheit.Wache
+- gesprochene Rueckfrage nur bei Nichtumkehrbarem
+- Auftrags-Schaerfung mit Rueckbestaetigung
+- Not-Aus
+"""
+
+import asyncio
+import base64
+import logging
+import mimetypes
+import re
+import shutil
+import subprocess
+import sys
+import threading
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from claude_agent_sdk import (
+    TERMINAL_TASK_STATUSES,
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    McpSdkServerConfig,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    RateLimitEvent,
+    ResultMessage,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolPermissionContext,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+    query,
+)
+
+try:
+    from .grundlagen import suche_auftrag_anhaengen, such_effizienz_prozent
+    from .landkarte import landkarte_erzeugen
+    from .modelle import STANDARD as MODELL_STANDARD
+    from .modelle import aufbereiten as modelle_aufbereiten
+    from .pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from .sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
+    from .wissen import (
+        HINWEIS_GEDAECHTNIS,
+        NACHTRAG_ANWEISUNG,
+        Wissen,
+        _ohne_dopplungen,
+    )
+except ImportError:
+    from grundlagen import suche_auftrag_anhaengen, such_effizienz_prozent
+    from landkarte import landkarte_erzeugen
+    from modelle import STANDARD as MODELL_STANDARD
+    from modelle import aufbereiten as modelle_aufbereiten
+    from pfade import HUB_ORDNER, INDEX_ORDNER, einstellungen_lesen, freigaben_lesen
+    from sicherheit import SCHREIB_WERKZEUGE, Stufe, Urteil, Wache, befehl_schreibt
+    from wissen import (
+        HINWEIS_GEDAECHTNIS,
+        NACHTRAG_ANWEISUNG,
+        Wissen,
+        _ohne_dopplungen,
+    )
+
+log = logging.getLogger("cwb.sitzung")
+
+# Block 83 (07.10.2026): Kein Vorladen des Embedding-Modells im CWB-Prozess
+# mehr - core/wissen.py._code_index_suchen lagert die Suche jetzt in einen
+# eigenen Unterprozess aus (index/cli.py --suche), ein Vorladen hier haette
+# dem keinen Vorteil mehr gebracht, aber chromadb/pyarrow/torch unnoetig in
+# diesen Prozess geholt (siehe core/wissen.py, Absturzursache belegt).
+
+
+def _unterdruecke_konsolenfenster() -> None:
+    """Verhindert, dass unter Windows bei jedem Auftrag ein Konsolenfenster
+    aufblitzt oder in den Vordergrund springt. Betrifft nicht nur die
+    Claude-Code-CLI (gestartet ueber anyio.open_process, das intern auf
+    asyncio.create_subprocess_exec und damit auf subprocess.Popen zurueckfaellt),
+    sondern auch SDK-interne Git-Aufrufe wie _get_worktree_paths in
+    claude_agent_sdk._internal.sessions, die subprocess.run direkt aufrufen -
+    ohne CREATE_NO_WINDOW und bei praktisch jedem Auftrag, weil das SDK vor
+    jeder Anfrage den Sitzungsstand mit git abgleicht. ClaudeAgentOptions
+    bietet dafuer keine eigene Option, daher wird subprocess.Popen selbst
+    (die gemeinsame Grundlage von Popen/run/call/check_output ueberall im
+    Prozess, auch in Fremdcode) einmalig um das Erstellungsflag ergaenzt."""
+    if sys.platform != "win32":
+        return
+    if getattr(subprocess.Popen.__init__, "_cwb_patched", False):
+        return
+
+    original_init = subprocess.Popen.__init__
+    creationflags = subprocess.CREATE_NO_WINDOW
+
+    def init_ohne_fenster(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | creationflags
+        original_init(self, *args, **kwargs)
+
+    init_ohne_fenster._cwb_patched = True  # type: ignore[attr-defined]
+    subprocess.Popen.__init__ = init_ohne_fenster
+
+
+_unterdruecke_konsolenfenster()
+
+
+def _memory_hub_server() -> McpSdkServerConfig | None:
+    """Baut den eingebetteten Memory-Hub-Server (Block 61, Teil A): die
+    sechs Werkzeuge memory_search/memory_add/memory_list/memory_forget/
+    memory_aufraeumen/memory_projects laufen seither im selben Prozess wie
+    CWB (memory_hub/sdk_werkzeuge.py, claude_agent_sdk.create_sdk_mcp_server)
+    statt als externer, in ~/.claude.json registrierter MCP-Server. Scheitert
+    das Laden, verbindet die Sitzung ohne diese Werkzeuge weiter - CWB bleibt
+    in jedem Fall bedienbar, nur das Gedaechtnis fehlt dann diese Sitzung."""
+    try:
+        pfad = str(HUB_ORDNER)
+        if pfad not in sys.path:
+            sys.path.insert(0, pfad)
+        import sdk_werkzeuge  # noqa: PLC0415
+        return sdk_werkzeuge.server()
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Memory Hub nicht eingebettet, Sitzung verbindet ohne: %s", fehler)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Fehlerstrom der CLI
+# ---------------------------------------------------------------------------
+
+class Fehlerstrom:
+    """Nimmt die stderr-Ausgabe der Claude-Code-CLI auf und schreibt sie ins Log.
+
+    ClaudeAgentOptions bietet dafuer den Rueckruf `stderr`. Ohne ihn leitet das
+    SDK stderr des Unterprozesses gar nicht erst um - bei einem Absturz bleibt
+    dann nur "Command failed with exit code 1" mit dem Verweis auf eine Ausgabe,
+    die nirgends landet. Jede Zeile geht deshalb sofort nach cwb_fehler.log,
+    damit auch ein harter Abbruch nichts verschluckt. Zusaetzlich bleiben die
+    letzten Zeilen stehen, um sie im Fehlerfall am Stueck zu protokollieren und
+    einen kurzen Satz fuer die Ansage daraus zu bilden."""
+
+    GRENZE = 500
+
+    def __init__(self, quelle: str):
+        self.quelle = quelle
+        self.zeilen: deque[str] = deque(maxlen=self.GRENZE)
+
+    def aufnehmen(self, zeile: str) -> None:
+        """Rueckruf fuer ClaudeAgentOptions.stderr. Darf nie werfen."""
+        try:
+            for teil in str(zeile).splitlines():
+                text = teil.rstrip()
+                if not text.strip():
+                    continue
+                self.zeilen.append(text)
+                log.warning("CLI-stderr [%s] %s", self.quelle, text)
+        except Exception:  # noqa: BLE001
+            log.exception("stderr-Rueckruf gescheitert")
+
+    def leeren(self) -> None:
+        self.zeilen.clear()
+
+    def protokollieren(self, anlass: str) -> None:
+        """Schreibt die gesammelte Ausgabe noch einmal am Stueck ins Log, damit
+        sie im Fehlerfall nicht zwischen anderen Zeilen untergeht."""
+        if not self.zeilen:
+            log.error("%s [%s] - die CLI hat nichts auf stderr ausgegeben",
+                      anlass, self.quelle)
+            return
+        block = "\n".join(self.zeilen)
+        log.error("%s [%s] - stderr der CLI, %d Zeilen:\n%s",
+                  anlass, self.quelle, len(self.zeilen), block)
+
+    def letzte_meldung(self, zeichen: int = 200) -> str:
+        """Die letzte inhaltliche Zeile, gekuerzt - fuer Ansage und Anzeige."""
+        for text in reversed(self.zeilen):
+            satz = " ".join(text.split())
+            if satz:
+                return satz[:zeichen]
+        return ""
+
+    def ergaenzt(self, meldung: str) -> str:
+        """Haengt die letzte stderr-Zeile an eine Fehlermeldung an."""
+        letzte = self.letzte_meldung()
+        if not letzte:
+            return meldung
+        return f"{meldung} | CLI meldet: {letzte} (vollstaendig in cwb_fehler.log)"
+
+# Groesste einzelne Nachricht, die das SDK von der CLI annimmt (Vorgabe 1 MB).
+NACHRICHT_MAX_BYTES = 32 * 1024 * 1024
+# So lange wird nach einem Not-Aus auf den Rest der alten Antwort gewartet,
+# damit er nicht in den naechsten Auftrag hineinlaeuft.
+STROM_LEEREN_SEKUNDEN = 15
+# Hoechstlaufzeit des Code-Index-Hintergrundprozesses (_code_index_warten).
+# Grosszuegig, weil ein neues oder grosses Projekt beim allerersten Lauf
+# tatsaechlich Minuten braucht - aber endlich, damit ein haengender Prozess
+# (z.B. ein Modell-Download ohne Antwort) nicht fuer immer ohne Ergebnis bleibt.
+CODE_INDEX_ZEITLIMIT = 30 * 60
+# Nach so vielen Auftraegen wird der Kontextblock aus dem Projektgedaechtnis
+# erneut vorangestellt (in Kurzfassung, siehe Wissen.kontextblock_kurz).
+# Gemessen am 20.09.2026: nach dem ersten Auftrag ruft Claude Code
+# memory_search/code_suchen praktisch nie mehr auf, obwohl die Regel dafuer
+# in der globalen CLAUDE.md steht - eine feste Auftragszahl ist dafuer
+# einfacher verlaesslich als ein Zeitabstand (Sitzungen ohne Pausen wuerden
+# nie erinnert) oder eine Themenwechsel-Erkennung (bräuchte einen eigenen
+# Modellaufruf je Auftrag). Fuenf hat die Regel laut derselben Messung nicht
+# wach gehalten (memory_search seit 11 Uhr kein einziges Mal, code_suchen seit
+# 14:41 nicht mehr, bei 789 Grep/Read-Aufrufen); zwei haelt sie deutlich
+# praesenter, auf Kosten von etwas mehr Platz je Sitzung.
+AUFTRAG_KONTEXT_ALLE = 2
+
+
+# ---------------------------------------------------------------------------
+# Zustaende und Ereignisse
+# ---------------------------------------------------------------------------
+
+class Zustand(Enum):
+    """Speist Balkenfarbe und Signalton."""
+    BEREIT = "bereit"
+    SCHAERFT = "schaerft"
+    DENKT = "denkt"
+    LIEST = "liest"
+    SUCHT = "sucht"
+    SCHREIBT = "schreibt"
+    FUEHRT_AUS = "fuehrt_aus"
+    NETZ = "netz"
+    WARTET = "wartet"
+    WARTET_KONTINGENT = "wartet_kontingent"
+    FERTIG = "fertig"
+    ABGEBROCHEN = "abgebrochen"
+    FEHLER = "fehler"
+
+
+@dataclass
+class Ereignis:
+    """Ein Schritt. ansage ist kurz und vorlesbar, detail nur auf Abruf.
+    pfad ist die Datei, um die es gerade geht - leer, wenn es keine gibt.
+    ablehnung markiert eine abgelehnte oder verweigerte Aktion: nur dann
+    kommt der volle Wortlaut (detail) ins Ausgabefeld. hinweis markiert eine
+    erlaubte Aktion, von der der Nutzer trotzdem einmal erfahren soll
+    (gesprochen und als Zeile im Ausgabefeld, ohne Zustandswechsel)."""
+    zustand: Zustand
+    ansage: str
+    detail: str = ""
+    pfad: str = ""
+    taetigkeit: str = ""
+    ablehnung: bool = False
+    hinweis: bool = False
+    zeitpunkt: datetime = field(default_factory=datetime.now)
+
+    def zeile(self) -> str:
+        return f"{self.zeitpunkt.strftime('%H:%M:%S')}  {self.ansage}"
+
+
+# Werkzeugname -> (Zustand, Verbform fuer die Ansage)
+WERKZEUG_ZUSTAND: dict[str, tuple[Zustand, str]] = {
+    "Read": (Zustand.LIEST, "Datei gelesen"),
+    "Glob": (Zustand.SUCHT, "Dateien gesucht"),
+    "Grep": (Zustand.SUCHT, "Inhalt durchsucht"),
+    "Write": (Zustand.SCHREIBT, "Datei geschrieben"),
+    "Edit": (Zustand.SCHREIBT, "Datei geaendert"),
+    "MultiEdit": (Zustand.SCHREIBT, "Datei mehrfach geaendert"),
+    "NotebookEdit": (Zustand.SCHREIBT, "Notebook geaendert"),
+    "Bash": (Zustand.FUEHRT_AUS, "Befehl ausgefuehrt"),
+    "BashOutput": (Zustand.FUEHRT_AUS, "Ausgabe geholt"),
+    "KillShell": (Zustand.FUEHRT_AUS, "Prozess beendet"),
+    "WebSearch": (Zustand.NETZ, "Im Netz gesucht"),
+    "WebFetch": (Zustand.NETZ, "Seite geholt"),
+    "TodoWrite": (Zustand.DENKT, "Planung aktualisiert"),
+    "Task": (Zustand.DENKT, "Teilaufgabe gestartet"),
+}
+
+# Werkzeuge, die einen Pfad im Eingabefeld fuehren
+PFAD_FELDER = ("file_path", "path", "notebook_path", "filePath")
+
+# Werkzeugname -> Taetigkeit in einem Wort, Gegenwartsform. Nur das Tun,
+# nie ein Ziel: der Dateiname steht in der Oberflaeche in einem eigenen Feld.
+WERKZEUG_TAETIGKEIT: dict[str, str] = {
+    "Read": "liest",
+    "Glob": "sucht",
+    "Grep": "sucht",
+    "Write": "schreibt",
+    "Edit": "schreibt",
+    "MultiEdit": "schreibt",
+    "NotebookEdit": "schreibt",
+    "Bash": "führt aus",
+    "BashOutput": "liest",
+    "KillShell": "führt aus",
+    "WebSearch": "sucht",
+    "WebFetch": "liest",
+    "TodoWrite": "denkt",
+    "Task": "denkt",
+}
+
+# Taetigkeit fuer Werkzeuge, die in der Tabelle nicht stehen
+TAETIGKEIT_UNBEKANNT = "führt aus"
+
+# Werkzeuge, die immer eine gesprochene Rueckfrage ausloesen (Git hilft hier nicht)
+NETZ_WERKZEUGE = {"WebFetch", "WebSearch"}
+
+# Suchpflicht vor Aenderungen (Block C6, Teil B): die MCP-Namen der beiden
+# Nachschlage-Werkzeuge, nach dem Muster mcp__<Servername>__<Werkzeug> - die
+# Servernamen stammen aus index/mcp_server.py (SERVER_NAME) und aus
+# memory_hub/sdk_werkzeuge.py (SERVER_NAME, seit Block 61 eingebettet statt
+# extern in ~/.claude.json registriert).
+MEMORY_SEARCH_WERKZEUG = "mcp__memory-hub__memory_search"
+CODE_SUCHEN_WERKZEUG = "mcp__code-index__code_suchen"
+NACHSCHLAGE_WERKZEUGE = {MEMORY_SEARCH_WERKZEUG, CODE_SUCHEN_WERKZEUG}
+
+MELDUNG_SUCHPFLICHT = (
+    "Erst nachschlagen: rufe memory_search mit Stichworten zum Auftrag und "
+    "code_suchen zur betroffenen Stelle auf, dann aendere."
+)
+
+# Wie oft und wie lange _nachschlage_werkzeuge_lesen auf get_mcp_status()
+# wartet (Block 63): direkt nach connect() melden MCP-Server sich noch als
+# "pending", das Verbinden laeuft im Hintergrund weiter - gemessen rund eine
+# halbe Sekunde fuer memory-hub/code-index. Ohne kurzes Nachfragen waere die
+# Liste bei jeder Verbindung leer.
+NACHSCHLAGE_STATUS_VERSUCHE = 6
+NACHSCHLAGE_STATUS_WARTEZEIT = 0.5
+
+
+# Ordner fuer das Auftragsprotokoll, relativ zum Projekt
+PROTOKOLL_UNTERORDNER = Path(".cwb") / "protokoll"
+
+# Laenge, ab der ein Werkzeugergebnis im Protokoll abgeschnitten wird
+PROTOKOLL_ERGEBNIS_LAENGE = 300
+
+# Werkzeuge, die die Kennzahl "Such-Effizienz" als Lesezugriff zaehlt (Block
+# C10). Bash zaehlt nur dazu, wenn befehl_schreibt() nichts findet - dieselbe
+# Pruefung, die core/sicherheit.py schon fuer den Nur-Lesen-Modus benutzt.
+LESE_WERKZEUGE = {"Read", "Grep", "Glob"}
+
+
+def _ist_lesezugriff(name: str, ziel: str) -> bool:
+    if name in LESE_WERKZEUGE:
+        return True
+    if name == "Bash":
+        return not befehl_schreibt(ziel or "")
+    return False
+
+
+def _ist_aenderung(name: str, ziel: str) -> bool:
+    if name in SCHREIB_WERKZEUGE:
+        return True
+    if name == "Bash":
+        return bool(befehl_schreibt(ziel or ""))
+    return False
+
+
+def lesezugriffe_vor_aenderung(werkzeuge: list[dict]) -> int:
+    """Zaehlt Read/Grep/Glob/lesende-Bash-Aufrufe am Anfang eines Auftrags,
+    bis die erste Aenderung kommt (Edit/Write/NotebookEdit oder ein
+    schreibender Bash-Befehl). Kommt nie eine Aenderung, zaehlen alle -
+    Grundlage der Kopfzeilen-Anzeige "Such-Effizienz" (Block C10)."""
+    zahl = 0
+    for eintrag in werkzeuge:
+        name = eintrag.get("name", "")
+        ziel = eintrag.get("ziel", "")
+        if _ist_aenderung(name, ziel):
+            break
+        if _ist_lesezugriff(name, ziel):
+            zahl += 1
+    return zahl
+
+
+# Rueckrufe, die die Oberflaeche setzt
+EreignisRuf = Callable[[Ereignis], None]
+TextRuf = Callable[[str], None]
+FrageRuf = Callable[[str, str], Awaitable[bool]]
+VerbrauchRuf = Callable[[dict[str, int]], None]
+
+
+SYSTEM_ZUSATZ = """Du arbeitest in CWB, einer barrierefreien Oberflaeche.
+Der Nutzer ist blind und laesst sich Antworten vorlesen.
+
+Regeln:
+- Antworte kurz. Keine langen Erklaerungen, keine Wiederholung des Codes im Chat.
+- Nach getaner Arbeit: ein bis drei Saetze, was geaendert wurde. Mehr nicht.
+- Strikte Trennung: keine Inline-Scripts, keine Inline-Styles, keine Inline-Event-Handler.
+  Scripts in .js, Styles in .css, Handler nur ueber addEventListener.
+- Barrierefreiheit hat Vorrang, die Oberflaeche muss fuer sehende Nutzer trotzdem gut aussehen.
+- Flexible, responsive Raster. Keine festen Pixelgroessen.
+- Jede neue Werkzeugdatei bekommt Fehler-Logging ueber das Modul logging.
+- Lies eine Datei, bevor du sie aenderst.
+- Wenn etwas unklar, unmoeglich oder unlogisch ist: sag es in einem Satz, statt zu raten.
+- Das Werkzeug fuer Unteragenten (Agent) und fuer Hintergrund-Orchestrierung
+  (Workflow) ist in CWB abgeschaltet und steht dir nicht zur Verfuegung.
+- Starte keine Hintergrund-Befehle (z. B. Bash im Hintergrund), auf deren
+  Ergebnis du warten muesstest. Arbeite jeden Auftrag vollstaendig selbst ab
+  und beende ihn erst, wenn er umgesetzt und geprueft ist.
+- Keine simulierten Tastendruecke oder Mausklicks an Fenster anderer Programme.
+  Programme werden ueber eingebaute Testzugaenge, Kommandozeile oder
+  Bildschirmfotos geprueft."""
+
+
+# Block 52: Werkzeugnamen aus der offiziellen Claude-Code-Tool-Referenz
+# (https://code.claude.com/docs/en/tools-reference), die fuer CWB-Sitzungen
+# ganz abgeschaltet werden (ClaudeAgentOptions.disallowed_tools in
+# _einstellungen()) - "Agent" startet Unteragenten, "Workflow" orchestriert
+# mehrere davon im Hintergrund. Als eigene Konstante, damit ein Test ohne
+# laufende Sitzung pruefen kann, dass beide wirklich gesperrt sind.
+HINTERGRUND_WERKZEUGE_GESPERRT = ["Agent", "Workflow"]
+
+# Umgebung nur fuer den Claude-Code-Unterprozess des Agenten (ClaudeAgentOptions
+# .env in _einstellungen()). Claude Code 2.1.300 lagert lange Bash-Befehle von
+# sich aus als Hintergrundaufgabe aus; CWB beendete sie dann sofort per
+# stop_task (_hintergrund_gestartet) - Ergebnis: Exit 137 mitten im Gradle-Build.
+# CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 nimmt Bash run_in_background weg, der
+# Befehl laeuft im Vordergrund bis zum Zeitlimit. BASH_DEFAULT/MAX_TIMEOUT_MS
+# heben das Bash-Zeitlimit des Werkzeugs auf 600 s (passend zu ZEITLIMIT_RUN).
+BASH_ZEITLIMIT_MS = 600_000
+AGENT_UMGEBUNG = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": str(BASH_ZEITLIMIT_MS),
+    "BASH_MAX_TIMEOUT_MS": str(BASH_ZEITLIMIT_MS),
+}
+
+
+def _hintergrund_warnung(aktive: dict[str, str]) -> str | None:
+    """Baut den Warnungstext fuer bericht_bauen() (core/fenster.py) aus den
+    beim Ende eines Auftrags noch nicht abgeschlossenen Hintergrundaufgaben
+    (task_id -> Beschreibung, siehe Sitzung._hintergrundaufgaben). None,
+    wenn keine mehr offen ist - dann bleibt der Bericht unveraendert."""
+    if not aktive:
+        return None
+    beschreibungen = ", ".join(
+        f"{beschreibung} ({task_id})" for task_id, beschreibung in aktive.items()
+    )
+    return f"Auftrag endete mit laufender Hintergrundaufgabe: {beschreibungen}"
+
+
+def _kontingent_aus_limit(info: Any) -> dict[str, Any] | None:
+    """Baut das Rueckgabefeld "kontingent" von auftrag() aus der zuletzt
+    erhaltenen RateLimitEvent-Meldung (Agent-SDK, Kontingent-Pause bei
+    erschoepftem Max-Abo) - None, wenn keine Meldung vorliegt oder ihr
+    Status nicht "rejected" (erschoepft) ist, etwa bei "allowed_warning".
+    `info` ist eine claude_agent_sdk.RateLimitInfo; als Any getippt, damit
+    core/test_kontingent.py sie ohne SDK-Importpflicht nachbilden kann.
+    Eigene Funktion statt Inline-Code in auftrag(), damit sich die Erkennung
+    ohne laufende SDK-Verbindung testen laesst."""
+    if info is None or getattr(info, "status", None) != "rejected":
+        return None
+    return {
+        "resets_at": info.resets_at,
+        "rate_limit_type": info.rate_limit_type,
+        "quelle": "RateLimitEvent (Claude Agent SDK), status=rejected",
+    }
+
+
+# Block 77, Punkt 3: Typen des Wochenfensters (claude_agent_sdk.types.
+# RateLimitType) - "seven_day" sowie die beiden modellbezogenen Varianten.
+# Alle drei zaehlen hier gleich als "das Wochenkontingent".
+WOCHENFENSTER_TYPEN = {"seven_day", "seven_day_opus", "seven_day_sonnet"}
+
+
+def _limit_eintrag(info: Any) -> dict[str, Any] | None:
+    """Macht aus einer RateLimitInfo (oder ihrer Nachbildung in Tests,
+    core/test_kontingent.py) ein einfaches dict mit den vier gebrauchten
+    Feldern - None ohne Meldung. "utilization" (0.0-1.0) ist die Grundlage
+    der Prozentanzeige (Block 36); das SDK schickt sie mit jeder Meldung."""
+    if info is None:
+        return None
+    return {
+        "status": getattr(info, "status", None),
+        "resets_at": getattr(info, "resets_at", None),
+        "rate_limit_type": getattr(info, "rate_limit_type", None),
+        "utilization": getattr(info, "utilization", None),
+    }
+
+
+# Block 36 (Kontingent-Anzeige): Farbstufen fuer Kopfzeile und F2 - unter
+# KONTINGENT_FARBE_WARNUNG ruhig ("normal"), darueber gelblich/orange
+# ("warnung"), ab KONTINGENT_FARBE_KRITISCH rot ("kritisch"). Fest verdrahtet,
+# anders als die in F12 -> Verhalten einstellbare Sparmodus-Schwelle (Standard
+# ebenfalls 95 %, siehe Sitzung.sparmodus_aktiv) - das hier ist reine
+# Darstellung, nicht konfigurierbar.
+KONTINGENT_FARBE_WARNUNG = 90
+KONTINGENT_FARBE_KRITISCH = 95
+
+# Kurznamen der Wochentage fuer die Freigabezeit des Wochenfensters
+# ("Do 11:00") - das Fuenf-Stunden-Fenster braucht keinen Wochentag, es
+# setzt ohnehin binnen Stunden zurueck.
+WOCHENTAGE_KURZ = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+_KONTINGENT_RANG = {"normal": 0, "warnung": 1, "kritisch": 2, "erschoepft": 3}
+
+
+def _kontingent_prozent(eintrag: dict | None) -> int | None:
+    """Rundet das Feld "utilization" (0.0-1.0) einer RateLimitEvent-Meldung
+    auf ganze Prozent - None, wenn fuer dieses Fenster in der laufenden
+    Sitzung noch keine Meldung da war. Das SDK schickt eine Meldung erst,
+    sobald eine interne Warnschwelle erreicht ist (Block 36: im Log liefen
+    seit 14:17 laufend seven_day-Meldungen mit 0.76-0.80) - vorher gibt es
+    schlicht keine Zahl, nie eine erfundene."""
+    if not eintrag:
+        return None
+    utilization = eintrag.get("utilization")
+    return None if utilization is None else round(utilization * 100)
+
+
+def _kontingent_uhrzeit(resets_at: float | int | None, mit_wochentag: bool) -> str:
+    """'Do 11:00' (Wochenfenster) bzw. '11:00' (Fuenf-Stunden-Fenster) -
+    leer ohne bekannte Freigabezeit."""
+    if not resets_at:
+        return ""
+    zeitpunkt = datetime.fromtimestamp(resets_at)
+    if mit_wochentag:
+        return f"{WOCHENTAGE_KURZ[zeitpunkt.weekday()]} {zeitpunkt:%H:%M}"
+    return f"{zeitpunkt:%H:%M}"
+
+
+def _kontingent_fensteranzeige(bezeichnung: str, eintrag: dict | None,
+                                mit_wochentag: bool) -> str | None:
+    """Baut 'Woche 80 % · zurück Do 11:00' aus einer gemerkten RateLimit-
+    Meldung - None, wenn fuer dieses Fenster noch keine Prozentzahl vorliegt
+    (siehe _kontingent_prozent)."""
+    prozent = _kontingent_prozent(eintrag)
+    if prozent is None:
+        return None
+    text = f"{bezeichnung} {prozent} %"
+    uhrzeit = _kontingent_uhrzeit(eintrag.get("resets_at"), mit_wochentag)
+    return f"{text} · zurück {uhrzeit}" if uhrzeit else text
+
+
+def _kontingent_stufe_aus_prozent(prozent: int | None) -> str:
+    """Block 36, Punkt 2: ordnet eine Prozentzahl einer der drei Farbstufen
+    zu - None (noch keine Meldung) gilt als "normal", erfindet also nie eine
+    Warnung."""
+    if prozent is None:
+        return "normal"
+    if prozent >= KONTINGENT_FARBE_KRITISCH:
+        return "kritisch"
+    if prozent >= KONTINGENT_FARBE_WARNUNG:
+        return "warnung"
+    return "normal"
+
+
+def _sparmodus_erforderlich(limit_woche: dict | None, schwelle_prozent: int) -> bool:
+    """Block 36, Punkt 4: wahr, wenn die zuletzt gemeldete Wochenauslastung
+    (Feld "utilization") die in F12 -> Verhalten eingestellte Schwelle
+    erreicht oder ueberschreitet. Ersetzt die fruehere reine Statuspruefung
+    (status=="allowed_warning", SDK-intern unveraenderlich) durch einen von
+    vom Nutzer einstellbaren Prozentwert; ohne bekannte Prozentzahl nie aktiv."""
+    prozent = _kontingent_prozent(limit_woche)
+    return prozent is not None and prozent >= schwelle_prozent
+
+
+def _kontingent_zustand_berechnen(limit_funf_stunden: dict | None,
+                                   limit_woche: dict | None) -> dict:
+    """Block 36: baut aus den zuletzt gemeldeten RateLimitEvent-Meldungen
+    beider Fenster die Kontingent-Anzeige fuer Kopfzeile und F2 - mit echten
+    Prozentzahlen (Feld "utilization" des Agent-SDK), nicht nur dem groben
+    Status. "woche_anzeige" ist nie leer: ohne bekannte Prozentzahl steht
+    dort "Woche: unter Warnschwelle" statt einer erfundenen Zahl.
+    "sitzung_anzeige" ist None, bis das Fuenf-Stunden-Fenster zum ersten Mal
+    gemeldet hat - dann erst weiss CWB ueberhaupt etwas darueber.
+    status="rejected" (echte Kontingent-Pause, core/fenster.py
+    _kontingent_pause_behandeln) zeigt sich als Stufe "erschoepft", unabhaengig
+    von der Prozentzahl."""
+    woche_prozent = _kontingent_prozent(limit_woche)
+    sitzung_prozent = _kontingent_prozent(limit_funf_stunden)
+    stufe = "normal"
+
+    if limit_woche and limit_woche.get("status") == "rejected":
+        uhrzeit = _kontingent_uhrzeit(limit_woche.get("resets_at"), True)
+        woche_anzeige = f"Woche erschöpft, zurück {uhrzeit}" if uhrzeit else "Woche erschöpft"
+        stufe = "erschoepft"
+    elif woche_prozent is None:
+        woche_anzeige = "Woche: unter Warnschwelle"
+    else:
+        woche_anzeige = _kontingent_fensteranzeige("Woche", limit_woche, True)
+        stufe = _kontingent_stufe_aus_prozent(woche_prozent)
+
+    sitzung_anzeige = None
+    if limit_funf_stunden and limit_funf_stunden.get("status") == "rejected":
+        uhrzeit = _kontingent_uhrzeit(limit_funf_stunden.get("resets_at"), False)
+        sitzung_anzeige = f"Sitzung erschöpft, zurück {uhrzeit}" if uhrzeit else "Sitzung erschöpft"
+        stufe = "erschoepft"
+    elif sitzung_prozent is not None:
+        sitzung_anzeige = _kontingent_fensteranzeige("Sitzung", limit_funf_stunden, False)
+        stufe_sitzung = _kontingent_stufe_aus_prozent(sitzung_prozent)
+        if _KONTINGENT_RANG[stufe_sitzung] > _KONTINGENT_RANG[stufe]:
+            stufe = stufe_sitzung
+
+    satz = woche_anzeige if sitzung_anzeige is None else f"{woche_anzeige}; {sitzung_anzeige}"
+
+    return {
+        "stufe": stufe,
+        "text": f"{satz}.",
+        "woche_anzeige": woche_anzeige,
+        "sitzung_anzeige": sitzung_anzeige,
+        "woche_prozent": woche_prozent,
+        # Fuer core/kontingent.py (Stand ueberschreiben): Prozent und Reset-Zeiten
+        "sitzung_prozent": sitzung_prozent,
+        "sitzung_reset": _kontingent_uhrzeit(
+            (limit_funf_stunden or {}).get("resets_at"), False) or None,
+        "woche_reset": _kontingent_uhrzeit(
+            (limit_woche or {}).get("resets_at"), True) or None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sitzung
+# ---------------------------------------------------------------------------
+
+class Sitzung:
+    """Haelt die Verbindung zu Claude Code fuer ein Projekt."""
+
+    def __init__(
+        self,
+        wache: Wache,
+        bei_ereignis: EreignisRuf | None = None,
+        bei_text: TextRuf | None = None,
+        bei_rueckfrage: FrageRuf | None = None,
+        bei_verbrauch: VerbrauchRuf | None = None,
+        modell: str | None = None,
+        system_zusatz: str | None = None,
+        zusatz_server: dict[str, Any] | None = None,
+        schlank: bool = False,
+        bei_werkzeug: Any = None,
+        bei_werkzeug_ergebnis: Any = None,
+    ):
+        self.wache = wache
+        # Befehlsanzeige der Orchestrator-Ansicht: bei_werkzeug(name, eingabe)
+        # und bei_werkzeug_ergebnis(name, eingabe, status, text) mit status
+        # "fertig", "fehler" oder "abgelehnt". Ohne Rueckruf aendert sich nichts.
+        self.bei_werkzeug = bei_werkzeug
+        self.bei_werkzeug_ergebnis = bei_werkzeug_ergebnis
+        self._werkzeug_offen: dict[str, tuple[str, dict]] = {}
+        self._ablehnung_offen = False
+        # Orchestrator-Sitzung (core/orchestrator.py): eigener Systemtext,
+        # zusaetzliche eingebettete Werkzeug-Server und der "schlanke" Lauf.
+        # Schlank heisst: kein Git-Sicherungspunkt (die normale Sitzung haelt
+        # den Projektstand allein), kein Projektwissen/Nachtrag, kein
+        # Code-Index- oder Landkartenlauf, kein Auftragsprotokoll im Projekt.
+        # Alle drei Vorgaben stehen auf "unveraendert", damit die normale
+        # Sitzung sich nicht aendert.
+        self.system_zusatz = system_zusatz
+        self.zusatz_server = dict(zusatz_server or {})
+        self.schlank = bool(schlank)
+        self.bei_ereignis = bei_ereignis or (lambda e: None)
+        self.bei_text = bei_text or (lambda t: None)
+        self.bei_rueckfrage = bei_rueckfrage
+        self.bei_verbrauch = bei_verbrauch or (lambda v: None)
+        # "default" heisst: kein Modell angeben und Claude Code entscheiden
+        # lassen. Alles andere wird unveraendert weitergereicht.
+        self.modell = None if (modell or MODELL_STANDARD) == MODELL_STANDARD else modell
+        self.modell_name = ""
+        # Die vom Abo wirklich angebotenen Modelle, gefuellt beim Verbinden.
+        self.modelle: list[dict] = []
+
+        self.klient: ClaudeSDKClient | None = None
+        self.wissen: Wissen | None = None
+        self.schritte: list[Ereignis] = []
+        self.laeuft = False
+        self.begonnen: datetime | None = None
+        self._abbruch = False
+        self._kontext_ausstehend = ""
+        # Zaehlt Auftraege seit dem letzten vorangestellten Kontextblock, um
+        # ihn alle AUFTRAG_KONTEXT_ALLE Auftraege in Kurzfassung zu
+        # wiederholen (siehe auftrag()); wird beim Verbinden neu aufgesetzt.
+        self._auftraege_seit_kontext = 0
+        # Block 52: Hintergrundaufgaben (Agent/Workflow/Bash im Hintergrund),
+        # deren Start diese Sitzung gesehen hat, aber noch kein Abschluss -
+        # task_id -> Beschreibung. Ueberlebt einzelne Auftraege absichtlich,
+        # damit eine Aufgabe, die erst nach der ResultMessage eines spaeteren
+        # Auftrags fertig meldet, trotzdem wieder entfernt wird (siehe
+        # auftrag(), Verarbeitung von TaskStartedMessage/TaskNotification-
+        # Message/TaskUpdatedMessage).
+        self._hintergrundaufgaben: dict[str, str] = {}
+        # Suchpflicht vor Aenderungen (Block C6, Teil B): welche der beiden
+        # Nachschlage-Werkzeuge in dieser Sitzung ueberhaupt verbunden sind
+        # (gefuellt beim Verbinden ueber get_mcp_status), ob im laufenden
+        # Auftrag schon eines davon aufgerufen wurde, und ob der Hinweis auf
+        # fehlende MCP-Server schon einmal vermerkt wurde (nur einmal noetig).
+        self._nachschlage_verfuegbar: set[str] = set()
+        self._nachschlage_erfuellt = False
+        self._suchpflicht_hinweis_gegeben = False
+        self.fehlerstrom = Fehlerstrom("Sitzung")
+        # Die zuletzt im laufenden Auftrag erhaltene RateLimitEvent-Meldung
+        # des SDK (Max-Kontingent) - status="rejected" heisst erschoepft,
+        # siehe auftrag() und _kontingent_aus_limit().
+        self._limit_erkannt = None
+        # Block 77: die zuletzt gemeldete RateLimitEvent-Meldung je Fenster
+        # (Fuenf-Stunden- bzw. Wochenfenster), unabhaengig vom einzelnen
+        # Auftrag - anders als _limit_erkannt NICHT in auftrag() zurueckgesetzt,
+        # sie gilt fuer die ganze Sitzung weiter, bis eine neuere Meldung zum
+        # selben Fenster eintrifft. Grundlage fuer kontingent_zustand() (F2,
+        # Kopfzeile) und sparmodus_aktiv() (Punkt 3: Sparmodus bei knappem
+        # Wochenkontingent).
+        self.limit_funf_stunden: dict[str, Any] | None = None
+        self.limit_woche: dict[str, Any] | None = None
+        self.verbrauch = {
+            "eingabe": 0, "cache_gelesen": 0, "cache_erstellt": 0, "ausgabe": 0,
+            "gesamt": 0, "sitzung": 0,
+            "sitzung_eingabe": 0, "sitzung_ausgabe": 0,
+            "sitzung_cache_gelesen": 0, "sitzung_cache_erstellt": 0,
+        }
+        self._protokoll: dict[str, Any] | None = None
+
+    # -- Ereignisse ---------------------------------------------------------
+
+    def _melde(self, zustand: Zustand, ansage: str, detail: str = "",
+               pfad: str = "", taetigkeit: str = "", ablehnung: bool = False,
+               hinweis: bool = False) -> None:
+        ereignis = Ereignis(zustand, ansage, detail, pfad, taetigkeit, ablehnung, hinweis)
+        if ablehnung:
+            self._ablehnung_offen = True
+        self.schritte.append(ereignis)
+        try:
+            self.bei_ereignis(ereignis)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Ereignisrueckruf gescheitert: %s", fehler)
+
+    def _such_effizienz_satz(self) -> str:
+        """Fuer 'Wo stehen wir?' (F2) - dieselbe Zahl wie in der Kopfzeile,
+        nur als Satz. Keine Token-Ersparnis, siehe core/grundlagen.py. 100
+        Prozent ist der Normalwert vom 21.09.2026, mehr heisst gezielter
+        gesucht, weniger umstaendlicher (wie core/kopfzeile.py::such_effizienz_zeigen)."""
+        prozent = such_effizienz_prozent()
+        if prozent is None:
+            return "Such-Effizienz: noch nicht ermittelbar."
+        return f"Such-Effizienz {prozent} Prozent."
+
+    def stand(self) -> str:
+        """Antwort auf die Taste 'Wo stehen wir?'. Nennt seit Block 61 (Teil
+        C) den genauen, aufgeloesten Modellnamen (z.B. 'claude-opus-5[1m]'),
+        nicht nur den Familiennamen der Auswahl. Block 77, Punkt 4: zusaetzlich
+        der Kontingent-Zustand, sofern das SDK in dieser Sitzung schon eine
+        RateLimitEvent-Meldung geschickt hat - sonst entfaellt der Satz."""
+        modell = f" Modell {self.modell_name}." if self.modell_name else ""
+        kontingent_text = self.kontingent_zustand().get("text", "")
+        kontingent = f" {kontingent_text}" if kontingent_text else ""
+        if not self.laeuft:
+            return (f"Nichts laeuft gerade.{modell}{kontingent} "
+                    f"{self.verbrauch['sitzung']} Token in dieser Sitzung, "
+                    f"{self.verbrauch['gesamt']} beim letzten Aufruf. {self._such_effizienz_satz()}")
+        anzahl = len(self.schritte)
+        dauer = int((datetime.now() - self.begonnen).total_seconds()) if self.begonnen else 0
+        letzte = self.schritte[-1].ansage if self.schritte else "gestartet"
+        return (f"Schritt {anzahl}, laeuft seit {dauer} Sekunden.{modell}{kontingent} "
+                f"Zuletzt: {letzte}. {self._such_effizienz_satz()}")
+
+    def kontingent_zustand(self) -> dict:
+        """Block 77, Punkt 4: kurzer Kontingent-Zustand fuer Kopfzeile und F2
+        - {"stufe": "normal"|"knapp"|"erschoepft", "text": "..."}, Text leer
+        ohne jede bisherige RateLimitEvent-Meldung dieser Sitzung."""
+        return _kontingent_zustand_berechnen(self.limit_funf_stunden, self.limit_woche)
+
+    def sparmodus_aktiv(self, schwelle_prozent: int = 95) -> bool:
+        """Block 36, Punkt 4: wahr, wenn die zuletzt gemeldete
+        Wochenauslastung (Feld "utilization") `schwelle_prozent` erreicht
+        oder ueberschreitet - der Wert kommt aus F12 -> Verhalten
+        ("sparmodus_schwelle_prozent", Standard 95)."""
+        return _sparmodus_erforderlich(self.limit_woche, schwelle_prozent)
+
+    def _verbrauch_erfassen(self, nachricht: ResultMessage) -> None:
+        """Haelt die Tokenwerte des letzten Auftrags fest und summiert die Sitzung.
+
+        Bedeutung der Felder der ResultMessage (usage des Agent SDK, durchgereicht
+        aus der Messages-API):
+          input_tokens            - frische Eingabe, die nicht aus dem Cache kam
+          cache_read_input_tokens - aus dem Prompt-Cache gelesen, wiederholt bei
+                                    jedem Aufruf fast die ganze Unterhaltung
+          cache_creation_input_tokens - neu in den Cache geschrieben
+          output_tokens           - erzeugte Antwort
+
+        Die ResultMessage fasst bereits alle API-Aufrufe eines Auftrags zusammen.
+        Als Hauptzahl zaehlen nur frische Eingabe und Ausgabe; die Cache-Werte
+        wuerden dieselbe Unterhaltung bei jedem Auftrag erneut mitzaehlen und
+        stehen deshalb nur im Kurzhinweis. Die Sitzungssumme addiert die
+        Auftragswerte, weil jeder Auftrag eigene frische Tokens verbraucht.
+        """
+        nutzung = nachricht.usage or {}
+        eingabe = int(nutzung.get("input_tokens", 0) or 0)
+        cache_gelesen = int(nutzung.get("cache_read_input_tokens", 0) or 0)
+        cache_erstellt = int(nutzung.get("cache_creation_input_tokens", 0) or 0)
+        ausgabe = int(nutzung.get("output_tokens", 0) or 0)
+        vorher = self.verbrauch
+        self.verbrauch = {
+            "eingabe": eingabe,
+            "cache_gelesen": cache_gelesen,
+            "cache_erstellt": cache_erstellt,
+            "ausgabe": ausgabe,
+            "gesamt": eingabe + ausgabe,
+            "sitzung": vorher.get("sitzung", 0) + eingabe + ausgabe,
+            "sitzung_eingabe": vorher.get("sitzung_eingabe", 0) + eingabe,
+            "sitzung_ausgabe": vorher.get("sitzung_ausgabe", 0) + ausgabe,
+            "sitzung_cache_gelesen": vorher.get("sitzung_cache_gelesen", 0) + cache_gelesen,
+            "sitzung_cache_erstellt": vorher.get("sitzung_cache_erstellt", 0) + cache_erstellt,
+        }
+        try:
+            self.bei_verbrauch(dict(self.verbrauch))
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Verbrauchsrueckruf gescheitert: %s", fehler)
+
+    # -- Nur-Lesen-Modus ----------------------------------------------------
+
+    @property
+    def nur_lesen(self) -> bool:
+        return self.wache.nur_lesen
+
+    def nur_lesen_setzen(self, an: bool) -> str:
+        """Schaltet den Nur-Lesen-Modus der Wache. Gibt den Ansagesatz zurueck."""
+        satz = self.wache.nur_lesen_setzen(an)
+        if not self.laeuft:
+            self._melde(Zustand.BEREIT, satz)
+        return satz
+
+    # -- Berechtigungen -----------------------------------------------------
+
+    def _pfad_aus_eingabe(self, eingabe: dict[str, Any]) -> str | None:
+        for feld in PFAD_FELDER:
+            wert = eingabe.get(feld)
+            if isinstance(wert, str) and wert:
+                return wert
+        return None
+
+    def _ist_hintergrund(self, name: str, eingabe: dict[str, Any]) -> bool:
+        """Erkennt einen Hintergrundstart: das Parameterfeld run_in_background
+        (Bash, Agent) oder das Werkzeug Workflow, das immer im Hintergrund
+        laeuft. Ergebnis kommt dann erst in einer spaeteren Antwortrunde nach,
+        die auftrag() nach der ersten ResultMessage nicht mehr abholt - der
+        Auftrag gilt als fertig, das Ergebnis ist verloren."""
+        if eingabe.get("run_in_background") is True:
+            return True
+        return name == "Workflow"
+
+    def _hintergrund_ablehnen(self, name: str, eingabe: dict[str, Any]) -> None:
+        """Lehnt einen Hintergrundstart ab. Geht nur ins Auftragsprotokoll und
+        nach cwb_fehler.log - bewusst ohne _melde/Ansage, die Ablehnung soll
+        nicht gesprochen werden."""
+        ziel = (
+            self._pfad_aus_eingabe(eingabe)
+            or str(eingabe.get("command") or eingabe.get("prompt") or "")[:200]
+            or name
+        )
+        begruendung = f"Hintergrund gesperrt ({name}), im Vordergrund erneut ausfuehren"
+        log.warning("Hintergrund abgelehnt: %s | Ziel: %s", name, ziel)
+        self._protokoll_ablehnung_erfassen(ziel, begruendung)
+
+    async def _hintergrund_gestartet(self, nachricht: TaskStartedMessage) -> None:
+        """Reaktion auf eine TaskStartedMessage (Block 52/80): SYSTEM_ZUSATZ
+        und disallowed_tools verbieten Hintergrundaufgaben; trifft trotzdem
+        eine ein (z. B. Bash im Hintergrund, das disallowed_tools nicht
+        sperren kann, oder ein Skill, der von sich aus im Hintergrund laeuft,
+        ohne dass run_in_background im Werkzeugaufruf auftaucht -
+        _darf_werkzeug() kann das vorher nicht erkennen), wird sie hier nicht
+        nur vermerkt, sondern sofort abgebrochen (client.stop_task) - sonst
+        bliebe sie unbemerkt im Hintergrund weiterlaufen, waehrend der
+        Auftrag laengst als fertig gilt."""
+        self._hintergrundaufgaben[nachricht.task_id] = nachricht.description
+        log.warning(
+            "Hintergrundaufgabe gestartet trotz Verbot, wird abgebrochen: %s (%s)",
+            nachricht.task_id, nachricht.description,
+        )
+        try:
+            await self.klient.stop_task(nachricht.task_id)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception(
+                "Hintergrundaufgabe nicht abbrechbar: %s (%s)", nachricht.task_id, fehler,
+            )
+
+    def _suchpflicht_verletzt(self, name: str, eingabe: dict[str, Any]) -> bool:
+        """Wahr, wenn dieser Aufruf eine schreibende Aktion ist, die
+        Suchpflicht eingeschaltet ist, in dieser Sitzung mindestens ein
+        Nachschlage-Werkzeug verbunden ist und im laufenden Auftrag noch
+        keines davon aufgerufen wurde (Block C6, Teil B)."""
+        # Die schlanke Orchestrator-Sitzung bekommt das Gedaechtnis als
+        # Startblock (core/orchestrator.py, startblock_bauen): die Pflicht
+        # gilt dort als erfuellt.
+        if self.schlank or self._nachschlage_erfuellt or not self._nachschlage_verfuegbar:
+            return False
+        if not einstellungen_lesen().get("suchpflicht_vor_aenderungen", False):
+            return False
+        if name in SCHREIB_WERKZEUGE:
+            return True
+        if name == "Bash":
+            return bool(befehl_schreibt(str(eingabe.get("command", ""))))
+        return False
+
+    def _suchpflicht_ablehnen(self, name: str, eingabe: dict[str, Any]) -> PermissionResultDeny:
+        """Lehnt die erste schreibende Aktion eines Auftrags ab, solange
+        weder memory_search noch code_suchen aufgerufen wurden. Geht bewusst
+        nicht durch `_melde`: die Ablehnung wird nicht gesprochen oder im
+        Ausgabefeld gezeigt (Block C6, Teil B Punkt 8), nur protokolliert."""
+        ziel = self._pfad_aus_eingabe(eingabe) or str(eingabe.get("command", "")) or name
+        log.info("Suchpflicht: Schreiben abgelehnt vor erster Suche (%s): %s", name, ziel)
+        if self._protokoll is not None:
+            self._protokoll["suchpflicht_ablehnungen"] += 1
+        return PermissionResultDeny(message=MELDUNG_SUCHPFLICHT)
+
+    async def _darf_werkzeug(
+        self, name: str, eingabe: dict[str, Any], kontext: ToolPermissionContext
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """Wird vom SDK vor jedem Werkzeugaufruf gerufen."""
+        try:
+            if self._ist_hintergrund(name, eingabe):
+                self._hintergrund_ablehnen(name, eingabe)
+                return PermissionResultDeny(
+                    message="Hintergrund ist gesperrt, im Vordergrund erneut ausfuehren."
+                )
+
+            urteil = self.wache.darf_werkzeug(name)
+            if urteil.verboten:
+                ziel = self._pfad_aus_eingabe(eingabe) or name
+                return self._ablehnen(urteil, ziel)
+
+            if name in NACHSCHLAGE_WERKZEUGE:
+                self._nachschlage_erfuellt = True
+            elif name in SCHREIB_WERKZEUGE and self._suchpflicht_verletzt(name, eingabe):
+                # Nur-Lesen hat schon vorher (wache.darf_werkzeug) abgelehnt,
+                # falls es zutrifft - hier greift die Suchpflicht nur noch,
+                # wenn das Schreiben sonst erlaubt waere.
+                return self._suchpflicht_ablehnen(name, eingabe)
+
+            pfad = self._pfad_aus_eingabe(eingabe)
+            if pfad:
+                urteil = self.wache.darf_pfad(pfad)
+                if urteil.verboten:
+                    return self._ablehnen(urteil, urteil.ziel() or pfad)
+                if urteil.hinweis:
+                    self._hinweis_geben(urteil, pfad)
+
+            if name == "Bash":
+                befehl = str(eingabe.get("command", ""))
+                urteil = self.wache.darf_befehl(befehl)
+                if urteil.verboten:
+                    return self._ablehnen(urteil, befehl)
+                if self._suchpflicht_verletzt(name, eingabe):
+                    return self._suchpflicht_ablehnen(name, eingabe)
+                if urteil.stufe is Stufe.RUECKFRAGE:
+                    return await self._frage(urteil.begruendung, befehl)
+
+            if name in NETZ_WERKZEUGE:
+                if self.wache.internet_frei():
+                    return PermissionResultAllow()
+                ziel = str(eingabe.get("url") or eingabe.get("query") or "")
+                return await self._frage("Zugriff auf das Internet", ziel)
+
+            return PermissionResultAllow()
+
+        except Exception as fehler:  # noqa: BLE001
+            ziel = self._pfad_aus_eingabe(eingabe) or str(eingabe.get("command", "")) or name
+            log.exception("Berechtigungspruefung gescheitert fuer %s: %s", ziel, fehler)
+            kurz, satz = self._ablehnungssaetze(
+                "Pruefung gescheitert, sicherheitshalber abgelehnt", ziel
+            )
+            self._melde(Zustand.FEHLER, kurz, satz, ziel, ablehnung=True)
+            return PermissionResultDeny(message=satz)
+
+    def _kurzes_ziel(self, ziel: str) -> str:
+        """Kurzform eines Ziels fuer die Ansage: bei Pfaden nur der Dateiname
+        ohne Ordner und Laufwerk, sonst das Ziel selbst, notfalls gekuerzt.
+        Der volle Pfad bleibt in Ausgabefeld, Protokoll und Log stehen."""
+        ziel = (ziel or "").strip()
+        if not ziel:
+            return ""
+        if "/" in ziel or "\\" in ziel:
+            name = Path(ziel).name
+            return f"Datei {name}" if name else ziel
+        if len(ziel) > 60:
+            return ziel[:60].rstrip() + " …"
+        return ziel
+
+    def _ablehnungssaetze(self, begruendung: str, ziel: str) -> tuple[str, str]:
+        """Baut aus Begruendung und Ziel zwei Saetze: einen kurzen ohne Pfad
+        fuer Ansage und Statuszeile, einen vollstaendigen mit Pfad fuer
+        Ausgabefeld, Protokoll und Log."""
+        ziel = (ziel or "").strip()
+        if not ziel or ziel in begruendung:
+            return begruendung, begruendung
+        kurzziel = self._kurzes_ziel(ziel)
+        trenner = ", " if kurzziel.startswith("Datei ") else ": "
+        return f"{begruendung}{trenner}{kurzziel}", f"{begruendung}: {ziel}"
+
+    def _ablehnen(self, urteil: Urteil, ziel: str) -> PermissionResultDeny:
+        """Harte Ablehnung. Der volle Wortlaut mit Pfad geht ins Ausgabefeld,
+        Protokoll und Log; gesprochen und in der Statuszeile steht nur ein
+        kurzer Satz ohne Pfad."""
+        ziel = (ziel or "").strip()
+        kurz, satz = self._ablehnungssaetze(urteil.begruendung, ziel)
+        log.warning("Abgelehnt: %s | Ziel: %s", urteil.begruendung, ziel or "(ohne Ziel)")
+        self._melde(Zustand.FEHLER, kurz, satz, ziel, ablehnung=True)
+        self._protokoll_ablehnung_erfassen(ziel, urteil.begruendung)
+        return PermissionResultDeny(message=satz)
+
+    def _hinweis_geben(self, urteil: Urteil, pfad: str) -> None:
+        """Erlaubter Vorgang, der trotzdem einmal angesagt wird - etwa der erste
+        Zugriff ausserhalb des Projekts in einem Auftrag. Der Zustand bleibt,
+        wie er ist (kein Balkenwechsel, kein neuer Ton); gesprochen wird der
+        kurze Satz aus dem Urteil, der volle Pfad steht nur im Ausgabefeld,
+        Protokoll und Log."""
+        zustand = self.schritte[-1].zustand if self.schritte else Zustand.DENKT
+        log.info("Hinweis: %s | Ziel: %s", urteil.hinweis, pfad)
+        self._melde(
+            zustand, urteil.hinweis, f"{urteil.hinweis} Pfad: {pfad}", pfad,
+            hinweis=True,
+        )
+        self._protokoll_hinweis_erfassen(pfad, urteil.hinweis)
+
+    async def _frage(self, grund: str, detail: str) -> PermissionResultAllow | PermissionResultDeny:
+        """Gesprochene Ein-Satz-Rueckfrage mit dem betroffenen Pfad oder Befehl.
+        Ohne Rueckruf wird abgelehnt. Ergebnis-Ansagen bleiben kurz und ohne
+        Pfad; der volle Wortlaut geht ins Ausgabefeld, Protokoll und Log.
+
+        Gesprochen wird ausschliesslich `kurz_satz`, gebaut allein aus `grund`
+        (ein kurzer, fest formulierter Anlass wie "Node-Paket installieren
+        oder ausfuehren") - nie aus `ziel`, denn dort steht der Befehl oder
+        Pfad im vollen Wortlaut. Der volle Satz `satz` geht nur ins
+        Ausgabefeld, Protokoll und Log."""
+        ziel = (detail or "").strip()
+        mit_ziel = f"{grund}: {ziel}" if ziel else grund
+        kurz_grund, _ = self._ablehnungssaetze(grund, ziel)
+
+        if self.bei_rueckfrage is None:
+            log.warning("Keine Rueckfragestelle gesetzt, abgelehnt: %s", mit_ziel)
+            satz = f"Keine Bestaetigung moeglich: {mit_ziel}"
+            self._melde(
+                Zustand.FEHLER, f"Keine Bestaetigung moeglich, {kurz_grund}", satz, ziel,
+                ablehnung=True,
+            )
+            return PermissionResultDeny(message=satz)
+
+        satz = f"{mit_ziel}. Fortfahren?"
+        kurz_satz = f"{grund.strip()}. Fortfahren?"
+        log.info("Rueckfrage: %s | Ziel: %s", grund, ziel or "(ohne Ziel)")
+        self._melde(Zustand.WARTET, f"Rueckfrage: {kurz_grund}", f"Rueckfrage: {mit_ziel}", ziel)
+        try:
+            erlaubt = await self.bei_rueckfrage(satz, kurz_satz)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Rueckfrage gescheitert (%s): %s", mit_ziel, fehler)
+            fehlersatz = f"Rueckfrage gescheitert: {mit_ziel}"
+            self._melde(
+                Zustand.FEHLER, f"Rueckfrage gescheitert, {kurz_grund}", fehlersatz, ziel,
+                ablehnung=True,
+            )
+            return PermissionResultDeny(message=fehlersatz)
+
+        if erlaubt:
+            log.info("Freigegeben: %s", mit_ziel)
+            self._melde(Zustand.FUEHRT_AUS, f"Freigegeben: {kurz_grund}", f"Freigegeben: {mit_ziel}", ziel)
+            self._protokoll_rueckfrage_erfassen(grund, ziel, True)
+            return PermissionResultAllow()
+        log.warning("Vom Nutzer abgelehnt: %s", mit_ziel)
+        self._melde(
+            Zustand.ABGEBROCHEN, f"Abgelehnt: {kurz_grund}", f"Abgelehnt: {mit_ziel}", ziel,
+            ablehnung=True,
+        )
+        self._protokoll_rueckfrage_erfassen(grund, ziel, False)
+        return PermissionResultDeny(message=f"Vom Nutzer abgelehnt: {mit_ziel}")
+
+    # -- Auftragsprotokoll ----------------------------------------------------
+
+    def _ziel_aus_eingabe(self, name: str, eingabe: dict[str, Any]) -> str:
+        pfad = self._pfad_aus_eingabe(eingabe)
+        if pfad:
+            return pfad
+        if name == "Bash":
+            return str(eingabe.get("command", ""))
+        if name in NETZ_WERKZEUGE:
+            return str(eingabe.get("url") or eingabe.get("query") or "")
+        return str(eingabe)[:200] if eingabe else ""
+
+    def _werkzeug_gemeldet(self, block: ToolUseBlock) -> None:
+        """Gibt den Aufruf an die Befehlsanzeige weiter (falls eine da ist)."""
+        if self.bei_werkzeug is None and self.bei_werkzeug_ergebnis is None:
+            return
+        eingabe = dict(block.input or {})
+        self._werkzeug_offen[block.id] = (block.name, eingabe)
+        if self.bei_werkzeug is not None:
+            try:
+                self.bei_werkzeug(block.name, eingabe)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Werkzeug-Rueckruf gescheitert: %s", fehler)
+
+    def _werkzeug_ergebnisse_melden(self, nachricht: UserMessage) -> None:
+        if self.bei_werkzeug_ergebnis is None or isinstance(nachricht.content, str):
+            return
+        for block in nachricht.content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            name, eingabe = self._werkzeug_offen.pop(block.tool_use_id, ("", {}))
+            text = self._protokoll_ergebnis_text(block)
+            if block.is_error and self._ablehnung_offen:
+                status = "abgelehnt"
+            elif block.is_error:
+                status = "fehler"
+                text = text.removeprefix("Fehler: ")
+            else:
+                status = "fertig"
+            self._ablehnung_offen = False
+            try:
+                self.bei_werkzeug_ergebnis(name, eingabe, status, text)
+            except Exception as fehler:  # noqa: BLE001
+                log.exception("Werkzeug-Ergebnisrueckruf gescheitert: %s", fehler)
+
+    def _protokoll_werkzeug_erfassen(self, block: ToolUseBlock) -> None:
+        if self._protokoll is None:
+            return
+        eintrag = {
+            "name": block.name,
+            "ziel": self._ziel_aus_eingabe(block.name, block.input or {}),
+            "ergebnis": "",
+        }
+        self._protokoll["werkzeuge"].append(eintrag)
+        self._protokoll["werkzeug_index"][block.id] = eintrag
+
+    def _protokoll_ergebnis_text(self, block: ToolResultBlock) -> str:
+        inhalt = block.content
+        if isinstance(inhalt, list):
+            inhalt = " ".join(
+                teil.get("text", "") for teil in inhalt if isinstance(teil, dict)
+            )
+        text = " ".join(str(inhalt or "").split())
+        if len(text) > PROTOKOLL_ERGEBNIS_LAENGE:
+            text = text[:PROTOKOLL_ERGEBNIS_LAENGE] + " …"
+        return f"Fehler: {text}" if block.is_error else (text or "(kein Text)")
+
+    def _protokoll_ergebnisse_erfassen(self, nachricht: UserMessage) -> None:
+        if self._protokoll is None or isinstance(nachricht.content, str):
+            return
+        for block in nachricht.content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            eintrag = self._protokoll["werkzeug_index"].get(block.tool_use_id)
+            if eintrag is not None:
+                eintrag["ergebnis"] = self._protokoll_ergebnis_text(block)
+
+    def _protokoll_ablehnung_erfassen(self, ziel: str, begruendung: str) -> None:
+        if self._protokoll is None:
+            return
+        self._protokoll["ablehnungen"].append({"ziel": ziel, "begruendung": begruendung})
+
+    def _protokoll_hinweis_erfassen(self, ziel: str, hinweis: str) -> None:
+        if self._protokoll is None:
+            return
+        self._protokoll["hinweise"].append({"ziel": ziel, "hinweis": hinweis})
+
+    def _protokoll_rueckfrage_erfassen(self, grund: str, ziel: str, antwort: bool) -> None:
+        if self._protokoll is None:
+            return
+        self._protokoll["rueckfragen"].append(
+            {"grund": grund, "ziel": ziel, "antwort": "Ja" if antwort else "Nein"}
+        )
+
+    def _protokoll_schreiben(self, geaendert: list[str]) -> None:
+        """Schreibt das Auftragsprotokoll als Markdown unter .cwb/protokoll/."""
+        if self._protokoll is None:
+            return
+        ordner = self.wache.projekt.pfad / PROTOKOLL_UNTERORDNER
+        try:
+            ordner.mkdir(parents=True, exist_ok=True)
+        except OSError as fehler:
+            log.error("Protokollordner nicht anlegbar: %s", fehler)
+            return
+
+        beginn: datetime = self._protokoll["beginn"]
+        ziel_datei = ordner / f"{beginn.strftime('%Y-%m-%d_%H-%M-%S')}.md"
+
+        zeilen = [f"# Auftrag vom {beginn.strftime('%d.%m.%Y %H:%M:%S')}", ""]
+
+        zeilen.append("## Auftrag")
+        zeilen.append(self._protokoll["auftrag"].strip() or "(leer)")
+        zeilen.append("")
+
+        zeilen.append("## Werkzeugaufrufe")
+        werkzeuge = self._protokoll["werkzeuge"]
+        if werkzeuge:
+            for nummer, eintrag in enumerate(werkzeuge, 1):
+                zeilen.append(f"{nummer}. **{eintrag['name']}** — `{eintrag['ziel'] or '(ohne Ziel)'}`")
+                zeilen.append(f"   Ergebnis: {eintrag['ergebnis'] or '(kein Ergebnis erfasst)'}")
+        else:
+            zeilen.append("Keine Werkzeugaufrufe.")
+        zeilen.append("")
+
+        zeilen.append("## Ablehnungen")
+        ablehnungen = self._protokoll["ablehnungen"]
+        if ablehnungen:
+            for eintrag in ablehnungen:
+                zeilen.append(f"- `{eintrag['ziel'] or '(ohne Ziel)'}` — {eintrag['begruendung']}")
+        else:
+            zeilen.append("Keine Ablehnungen.")
+        zeilen.append("")
+
+        zeilen.append("## Hinweise")
+        hinweise = self._protokoll["hinweise"]
+        if hinweise:
+            for eintrag in hinweise:
+                zeilen.append(f"- `{eintrag['ziel'] or '(ohne Ziel)'}` — {eintrag['hinweis']}")
+        else:
+            zeilen.append("Keine Hinweise.")
+        zeilen.append("")
+
+        zeilen.append("## Rückfragen")
+        rueckfragen = self._protokoll["rueckfragen"]
+        if rueckfragen:
+            for eintrag in rueckfragen:
+                zeilen.append(
+                    f"- {eintrag['grund']}: `{eintrag['ziel'] or '(ohne Ziel)'}` → {eintrag['antwort']}"
+                )
+        else:
+            zeilen.append("Keine Rückfragen.")
+        zeilen.append("")
+
+        zeilen.append("## Geänderte Dateien")
+        if geaendert:
+            zeilen += [f"- {pfad}" for pfad in geaendert]
+        else:
+            zeilen.append("Keine Datei geändert.")
+        zeilen.append("")
+
+        zeilen.append("## Suchpflicht")
+        # Wird unabhaengig vom Schalter vermerkt (Block C7): so laesst sich
+        # messen, ob das Mitliefern des Gedaechtnisses allein reicht oder ob
+        # Claude Code memory_search/code_suchen von sich aus aufruft.
+        selbst_gesucht = "ja" if self._nachschlage_erfuellt else "nein"
+        zeilen.append(f"Selbst gesucht (memory_search/code_suchen): {selbst_gesucht}.")
+        if self._protokoll["suchpflicht_erforderlich"]:
+            zeilen.append(f"Pflicht aktiv: ja. Abgelehnte Schreibversuche: "
+                          f"{self._protokoll['suchpflicht_ablehnungen']}.")
+        elif self._nachschlage_verfuegbar:
+            zeilen.append("Pflicht aktiv: nein (Schalter aus).")
+        else:
+            zeilen.append("Pflicht aktiv: nein (kein Nachschlage-Werkzeug in dieser Sitzung verbunden).")
+        zeilen.append("")
+
+        # Grundlage der Kopfzeilen-Anzeige "Such-Effizienz" (Block C10): wird
+        # bei jedem Auftrag an den Verlauf in einstellungen.json angehaengt,
+        # unabhaengig davon, ob etwas geaendert wurde.
+        lesezugriffe = lesezugriffe_vor_aenderung(self._protokoll["werkzeuge"])
+        suche_auftrag_anhaengen(lesezugriffe)
+        zeilen.append("## Such-Effizienz")
+        zeilen.append(f"Lesezugriffe vor der ersten Aenderung: {lesezugriffe}.")
+        zeilen.append("")
+
+        zeilen.append("## Tokenverbrauch")
+        zeilen.append(
+            f"Eingabe: {self.verbrauch['eingabe']}, "
+            f"Cache gelesen: {self.verbrauch['cache_gelesen']}, "
+            f"Cache erstellt: {self.verbrauch['cache_erstellt']}, "
+            f"Ausgabe: {self.verbrauch['ausgabe']}, "
+            f"Letzter Aufruf ohne Cache: {self.verbrauch['gesamt']}, "
+            f"Sitzung gesamt ohne Cache: {self.verbrauch['sitzung']}"
+        )
+        zeilen.append("")
+
+        try:
+            ziel_datei.write_text("\n".join(zeilen), encoding="utf-8")
+            log.info("Auftragsprotokoll geschrieben: %s", ziel_datei)
+        except OSError as fehler:
+            log.error("Protokoll nicht schreibbar: %s", fehler)
+
+    # -- Verbindung ---------------------------------------------------------
+
+    def _einstellungen(self) -> ClaudeAgentOptions:
+        # Wird bei jedem Verbindungsaufbau neu gelesen, damit zwischenzeitlich
+        # von Hand (F12, Reiter Freigaben) hinzugekommene Freigaben in die
+        # naechste Sitzung uebernommen werden - automatisch traegt niemand mehr
+        # etwas ein. Fuer die bereits laufende Sitzung wirkt das nicht - add_dirs
+        # geht als Startparameter an den CLI-Unterprozess und laesst sich dort
+        # nicht nachtraeglich erweitern.
+        zusatzordner = [eintrag["pfad"] for eintrag in freigaben_lesen()]
+        # Memory Hub eingebettet statt als externer, in ~/.claude.json
+        # registrierter Prozess (Block 61, Teil A). Scheitert das Laden,
+        # verbindet die Sitzung ohne diese Werkzeuge weiter (siehe
+        # _memory_hub_server).
+        mcp_server = _memory_hub_server()
+        mcp_servers = {"memory-hub": mcp_server} if mcp_server else {}
+        mcp_servers.update(self.zusatz_server)
+        return ClaudeAgentOptions(
+            cwd=str(self.wache.projekt.pfad),
+            add_dirs=zusatzordner,
+            system_prompt={"type": "preset", "preset": "claude_code",
+                           "append": self.system_zusatz or SYSTEM_ZUSATZ},
+            setting_sources=["user", "project"],
+            permission_mode="default",
+            can_use_tool=self._darf_werkzeug,
+            model=self.modell,
+            include_partial_messages=False,
+            stderr=self.fehlerstrom.aufnehmen,
+            mcp_servers=mcp_servers,
+            # Block 52: Unteragenten/Hintergrundaufgaben ganz abschalten,
+            # nicht nur per SYSTEM_ZUSATZ verbieten - disallowed_tools
+            # entfernt das Werkzeug aus dem Kontext des Modells, es kann
+            # ueberhaupt nicht mehr aufgerufen werden (claude_agent_sdk.types
+            # .ClaudeAgentOptions.disallowed_tools). Bash selbst bleibt
+            # erlaubt (fuer #RUN#/#ADMIN# unverzichtbar); ein Bash-Befehl im
+            # Hintergrund laesst sich damit nicht sperren, dafuer bleibt die
+            # Erkennung in auftrag() (TaskStartedMessage).
+            disallowed_tools=HINTERGRUND_WERKZEUGE_GESPERRT,
+            env=dict(AGENT_UMGEBUNG),
+            # Werkzeugergebnisse mit eingebetteten Bildern ueberschreiten die
+            # Vorgabe des SDK (1 MB) leicht; dann stirbt dessen Lesefaden
+            # und die Sitzung liefert still nichts mehr (siehe auftrag()).
+            max_buffer_size=NACHRICHT_MAX_BYTES,
+        )
+
+    async def verbinden(self) -> None:
+        if self.klient is not None:
+            return
+        self.klient = ClaudeSDKClient(options=self._einstellungen())
+        try:
+            await self.klient.connect()
+        except Exception as fehler:  # noqa: BLE001
+            self.klient = None
+            log.exception("Verbindung gescheitert: %s", fehler)
+            self.fehlerstrom.protokollieren("Verbindung gescheitert")
+            raise
+        await self._modelle_lesen()
+        await self._nachschlage_werkzeuge_lesen()
+
+        if self.schlank:
+            self.wissen = None
+            self._kontext_ausstehend = ""
+        else:
+            self.wissen = Wissen(self.wache.projekt.pfad, self.wache.projekt.name)
+            self.wissen.einrichten()
+            self._kontext_ausstehend = self.wissen.kontextblock()
+        self._auftraege_seit_kontext = 0
+
+        self._melde(Zustand.BEREIT, f"Projekt geoeffnet: {self.wache.projekt.name}")
+        log.info("Sitzung verbunden fuer %s, Modell %s%s", self.wache.projekt.pfad,
+                 self.modell_name, " (schlank)" if self.schlank else "")
+
+        if not self.schlank:
+            self._code_index_anstossen()
+            self._landkarte_anstossen()
+
+    def _landkarte_anstossen(self) -> None:
+        """Erzeugt/aktualisiert wissen/landkarte.md im Hintergrund (core/
+        landkarte.py), ohne die Sitzung zu blockieren. Anders als beim
+        Code-Index gibt es hier keine Ansage und keinen Log-Eintrag im
+        Ausgabefeld: Zeilen zaehlen und die erste Kommentarzeile lesen
+        braucht keine schweren Abhaengigkeiten, ein eigener Prozess waere
+        hier nur Overhead, und eine zusaetzliche Stimme neben "Projekt
+        geoeffnet" und der Index-Ansage waere nur Laerm. Fehler landen
+        ausschliesslich im Log (core/landkarte.py faengt sie ohnehin ab)."""
+        threading.Thread(
+            target=landkarte_erzeugen,
+            args=(self.wache.projekt.pfad, self.wache.projekt.name),
+            daemon=True,
+        ).start()
+
+    def _code_index_anstossen(self) -> None:
+        """Stoesst das Nachindizieren des offenen Projekts an, ohne die
+        Sitzung zu blockieren: erst geaenderte Dateien, bei einem unbekannten
+        Projekt (kein Manifest) automatisch alles - das kann bei einem neuen
+        oder grossen Projekt Minuten dauern, der Nutzer nimmt das bewusst in Kauf.
+        Ein veralteter Index zeigt sonst auf Codestellen, die es nicht mehr
+        gibt. Laeuft als eigener Prozess im Hintergrund weiter; eine kurze
+        Ansage markiert Start und Ende. Gibt es das Werkzeug nicht oder
+        scheitert der Start, wird nur geloggt."""
+        cli = INDEX_ORDNER / "cli.py"
+        if not cli.is_file():
+            return
+        pfad = str(self.wache.projekt.pfad)
+        name = self.wache.projekt.name
+        try:
+            prozess = subprocess.Popen(
+                [sys.executable, str(cli), pfad],
+                cwd=str(INDEX_ORDNER), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Code-Index nicht gestartet: %s", fehler)
+            return
+        self._melde(Zustand.DENKT, f"Indiziere {name} fuer die Codesuche …")
+        threading.Thread(
+            target=self._code_index_warten, args=(prozess, name), daemon=True,
+        ).start()
+
+    def _code_index_warten(self, prozess: subprocess.Popen, name: str) -> None:
+        """Laeuft in einem eigenen Thread, damit das Warten auf den
+        Index-Prozess nichts sonst blockiert. `_melde` darf aus jedem Thread
+        gerufen werden - es haengt nur ein Qt-Signal an (siehe core/faden.py).
+
+        Ohne Zeitlimit wuerde ein haengender Index-Prozess (z.B. ein Modell-
+        Download ohne Antwort) fuer immer in communicate() stehenbleiben: die
+        Start-Ansage waere gesagt, aber nie ein Ergebnis oder ein Fehler -
+        der Nutzer wartet dann auf etwas, das nie kommt. Jeder Ausgang meldet
+        sich deshalb entweder per `_melde` (hoerbar) oder wenigstens per Log."""
+        try:
+            ausgabe, fehlerausgabe = prozess.communicate(timeout=CODE_INDEX_ZEITLIMIT)
+        except subprocess.TimeoutExpired:
+            prozess.kill()
+            try:
+                prozess.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            log.error("Code-Index-Lauf fuer %s abgebrochen (Zeitueberschreitung)", name)
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} abgebrochen (Zeitüberschreitung).")
+            return
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Code-Index-Prozess fuer %s: %s", name, fehler)
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} fehlgeschlagen.")
+            return
+        if prozess.returncode == 0:
+            log.info("Code-Index aktualisiert fuer %s: %s", name, (ausgabe or "").strip())
+            if "uebersprungen" not in (ausgabe or ""):
+                self._melde(Zustand.FERTIG, f"Index aktuell: {name}")
+        else:
+            log.warning("Code-Index-Lauf fehlgeschlagen fuer %s (%s): %s",
+                        name, prozess.returncode, (fehlerausgabe or "").strip()[:500])
+            self._melde(Zustand.FEHLER, f"Indizieren von {name} fehlgeschlagen.")
+
+    async def _modelle_lesen(self) -> None:
+        """Holt die Modellliste der laufenden Claude-Code-CLI und loest daraus
+        den Namen des gerade benutzten Modells auf.
+
+        Die Liste ist dieselbe, aus der auch `claude --model` waehlt; sie zeigt
+        also genau das, was das vorhandene Abo hergibt. Ist sie nicht abrufbar,
+        bleibt 'modelle' leer und die Oberflaeche behaelt ihre Rueckfallliste."""
+        ziel = self.modell or MODELL_STANDARD
+        self.modell_name = ziel
+        try:
+            info = await self.klient.get_server_info()
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Serverinfo nicht abrufbar: %s", fehler)
+            return
+        roh = (info or {}).get("models", [])
+        self.modelle = modelle_aufbereiten(roh)
+        log.info("Waehlbare Modelle: %s", [e["wert"] for e in self.modelle])
+        for eintrag in roh:
+            if eintrag.get("value") == ziel:
+                self.modell_name = (
+                    eintrag.get("resolvedModel") or eintrag.get("displayName") or ziel
+                )
+                return
+
+    async def _nachschlage_werkzeuge_lesen(self) -> None:
+        """Stellt fest, welche der beiden Nachschlage-Werkzeuge (memory_search,
+        code_suchen) in dieser Sitzung ueberhaupt ueber MCP verbunden sind -
+        Grundlage fuer die Suchpflicht (Block C6, Teil B Punkt 5 und 7): sind
+        die MCP-Server nicht verfuegbar, gilt die Pflicht nicht, statt jeden
+        Auftrag in eine Ablehnungsschleife laufen zu lassen. Scheitert die
+        Abfrage selbst, wird sicherheitshalber angenommen, dass nichts
+        verbunden ist - die Pflicht entfaellt dann, statt zu blockieren.
+
+        Zwei behobene Ursachen (Block 63), warum diese Pruefung bislang immer
+        leer blieb und die Suchpflicht wirkungslos war:
+        1. get_mcp_status() nennt Werkzeuge unpraefixiert (z.B.
+           "memory_search"), NACHSCHLAGE_WERKZEUGE dagegen mit dem Praefix,
+           unter dem Claude Code sie beim Aufruf tatsaechlich nennt
+           ("mcp__<Server>__<Werkzeug>", siehe can_use_tool) - das Praefigieren
+           fehlte hier komplett.
+        2. Direkt nach connect() melden die MCP-Server sich noch als
+           "pending" (der Verbindungsaufbau laeuft im Hintergrund weiter);
+           eine einzelne Abfrage ohne kurzes Nachfragen traf so gut wie immer
+           auf eine noch leere Liste."""
+        self._nachschlage_verfuegbar = set()
+        for versuch in range(NACHSCHLAGE_STATUS_VERSUCHE):
+            try:
+                status = await self.klient.get_mcp_status()
+            except Exception as fehler:  # noqa: BLE001
+                log.warning("MCP-Status nicht abrufbar, Suchpflicht entfaellt diese Sitzung: %s", fehler)
+                return
+            for server in (status or {}).get("mcpServers", []):
+                if server.get("status") != "connected":
+                    continue
+                server_name = server.get("name") or ""
+                werkzeugnamen = {
+                    f"mcp__{server_name}__{w.get('name')}"
+                    for w in (server.get("tools") or [])
+                    if w.get("name")
+                }
+                # Vereinigen statt ersetzen: ein in einem frueheren Versuch
+                # bereits gefundenes Werkzeug bleibt erhalten, auch wenn ein
+                # spaeterer Versuch (anderer Server, andere Reihenfolge) es
+                # nicht erneut liefert.
+                self._nachschlage_verfuegbar |= (werkzeugnamen & NACHSCHLAGE_WERKZEUGE)
+            if self._nachschlage_verfuegbar >= NACHSCHLAGE_WERKZEUGE:
+                return  # beide bekannten Werkzeuge gefunden, kein weiteres Warten noetig
+            if versuch < NACHSCHLAGE_STATUS_VERSUCHE - 1:
+                await asyncio.sleep(NACHSCHLAGE_STATUS_WARTEZEIT)
+        if not self._nachschlage_verfuegbar:
+            log.info("Suchpflicht: kein Nachschlage-Werkzeug verbunden, Pflicht entfaellt diese Sitzung")
+
+    async def modell_wechseln(self, wert: str) -> str:
+        """Legt ein anderes Modell fest und verbindet die Sitzung sofort neu,
+        damit die Wahl schon beim naechsten Auftrag greift. Die bisherige
+        Unterhaltung endet dabei; das Projektwissen wird neu mitgegeben.
+        Gibt den aufgeloesten Modellnamen zurueck.
+
+        Scheitert der Neuaufbau mit dem neuen Modell (Block 649), faellt die
+        Sitzung auf das vorherige Modell zurueck, statt ohne Verbindung
+        stehenzubleiben - die Ausnahme wird danach trotzdem weitergegeben,
+        damit der Aufrufer den Fehlschlag melden kann."""
+        neu = None if (wert or MODELL_STANDARD) == MODELL_STANDARD else wert
+        if neu == self.modell and self.klient is not None:
+            return self.modell_name
+        alt = self.modell
+        await self.trennen()
+        self.modell = neu
+        try:
+            await self.verbinden()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Modellwechsel auf %s gescheitert, falle zurueck auf %s: %s",
+                           wert, alt, fehler)
+            self.modell = alt
+            await self.verbinden()
+            raise
+        log.info("Modell gewechselt auf %s (%s)", wert, self.modell_name)
+        return self.modell_name
+
+    async def trennen(self) -> None:
+        if self.klient is None:
+            return
+        try:
+            await self.klient.disconnect()
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Trennen gescheitert: %s", fehler)
+            self.fehlerstrom.protokollieren("Trennen gescheitert")
+        finally:
+            self.klient = None
+
+    async def not_aus(self) -> None:
+        """Bricht den laufenden Auftrag ab."""
+        self._abbruch = True
+        if self.klient is None:
+            return
+        try:
+            await self.klient.interrupt()
+            self._melde(Zustand.ABGEBROCHEN, "Abgebrochen")
+            log.info("Not-Aus ausgeloest")
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Not-Aus gescheitert: %s", fehler)
+            self.fehlerstrom.protokollieren("Not-Aus gescheitert")
+
+    # -- Auftrags-Schaerfung ------------------------------------------------
+
+    async def schaerfen(self, roh: str) -> str:
+        """Verdichtet den diktierten Text zu einem Satz zur Rueckbestaetigung."""
+        self._melde(Zustand.SCHAERFT, "Auftrag wird geschaerft")
+        anweisung = (
+            "Fasse den folgenden diktierten Arbeitsauftrag in EINEM kurzen deutschen Satz "
+            "zusammen, hoechstens 25 Woerter, ohne Vorrede, ohne Anfuehrungszeichen. "
+            "Nur der Satz.\n\nAuftrag:\n" + roh
+        )
+
+        async def alles_ablehnen(name, eingabe, kontext):
+            return PermissionResultDeny(message="Bei der Schaerfung sind keine Werkzeuge erlaubt")
+
+        fehlerstrom = Fehlerstrom("Schaerfung")
+        einstellungen = ClaudeAgentOptions(
+            cwd=str(self.wache.projekt.pfad),
+            model="claude-haiku-4-5",
+            max_turns=1,
+            setting_sources=[],
+            can_use_tool=alles_ablehnen,
+            stderr=fehlerstrom.aufnehmen,
+        )
+
+        teile: list[str] = []
+        try:
+            async for nachricht in query(prompt=anweisung, options=einstellungen):
+                if isinstance(nachricht, AssistantMessage):
+                    for block in nachricht.content:
+                        if isinstance(block, TextBlock):
+                            teile.append(block.text)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Schaerfung gescheitert: %s", fehler)
+            fehlerstrom.protokollieren("Schaerfung gescheitert")
+            return " ".join(roh.split())[:200]
+
+        satz = " ".join("".join(teile).split())
+        return satz or " ".join(roh.split())[:200]
+
+    # -- Bilder -------------------------------------------------------------
+
+    def _bild_block(self, bild: Path) -> dict[str, Any] | None:
+        try:
+            typ = mimetypes.guess_type(str(bild))[0] or "image/png"
+            daten = base64.b64encode(bild.read_bytes()).decode("ascii")
+        except OSError as fehler:
+            log.error("Bild nicht lesbar %s: %s", bild, fehler)
+            return None
+        return {"type": "image", "source": {"type": "base64", "media_type": typ, "data": daten}}
+
+    def _bild_sichern(self, bild: Path) -> Path:
+        """Legt eine Kopie im Projekt ab, damit der Auftrag nachvollziehbar bleibt."""
+        ziel_ordner = self.wache.projekt.pfad / ".cwb" / "bilder"
+        try:
+            ziel_ordner.mkdir(parents=True, exist_ok=True)
+            stempel = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ziel = ziel_ordner / f"{stempel}_{bild.name}"
+            shutil.copy2(bild, ziel)
+            return ziel
+        except OSError as fehler:
+            log.error("Bild nicht sicherbar %s: %s", bild, fehler)
+            return bild
+
+    async def _eingabe(self, text: str, bilder: list[Path]) -> AsyncIterator[dict[str, Any]]:
+        inhalt: list[dict[str, Any]] = []
+        for bild in bilder:
+            block = self._bild_block(self._bild_sichern(bild))
+            if block:
+                inhalt.append(block)
+        inhalt.append({"type": "text", "text": text})
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": inhalt},
+            "parent_tool_use_id": None,
+            "session_id": "default",
+        }
+
+    # -- Auftrag ------------------------------------------------------------
+
+    async def auftrag(self, text: str, bilder: list[Path] | None = None) -> dict[str, Any]:
+        """Fuehrt einen Auftrag aus. Rueckgabe: Bilanz fuer die Ansage."""
+        bilder = bilder or []
+        await self.verbinden()
+
+        self.fehlerstrom.leeren()
+        self._abbruch = False
+        self.laeuft = True
+        self.begonnen = datetime.now()
+        self.schritte.clear()
+        self._nachschlage_erfuellt = self.schlank
+        self._limit_erkannt = None
+        werte = einstellungen_lesen()
+        suchpflicht_erforderlich = (
+            bool(self._nachschlage_verfuegbar)
+            and werte.get("suchpflicht_vor_aenderungen", False)
+            and not self.schlank
+        )
+        self._protokoll = {
+            "auftrag": text,
+            "beginn": self.begonnen,
+            "werkzeuge": [],
+            "werkzeug_index": {},
+            "ablehnungen": [],
+            "hinweise": [],
+            "rueckfragen": [],
+            "suchpflicht_erforderlich": suchpflicht_erforderlich,
+            "suchpflicht_ablehnungen": 0,
+        }
+
+        if self.schlank:
+            # Nur die Meldung fremder Ordner zuruecksetzen; kein git add/commit/
+            # push mitten im Projekt, waehrend die normale Sitzung dort arbeitet.
+            self.wache.grenze.auftrag_beginnen()
+            punkt = None
+        else:
+            punkt = self.wache.auftrag_beginnen(text)
+            if punkt is None:
+                self._melde(Zustand.FEHLER, "Kein Sicherungspunkt moeglich")
+
+        self._melde(Zustand.DENKT, "Auftrag laeuft")
+        antwort: list[str] = []
+        fehlermeldung = ""
+        # Jeder Auftrag endet mit genau einer ResultMessage. Bleibt sie aus,
+        # ist der Nachrichtenstrom des SDK tot (etwa nach einem Lesefehler):
+        # die Verbindung liefert dann fuer jeden weiteren Auftrag sofort
+        # nichts mehr und CWB meldete frueher trotzdem "Fertig".
+        ergebnis_da = False
+        verbindung_tot = False
+
+        sendetext = text
+        self._auftraege_seit_kontext += 1
+        block = self._kontext_ausstehend
+        self._kontext_ausstehend = ""
+        if not block and self._auftraege_seit_kontext >= AUFTRAG_KONTEXT_ALLE:
+            block = self.wissen.kontextblock_kurz() if self.wissen else ""
+        if block:
+            self._auftraege_seit_kontext = 0
+
+        # CWB sucht vor JEDEM Auftrag selbst im Memory Hub (FTS5) und im
+        # Code-Index dieses Projekts, statt darauf zu warten, dass Claude Code
+        # memory_search/code_suchen von sich aus aufruft (Block C6, Teil A;
+        # ersetzt die reine Hub-Stichwortsuche aus Block C5). Abschaltbar
+        # ueber F12 -> Verhalten -> "Gedaechtnis vor jedem Auftrag".
+        treffer = ""
+        if self.wissen and werte.get("gedaechtnis_vor_jedem_auftrag", True):
+            treffer, _ = self.wissen.gedaechtnis_vor_auftrag(text)
+        if treffer and block:
+            treffer = _ohne_dopplungen(block, treffer)
+        if treffer:
+            block = f"{block}\n\n{treffer}" if block else treffer
+        if block and HINWEIS_GEDAECHTNIS.strip() not in block:
+            block = f"{block}\n{HINWEIS_GEDAECHTNIS}"
+
+        if block:
+            sendetext = (
+                "[GEDÄCHTNIS VOR DEM AUFTRAG]\n"
+                f"{block}\n\n"
+                f"[AUFTRAG]\n{text}"
+            )
+
+        if self.wache.nur_lesen:
+            sendetext = (
+                "[NUR-LESEN-MODUS AN – Write, Edit, MultiEdit, NotebookEdit und jeder "
+                "schreibende oder loeschende Bash-Befehl werden abgelehnt. Lies, suche "
+                "und antworte; schlage Aenderungen hoechstens vor.]\n\n"
+                f"{sendetext}"
+            )
+
+        try:
+            if bilder:
+                await self.klient.query(self._eingabe(sendetext, bilder))
+            else:
+                await self.klient.query(sendetext)
+
+            async for nachricht in self.klient.receive_response():
+                if self._abbruch:
+                    break
+
+                if isinstance(nachricht, AssistantMessage):
+                    for block in nachricht.content:
+                        if isinstance(block, TextBlock):
+                            antwort.append(block.text)
+                            self.bei_text(block.text)
+                        elif isinstance(block, ThinkingBlock):
+                            self._melde(Zustand.DENKT, "Ueberlegt")
+                        elif isinstance(block, ToolUseBlock):
+                            self._werkzeug_gemeldet(block)
+                            self._melde_werkzeug(block)
+                            self._protokoll_werkzeug_erfassen(block)
+
+                elif isinstance(nachricht, UserMessage):
+                    self._werkzeug_ergebnisse_melden(nachricht)
+                    self._protokoll_ergebnisse_erfassen(nachricht)
+
+                elif isinstance(nachricht, TaskStartedMessage):
+                    await self._hintergrund_gestartet(nachricht)
+
+                elif isinstance(nachricht, (TaskNotificationMessage, TaskUpdatedMessage)):
+                    if nachricht.status in TERMINAL_TASK_STATUSES:
+                        self._hintergrundaufgaben.pop(nachricht.task_id, None)
+
+                elif isinstance(nachricht, RateLimitEvent):
+                    # Status "rejected" heisst: das Max-Kontingent (Fuenf-
+                    # Stunden- oder Wochenfenster) ist erschoepft. Nur
+                    # gemerkt - ausgewertet wird das erst nach dem Strom,
+                    # unabhaengig davon, ob danach noch eine ResultMessage
+                    # oder eine Ausnahme kommt.
+                    self._limit_erkannt = nachricht.rate_limit_info
+                    log.warning(
+                        "RateLimitEvent erhalten: status=%s typ=%s auslastung=%s "
+                        "freigabe=%s",
+                        self._limit_erkannt.status, self._limit_erkannt.rate_limit_type,
+                        self._limit_erkannt.utilization, self._limit_erkannt.resets_at,
+                    )
+                    # Block 77: unabhaengig vom Auftrag je Fenster gemerkt,
+                    # siehe Docstring von self.limit_funf_stunden.
+                    eintrag = _limit_eintrag(self._limit_erkannt)
+                    typ = (eintrag or {}).get("rate_limit_type")
+                    if typ == "five_hour":
+                        self.limit_funf_stunden = eintrag
+                    elif typ in WOCHENFENSTER_TYPEN:
+                        self.limit_woche = eintrag
+
+                elif isinstance(nachricht, ResultMessage):
+                    ergebnis_da = True
+                    self._verbrauch_erfassen(nachricht)
+                    if nachricht.is_error:
+                        self.fehlerstrom.protokollieren("Claude Code meldet einen Fehler")
+                        fehlermeldung = self.fehlerstrom.ergaenzt(
+                            str(nachricht.result or "Claude Code meldet einen Fehler")
+                        )
+
+        except Exception as fehler:  # noqa: BLE001
+            # Ein Fehler aus dem Strom stammt vom Lesefaden des SDK, der
+            # danach beendet ist - der Klient ist damit unbrauchbar.
+            log.exception("Auftrag gescheitert: %s", fehler)
+            self.fehlerstrom.protokollieren("Auftrag gescheitert")
+            fehlermeldung = self.fehlerstrom.ergaenzt(str(fehler))
+            verbindung_tot = True
+
+        finally:
+            self.laeuft = False
+
+        # Das Max-Kontingent ist erschoepft (Fuenf-Stunden- oder
+        # Wochenfenster) - kein echter Fehler, der Auftrag wird spaeter von
+        # fenster.py automatisch fortgesetzt (siehe core/fenster.py,
+        # _kontingent_...). Der Klient gilt als unbrauchbar: die CLI bricht
+        # den laufenden Aufruf bei "rejected" ab, eine frische Verbindung
+        # ist die sicherere Grundlage fuer den Fortsetzungsversuch.
+        kontingent = _kontingent_aus_limit(self._limit_erkannt)
+        if kontingent is not None:
+            fehlermeldung = ""
+            verbindung_tot = True
+            log.warning(
+                "Kontingent erschoepft (Typ %s, Freigabe %s) - Auftrag wird spaeter "
+                "fortgesetzt", kontingent["rate_limit_type"], kontingent["resets_at"],
+            )
+
+        if self._abbruch and not ergebnis_da and not verbindung_tot:
+            # Der Rest der abgebrochenen Antwort liegt noch im Strom. Wird er
+            # nicht abgeholt, liest der naechste Auftrag ihn als seine
+            # Antwort und liefert damit alten Inhalt zum neuen Auftrag.
+            verbindung_tot = not await self._strom_leeren()
+
+        if kontingent is None and not ergebnis_da and not self._abbruch and not fehlermeldung:
+            verbindung_tot = True
+            log.error("Auftrag endete ohne Ergebnismeldung - die Sitzung liefert nichts mehr")
+            self.fehlerstrom.protokollieren("Sitzung ohne Ergebnis")
+            fehlermeldung = self.fehlerstrom.ergaenzt(
+                "Die Sitzung hat keine Antwort geliefert. Sie wird neu verbunden; "
+                "bitte den Auftrag noch einmal geben."
+            )
+
+        geaendert = self.wache.auftrag_bilanz()
+        if not self.schlank:
+            self._protokoll_schreiben(geaendert)
+
+        if kontingent is not None:
+            self._melde(Zustand.WARTET_KONTINGENT, "Kontingent erschöpft")
+        elif fehlermeldung:
+            self._melde(Zustand.FEHLER, "Fehler", fehlermeldung)
+        elif self._abbruch:
+            self._melde(Zustand.ABGEBROCHEN, "Auftrag abgebrochen")
+        else:
+            self._melde(Zustand.FERTIG, self._bilanz_satz(geaendert))
+
+        if verbindung_tot:
+            # Neue Sitzung statt weiterer stiller Leerlaeufe; der Nachtrag
+            # entfaellt, eine frische Sitzung weiss nichts vom Auftrag.
+            await self._neu_verbinden()
+        elif not self._abbruch:
+            await self._nachtrag_stellen()
+
+        ergebnis = {
+            "antwort": "\n".join(antwort).strip(),
+            "geaendert": geaendert,
+            "fehler": fehlermeldung,
+            "abgebrochen": self._abbruch,
+            "schritte": len(self.schritte),
+            "sicherungspunkt": punkt,
+        }
+        if kontingent is not None:
+            ergebnis["kontingent"] = kontingent
+        # Block 52: wiederkehrender Fehler, bei dem Claude Code eine
+        # Hintergrundaufgabe startete und den Auftrag mit "ich warte auf das
+        # Ergebnis" beendete, ohne selbst etwas umzusetzen - der naechste
+        # Auftrag bekam dann das spaete Ergebnis statt seiner eigenen Arbeit.
+        # Eine Warnung hier heisst: der Auftrag ist zu Ende, aber mindestens
+        # eine Hintergrundaufgabe laeuft noch.
+        warnung = _hintergrund_warnung(self._hintergrundaufgaben)
+        if warnung:
+            ergebnis["hintergrund_warnung"] = warnung
+            log.warning(warnung)
+        return ergebnis
+
+    async def _strom_leeren(self) -> bool:
+        """Holt nach einem Not-Aus den Rest der alten Antwort bis zur
+        ResultMessage ab und verwirft ihn. Rueckgabe: ob der Strom danach
+        sauber ist. Kommt binnen STROM_LEEREN_SEKUNDEN kein Ende, gilt die
+        Verbindung als tot."""
+        if self.klient is None:
+            return False
+
+        async def _abholen() -> bool:
+            async for nachricht in self.klient.receive_response():
+                if isinstance(nachricht, ResultMessage):
+                    return True
+            return False
+
+        try:
+            sauber = await asyncio.wait_for(_abholen(), STROM_LEEREN_SEKUNDEN)
+        except asyncio.TimeoutError:
+            log.warning("Rest der abgebrochenen Antwort kam nicht binnen %ss",
+                        STROM_LEEREN_SEKUNDEN)
+            return False
+        except Exception as fehler:  # noqa: BLE001
+            log.warning("Rest der abgebrochenen Antwort nicht abholbar: %s", fehler)
+            return False
+        if sauber:
+            log.info("Rest der abgebrochenen Antwort verworfen")
+        else:
+            log.warning("Strom endete nach Not-Aus ohne Ergebnismeldung")
+        return sauber
+
+    async def _neu_verbinden(self) -> None:
+        """Ersetzt eine unbrauchbar gewordene Sitzung durch eine frische.
+        Scheitert das, bleibt klient None und der naechste Auftrag versucht
+        es ueber verbinden() erneut."""
+        log.warning("Sitzung wird neu verbunden")
+        await self.trennen()
+        try:
+            await self.verbinden()
+        except Exception as fehler:  # noqa: BLE001
+            log.error("Neu verbinden gescheitert: %s", fehler)
+
+    async def _nachtrag_stellen(self) -> None:
+        """Fragt sich selbst nach dem Auftrag kurz ab und schreibt die Antwort
+        ins Tagebuch. Zeilen mit [OFFEN] kommen zusaetzlich in die offenen
+        Punkte. Laeuft still, ohne Sprachausgabe."""
+        if self.wissen is None or self.klient is None:
+            return
+        try:
+            await self.klient.query(NACHTRAG_ANWEISUNG)
+            teile: list[str] = []
+            async for nachricht in self.klient.receive_response():
+                if isinstance(nachricht, AssistantMessage):
+                    for block in nachricht.content:
+                        if isinstance(block, TextBlock):
+                            teile.append(block.text)
+        except Exception as fehler:  # noqa: BLE001
+            log.exception("Nachtrag gescheitert: %s", fehler)
+            return
+
+        zusammenfassung = "".join(teile).strip()
+        if not zusammenfassung:
+            return
+
+        self.wissen.tagebuch_anhaengen(zusammenfassung)
+        for zeile in zusammenfassung.splitlines():
+            zeile = zeile.strip()
+            if not zeile or "[OFFEN]" not in zeile.upper():
+                continue
+            text = re.sub(r"\[OFFEN\]\s*", "", zeile, flags=re.IGNORECASE).strip()
+            if text:
+                self.wissen.offen_anhaengen(text)
+        log.info("Tagebuch ergaenzt: %d Zeichen", len(zusammenfassung))
+
+    def _taetigkeit(self, name: str) -> str:
+        """Was gerade getan wird, in einem Wort: liest, schreibt, sucht,
+        denkt, führt aus. Ohne Ziel - die betroffene Datei meldet 'pfad'."""
+        return WERKZEUG_TAETIGKEIT.get(name, TAETIGKEIT_UNBEKANNT)
+
+    def _melde_werkzeug(self, block: ToolUseBlock) -> None:
+        zustand, verb = WERKZEUG_ZUSTAND.get(block.name, (Zustand.FUEHRT_AUS, block.name))
+        eingabe = block.input or {}
+        pfad = self._pfad_aus_eingabe(eingabe)
+        if pfad:
+            ansage = f"{verb}: {Path(pfad).name}"
+        elif block.name == "Bash":
+            ansage = f"{verb}: {str(eingabe.get('command',''))[:60]}"
+        else:
+            ansage = verb
+        self._melde(
+            zustand, ansage, str(block.input)[:400], pfad or "",
+            self._taetigkeit(block.name),
+        )
+
+    def _bilanz_satz(self, geaendert: list[str]) -> str:
+        anzahl = len(geaendert)
+        if anzahl == 0:
+            return "Fertig, keine Datei geaendert."
+        if anzahl == 1:
+            return f"Fertig, eine Datei geaendert: {Path(geaendert[0]).name}."
+        return f"Fertig, {anzahl} Dateien geaendert."
+
+    def rueckgaengig(self) -> Urteil:
+        return self.wache.rueckgaengig()
+
+
+# ---------------------------------------------------------------------------
+# Selbsttest ohne Oberflaeche
+# ---------------------------------------------------------------------------
+
+async def _selbsttest() -> None:
+    try:
+        from .sicherheit import Projekt, projekte_finden
+    except ImportError:
+        from sicherheit import Projekt, projekte_finden
+
+    projekte = projekte_finden()
+    if not projekte:
+        print("Keine Projekte gefunden.")
+        return
+
+    print("Projekte:")
+    for nummer, p in enumerate(projekte, 1):
+        print(f"  {nummer}. {p.ansage()}")
+
+    wahl = input("\nNummer waehlen: ").strip()
+    if not wahl.isdigit() or not 1 <= int(wahl) <= len(projekte):
+        print("Ungueltige Wahl.")
+        return
+    projekt = projekte[int(wahl) - 1]
+
+    async def frage(satz: str, kurz_satz: str) -> bool:
+        return input(f"\n{satz} [j/n] ").strip().lower().startswith("j")
+
+    sitzung = Sitzung(
+        Wache.oeffnen(projekt),
+        bei_ereignis=lambda e: print("  *", e.zeile()),
+        bei_text=lambda t: print(t, end="", flush=True),
+        bei_rueckfrage=frage,
+    )
+
+    try:
+        while True:
+            roh = input("\n\nAuftrag (leer = Ende): ").strip()
+            if not roh:
+                break
+
+            satz = await sitzung.schaerfen(roh)
+            if not input(f"\nVerstanden: {satz}\nAbschicken? [j/n] ").strip().lower().startswith("j"):
+                continue
+
+            bilanz = await sitzung.auftrag(roh)
+            print("\n---")
+            print("Schritte:", bilanz["schritte"])
+            print("Geaendert:", ", ".join(bilanz["geaendert"]) or "nichts")
+            if bilanz["fehler"]:
+                print("Fehler:", bilanz["fehler"])
+            if bilanz["geaendert"] and input("Zuruecknehmen? [j/n] ").strip().lower().startswith("j"):
+                print(sitzung.rueckgaengig().ansage())
+    finally:
+        await sitzung.trennen()
+
+
+if __name__ == "__main__":
+    logging.getLogger().setLevel(logging.INFO)
+    try:
+        asyncio.run(_selbsttest())
+    except KeyboardInterrupt:
+        print("\nAbgebrochen.")
+    except Exception as fehler:  # noqa: BLE001
+        log.exception("Selbsttest abgebrochen: %s", fehler)
+        print(f"Selbsttest abgebrochen: {fehler}")

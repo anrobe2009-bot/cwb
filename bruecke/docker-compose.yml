@@ -1,0 +1,36 @@
+# Eigenstaendige Compose-Datei der CWB-Bruecke (Umzug aus maxfriends).
+# Vorbereitet, noch NICHT in Betrieb: solange der Dienst "bruecke" in
+# /home/robert/maxfriends/docker-compose.yml laeuft, diese Datei nicht mit
+# "up" starten (gleicher Containername, gleiches Volume).
+name: cwb_bruecke
+
+services:
+  bruecke:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cwb-bruecke:latest
+    container_name: cwb_bruecke
+    restart: unless-stopped
+    env_file:
+      - ./geheimnisse.conf
+    volumes:
+      - bruecke_data:/data
+    networks:
+      internal:
+        # nginx von maxfriends erreicht den Dienst ueber den Namen
+        # "bruecke" (nginx.conf: server bruecke:9000), nicht ueber eine IP.
+        aliases:
+          - bruecke
+    expose:
+      - "9000"
+
+networks:
+  internal:
+    external: true
+    name: maxfriends_internal
+
+volumes:
+  bruecke_data:
+    external: true
+    name: maxfriends_bruecke_data
